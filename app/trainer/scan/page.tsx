@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { supabase } from "../../../lib/supabaseClient";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
 
@@ -108,18 +107,19 @@ export default function TrainerScanPage() {
     setScannerStarted(true);
 
     const scanner = new Html5QrcodeScanner(
-  "qr-reader",
-  {
-    fps: 10,
-    qrbox: {
-      width: 250,
-      height: 250,
-    },
-    rememberLastUsedCamera: true,
-    supportedScanTypes: [],
-  },
-  false
-);
+      "qr-reader",
+      {
+        fps: 10,
+        qrbox: {
+          width: 260,
+          height: 260,
+        },
+        rememberLastUsedCamera: true,
+        supportedScanTypes: [],
+      },
+      false
+    );
+
     scanner.render(
       async (decodedText) => {
         await markSession(decodedText);
@@ -163,13 +163,12 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const { data: sessionPackage, error: packageError } =
-      await supabase
-        .from("session_packages")
-        .select("*")
-        .eq("client_id", client.id)
-        .eq("status", "active")
-        .maybeSingle();
+    const { data: sessionPackage, error: packageError } = await supabase
+      .from("session_packages")
+      .select("*")
+      .eq("client_id", client.id)
+      .eq("status", "active")
+      .maybeSingle();
 
     if (packageError || !sessionPackage) {
       setResult({
@@ -196,18 +195,15 @@ export default function TrainerScanPage() {
     }
 
     const thirtyMinutesAgo = new Date();
-    thirtyMinutesAgo.setMinutes(
-      thirtyMinutesAgo.getMinutes() - 30
-    );
+    thirtyMinutesAgo.setMinutes(thirtyMinutesAgo.getMinutes() - 30);
 
-    const { data: recentScan, error: recentScanError } =
-      await supabase
-        .from("session_logs")
-        .select("*")
-        .eq("client_id", client.id)
-        .eq("status", "success")
-        .gte("scanned_at", thirtyMinutesAgo.toISOString())
-        .maybeSingle();
+    const { data: recentScan, error: recentScanError } = await supabase
+      .from("session_logs")
+      .select("*")
+      .eq("client_id", client.id)
+      .eq("status", "success")
+      .gte("scanned_at", thirtyMinutesAgo.toISOString())
+      .maybeSingle();
 
     if (recentScanError) {
       setResult({
@@ -227,8 +223,7 @@ export default function TrainerScanPage() {
     }
 
     const newUsed = sessionPackage.used_sessions + 1;
-    const newRemaining =
-      sessionPackage.remaining_sessions - 1;
+    const newRemaining = sessionPackage.remaining_sessions - 1;
 
     const { error: updateError } = await supabase
       .from("session_packages")
@@ -246,16 +241,14 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const { error: logError } = await supabase
-      .from("session_logs")
-      .insert({
-        client_id: client.id,
-        trainer_id: trainerId,
-        package_id: sessionPackage.id,
-        status: "success",
-        message: "Session marked successfully.",
-        remaining_after: newRemaining,
-      });
+    const { error: logError } = await supabase.from("session_logs").insert({
+      client_id: client.id,
+      trainer_id: trainerId,
+      package_id: sessionPackage.id,
+      status: "success",
+      message: "Session marked successfully.",
+      remaining_after: newRemaining,
+    });
 
     if (logError) {
       setResult({
@@ -275,9 +268,9 @@ export default function TrainerScanPage() {
 
   if (checkingRole) {
     return (
-      <main className="min-h-screen bg-black text-white p-6">
-        <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-          <p className="font-bold text-yellow-400">
+      <main className="min-h-screen bg-black p-5 text-white">
+        <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+          <p className="text-base font-black text-yellow-400">
             Checking scanner access...
           </p>
         </div>
@@ -286,112 +279,113 @@ export default function TrainerScanPage() {
   }
 
   return (
-    <main className="min-h-screen bg-black text-white p-6">
-      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+    <main className="min-h-screen bg-black p-4 text-white md:p-6">
+      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
+        <div className="mx-auto max-w-5xl">
+          <header className="mb-8 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
             <div>
-              <h1 className="text-4xl md:text-5xl font-black text-yellow-400">
+              <p className="mb-2 text-xs font-black uppercase tracking-[0.45em] text-yellow-400">
                 FXA FITNESS
+              </p>
+
+              <h1 className="text-4xl font-black leading-none tracking-tight text-white md:text-6xl">
+                Trainer Scanner
               </h1>
 
-              <p className="text-gray-400 tracking-[0.25em] uppercase text-sm">
-                Trainer QR Scanner
+              <p className="mt-3 max-w-xl text-sm font-medium leading-6 text-gray-400 md:text-base">
+                Scan client QR codes, deduct sessions, and track today&apos;s
+                training activity.
               </p>
             </div>
 
             <button
               onClick={handleLogout}
-              className="rounded-xl border border-yellow-400 px-5 py-3 font-black uppercase text-yellow-400 hover:bg-yellow-400 hover:text-black transition"
+              className="rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
             >
               Logout
             </button>
-          </div>
+          </header>
 
-          <div className="mb-8 grid gap-4 md:grid-cols-4">
-            <div className="rounded-2xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-xl backdrop-blur">
-              <p className="text-sm font-black uppercase text-gray-400">
+          <section className="mb-8 grid gap-4 md:grid-cols-4">
+            <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.07] p-5 shadow-xl backdrop-blur">
+              <p className="text-xs font-black uppercase tracking-widest text-gray-400">
                 Scanning As
               </p>
 
-              <p className="mt-2 text-xl font-black text-yellow-400">
+              <p className="mt-2 text-2xl font-black leading-tight text-yellow-400">
                 {trainerName || "Loading..."}
               </p>
 
-              <p className="mt-1 text-sm font-bold uppercase text-gray-300">
+              <p className="mt-2 inline-block rounded-full bg-yellow-400 px-3 py-1 text-xs font-black uppercase tracking-wide text-black">
                 {trainerRole || "-"}
               </p>
             </div>
 
-            <div className="rounded-2xl border border-yellow-500/30 bg-white/[0.06] p-5 text-center shadow-xl backdrop-blur">
-              <p className="text-sm font-black uppercase text-gray-400">
+            <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-xl backdrop-blur">
+              <p className="text-xs font-black uppercase tracking-widest text-gray-400">
                 Sessions Today
               </p>
 
-              <p className="mt-2 text-4xl font-black text-yellow-400">
+              <p className="mt-3 text-5xl font-black text-yellow-400">
                 {sessionsToday}
               </p>
             </div>
 
-            <div className="rounded-2xl border border-yellow-500/30 bg-white/[0.06] p-5 text-center shadow-xl backdrop-blur">
-              <p className="text-sm font-black uppercase text-gray-400">
+            <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-xl backdrop-blur">
+              <p className="text-xs font-black uppercase tracking-widest text-gray-400">
                 Clients Today
               </p>
 
-              <p className="mt-2 text-4xl font-black text-yellow-400">
+              <p className="mt-3 text-5xl font-black text-yellow-400">
                 {clientsToday}
               </p>
             </div>
 
-            <div className="rounded-2xl border border-yellow-500/30 bg-white/[0.06] p-5 text-center shadow-xl backdrop-blur">
-              <p className="text-sm font-black uppercase text-gray-400">
+            <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-xl backdrop-blur">
+              <p className="text-xs font-black uppercase tracking-widest text-gray-400">
                 Last Scan
               </p>
 
-              <p className="mt-2 text-lg font-black text-yellow-400">
-                {lastScan
-                  ? new Date(lastScan).toLocaleTimeString()
-                  : "-"}
+              <p className="mt-4 text-xl font-black text-yellow-400">
+                {lastScan ? new Date(lastScan).toLocaleTimeString() : "-"}
               </p>
             </div>
-          </div>
+          </section>
 
-          <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur">
-            <div className="text-center mb-8">
-              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-3xl border border-yellow-500/30 bg-black/50 text-4xl">
+          <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-8">
+            <div className="mb-8 text-center">
+              <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-3xl border border-yellow-500/30 bg-black/60 text-4xl shadow-xl">
                 📷
               </div>
 
-              <h2 className="text-3xl font-black text-white uppercase">
+              <h2 className="text-3xl font-black uppercase tracking-tight text-white md:text-4xl">
                 Scan Client QR
               </h2>
 
-              <p className="mt-2 text-gray-400">
-                Start the scanner, point the camera at a client QR code,
-                and the session will be marked automatically.
+              <p className="mx-auto mt-3 max-w-lg text-sm font-medium leading-6 text-gray-400 md:text-base">
+                Tap the button below, allow camera access, then point your
+                camera at the client&apos;s QR code.
               </p>
             </div>
 
             <button
               onClick={startScanner}
               disabled={scannerStarted}
-              className="mb-6 w-full rounded-xl bg-yellow-400 p-4 text-lg font-black uppercase tracking-wide text-black hover:bg-yellow-300 disabled:opacity-60 transition"
+              className="mb-6 w-full rounded-2xl bg-yellow-400 p-4 text-base font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60 md:text-lg"
             >
-              {scannerStarted
-                ? "Scanner Running..."
-                : "Start QR Scanner"}
+              {scannerStarted ? "Scanner Running..." : "Start QR Scanner"}
             </button>
 
-            <div className="rounded-3xl border border-yellow-500/30 bg-black/50 p-4 mb-6">
+            <div className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-black/60 p-3 md:p-5">
               <div
                 id="qr-reader"
-                className="w-full overflow-hidden rounded-2xl text-black"
+                className="w-full overflow-hidden rounded-3xl bg-white text-black"
               />
             </div>
 
             {result.message && (
               <div
-                className={`rounded-2xl border p-5 text-center font-black ${
+                className={`rounded-3xl border p-5 text-center text-base font-black leading-7 ${
                   result.type === "success"
                     ? "border-green-500/50 bg-green-500/10 text-green-300"
                     : "border-red-500/50 bg-red-500/10 text-red-300"
@@ -402,28 +396,28 @@ export default function TrainerScanPage() {
             )}
 
             <div className="mt-8 grid gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-yellow-500/30 bg-black/40 p-5 text-center">
-                <p className="text-3xl mb-2">✅</p>
-                <p className="text-sm font-black uppercase text-gray-300">
+              <div className="rounded-3xl border border-yellow-500/30 bg-black/40 p-5 text-center">
+                <p className="mb-3 text-4xl">✅</p>
+                <p className="text-xs font-black uppercase tracking-widest text-gray-300">
                   Auto Deduct
                 </p>
               </div>
 
-              <div className="rounded-2xl border border-yellow-500/30 bg-black/40 p-5 text-center">
-                <p className="text-3xl mb-2">⏱️</p>
-                <p className="text-sm font-black uppercase text-gray-300">
+              <div className="rounded-3xl border border-yellow-500/30 bg-black/40 p-5 text-center">
+                <p className="mb-3 text-4xl">⏱️</p>
+                <p className="text-xs font-black uppercase tracking-widest text-gray-300">
                   Duplicate Block
                 </p>
               </div>
 
-              <div className="rounded-2xl border border-yellow-500/30 bg-black/40 p-5 text-center">
-                <p className="text-3xl mb-2">📋</p>
-                <p className="text-sm font-black uppercase text-gray-300">
+              <div className="rounded-3xl border border-yellow-500/30 bg-black/40 p-5 text-center">
+                <p className="mb-3 text-4xl">📋</p>
+                <p className="text-xs font-black uppercase tracking-widest text-gray-300">
                   History Logged
                 </p>
               </div>
             </div>
-          </div>
+          </section>
         </div>
       </div>
     </main>
