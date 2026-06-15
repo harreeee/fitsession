@@ -78,15 +78,13 @@ export default function AdminPurchasesPage() {
   async function fetchPurchases() {
     const { data, error } = await supabase
       .from("client_purchases")
-      .select(
-        `
+      .select(`
         *,
         clients (
           full_name,
           email
         )
-      `
-      )
+      `)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -155,7 +153,9 @@ export default function AdminPurchasesPage() {
   if (checkingRole) {
     return (
       <main className="min-h-screen bg-black p-6 text-white">
-        <p className="font-black text-yellow-400">Checking admin access...</p>
+        <p className="font-black text-yellow-400">
+          Checking admin access...
+        </p>
       </main>
     );
   }
