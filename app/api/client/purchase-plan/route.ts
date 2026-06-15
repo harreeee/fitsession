@@ -8,15 +8,15 @@ export async function POST(request: Request) {
 
     if (!token) {
       return NextResponse.json(
-        { error: "Missing login token." },
+        { error: "Missing authentication token." },
         { status: 401 }
       );
     }
 
-    const { data: userData, error: userError } =
+    const { data: authData, error: authError } =
       await supabaseAdmin.auth.getUser(token);
 
-    if (userError || !userData.user) {
+    if (authError || !authData.user) {
       return NextResponse.json(
         { error: "Invalid login session." },
         { status: 401 }
@@ -24,7 +24,8 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const planId = String(body.planId || "").trim();
+
+    const planId = body.planId;
 
     if (!planId) {
       return NextResponse.json(
@@ -36,58 +37,40 @@ export async function POST(request: Request) {
     const { data: profile } = await supabaseAdmin
       .from("profiles")
       .select("role")
-      .eq("id", userData.user.id)
+      .eq("id", authData.user.id)
       .single();
 
     if (profile?.role !== "client") {
       return NextResponse.json(
-        { error: "Only clients can purchase packages." },
+        { error: "Only clients can purchase memberships." },
         { status: 403 }
       );
     }
 
-    const { data: client, error: clientError } = await supabaseAdmin
+    const { data: client } = await supabaseAdmin
       .from("clients")
-      .select("id, full_name")
-      .eq("profile_id", userData.user.id)
+      .select("id")
+      .eq("profile_id", authData.user.id)
       .single();
 
-    if (clientError || !client) {
+    if (!client) {
       return NextResponse.json(
         { error: "Client profile not found." },
         { status: 404 }
       );
     }
 
-    const { data: plan, error: planError } = await supabaseAdmin
+    const { data: plan } = await supabaseAdmin
       .from("membership_plans")
       .select("*")
       .eq("id", planId)
       .eq("status", "active")
       .single();
 
-    if (planError || !plan) {
+    if (!plan) {
       return NextResponse.json(
         { error: "Membership plan not found." },
         { status: 404 }
-      );
-    }
-
-    const { data: existingPending } = await supabaseAdmin
-      .from("client_purchases")
-      .select("id")
-      .eq("client_id", client.id)
-      .eq("plan_id", plan.id)
-      .eq("status", "pending")
-      .maybeSingle();
-
-    if (existingPending) {
-      return NextResponse.json(
-        {
-          error:
-            "You already have a pending purchase for this package. Please contact admin.",
-        },
-        { status: 400 }
       );
     }
 
@@ -99,8 +82,8 @@ export async function POST(request: Request) {
         plan_name: plan.name,
         session_count: plan.session_count,
         price: plan.price,
-        status: "pending",
         payment_method: "manual",
+        status: "pending",
       });
 
     if (insertError) {
@@ -112,11 +95,13 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message: "Purchase request created.",
+      message: "Purchase request created successfully.",
     });
-  } catch {
+  } catch (error) {
+    console.error(error);
+
     return NextResponse.json(
-      { error: "Something went wrong." },
+      { error: "Server error." },
       { status: 500 }
     );
   }
