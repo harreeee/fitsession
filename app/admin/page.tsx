@@ -247,17 +247,17 @@ export default function AdminDashboardPage() {
             </Link>
 
             <Link
-  href="/admin/purchases"
-  className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-7 shadow-2xl backdrop-blur transition hover:border-yellow-400 hover:bg-yellow-400/10"
->
-  <p className="mb-4 text-4xl">🧾</p>
-  <h2 className="text-2xl font-black text-white">
-    Purchases
-  </h2>
-  <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
-    Confirm client purchases and automatically add sessions.
-  </p>
-</Link>
+              href="/admin/purchases"
+              className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-7 shadow-2xl backdrop-blur transition hover:border-yellow-400 hover:bg-yellow-400/10"
+            >
+              <p className="mb-4 text-4xl">🧾</p>
+              <h2 className="text-2xl font-black text-white">
+                Purchases
+              </h2>
+              <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
+                Confirm client purchases and automatically add sessions.
+              </p>
+            </Link>
 
             <Link
               href="/admin/membership-plans"

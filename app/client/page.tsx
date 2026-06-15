@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import QRCode from "qrcode";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
 
@@ -209,10 +210,42 @@ export default function ClientPortalPage() {
 
             <p className="mt-2 font-bold text-gray-300">
               Account Status:{" "}
-              <span className="text-yellow-400">
-                {client.status}
-              </span>
+              <span className="text-yellow-400">{client.status}</span>
             </p>
+          </section>
+
+          <section className="mb-8 grid gap-4 md:grid-cols-2">
+            <Link
+              href="/client/membership"
+              className="rounded-3xl border border-yellow-500/30 bg-yellow-400 p-6 text-black shadow-2xl transition hover:bg-yellow-300"
+            >
+              <p className="mb-3 text-4xl">💳</p>
+
+              <h2 className="text-2xl font-black uppercase">
+                Membership / Buy Packages
+              </h2>
+
+              <p className="mt-2 text-sm font-bold leading-6 text-black/70">
+                View available packages, request a new purchase, and track your
+                purchase history.
+              </p>
+            </Link>
+
+            <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-6 shadow-2xl backdrop-blur">
+              <p className="mb-3 text-4xl">🎯</p>
+
+              <h2 className="text-2xl font-black uppercase text-white">
+                Current Sessions
+              </h2>
+
+              <p className="mt-2 text-sm font-bold leading-6 text-gray-400">
+                You currently have{" "}
+                <span className="text-yellow-400">
+                  {activePackage?.remaining_sessions ?? 0}
+                </span>{" "}
+                sessions remaining.
+              </p>
+            </div>
           </section>
 
           <section className="mb-8 rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 text-center shadow-2xl backdrop-blur">
