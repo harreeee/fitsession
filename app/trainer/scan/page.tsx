@@ -95,7 +95,17 @@ export default function TrainerScanPage() {
 
     protectTrainerScanPage();
   }, [router]);
+  function extractQrToken(decodedText: string) {
+  const cleanText = decodedText.trim();
 
+  const match = cleanText.match(/FXA-[a-zA-Z0-9-]+/);
+
+  if (match) {
+    return match[0];
+  }
+
+  return cleanText;
+}
   function startScanner() {
     if (scannerStarted) return;
 
@@ -105,15 +115,15 @@ export default function TrainerScanPage() {
     });
 
     setScannerStarted(true);
-
-   const scanner = new Html5QrcodeScanner(
+const scanner = new Html5QrcodeScanner(
   "qr-reader",
   {
-    fps: 10,
+    fps: 15,
     qrbox: {
-      width: 250,
-      height: 250,
+      width: 280,
+      height: 280,
     },
+    aspectRatio: 1,
     rememberLastUsedCamera: true,
     supportedScanTypes: [],
   },
@@ -122,7 +132,8 @@ export default function TrainerScanPage() {
 
     scanner.render(
       async (decodedText) => {
-        await markSession(decodedText);
+        const qrToken = extractQrToken(decodedText);
+await markSession(qrToken);
         await scanner.clear();
         setScannerStarted(false);
       },
@@ -132,6 +143,7 @@ export default function TrainerScanPage() {
 
   async function markSession(qrToken: string) {
     const cleanQrToken = qrToken.trim();
+    console.log("Scanned QR token:", cleanQrToken);
 
     if (!trainerId) {
       setResult({
