@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Html5QrcodeScanner } from "html5-qrcode";
+import { useEffect, useRef, useState } from "react";
+import { Html5Qrcode } from "html5-qrcode";
 import { supabase } from "../../../lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
@@ -13,6 +13,7 @@ type ScanResult = {
 
 export default function TrainerScanPage() {
   const router = useRouter();
+  const scannerRef = useRef<Html5Qrcode | null>(null);
 
   const [result, setResult] = useState<ScanResult>({
     type: "",
@@ -29,8 +30,40 @@ export default function TrainerScanPage() {
   const [checkingRole, setCheckingRole] = useState(true);
 
   async function handleLogout() {
+    await stopScanner();
     await supabase.auth.signOut();
     router.push("/login");
+  }
+
+  function extractQrToken(decodedText: string) {
+    const cleanText = decodedText.trim();
+
+    const match = cleanText.match(/FXA-[a-zA-Z0-9-]+/);
+
+    if (match) {
+      return match[0];
+    }
+
+    return cleanText;
+  }
+
+  async function stopScanner() {
+    if (!scannerRef.current) return;
+
+    try {
+      const isScanning = scannerRef.current.isScanning;
+
+      if (isScanning) {
+        await scannerRef.current.stop();
+      }
+
+      await scannerRef.current.clear();
+    } catch (error) {
+      console.log("Scanner stop error:", error);
+    } finally {
+      scannerRef.current = null;
+      setScannerStarted(false);
+    }
   }
 
   async function fetchTrainerStats(userId: string) {
@@ -94,19 +127,13 @@ export default function TrainerScanPage() {
     }
 
     protectTrainerScanPage();
+
+    return () => {
+      stopScanner();
+    };
   }, [router]);
-  function extractQrToken(decodedText: string) {
-  const cleanText = decodedText.trim();
 
-  const match = cleanText.match(/FXA-[a-zA-Z0-9-]+/);
-
-  if (match) {
-    return match[0];
-  }
-
-  return cleanText;
-}
-  function startScanner() {
+  async function startScanner() {
     if (scannerStarted) return;
 
     setResult({
@@ -115,34 +142,51 @@ export default function TrainerScanPage() {
     });
 
     setScannerStarted(true);
-const scanner = new Html5QrcodeScanner(
-  "qr-reader",
-  {
-    fps: 15,
-    qrbox: {
-      width: 280,
-      height: 280,
-    },
-    aspectRatio: 1,
-    rememberLastUsedCamera: true,
-    supportedScanTypes: [],
-  },
-  false
-);
 
-    scanner.render(
-      async (decodedText) => {
-        const qrToken = extractQrToken(decodedText);
-await markSession(qrToken);
-        await scanner.clear();
-        setScannerStarted(false);
-      },
-      () => {}
-    );
+    const scanner = new Html5Qrcode("qr-reader");
+    scannerRef.current = scanner;
+
+    try {
+      await scanner.start(
+        {
+          facingMode: "environment",
+        },
+        {
+          fps: 20,
+          qrbox: {
+            width: 280,
+            height: 280,
+          },
+          aspectRatio: 1,
+        },
+        async (decodedText) => {
+          const qrToken = extractQrToken(decodedText);
+
+          console.log("RAW SCANNED CODE:", decodedText);
+          console.log("LOOKING FOR QR TOKEN:", qrToken);
+
+          await stopScanner();
+          await markSession(qrToken);
+        },
+        () => {}
+      );
+    } catch (error) {
+      console.error(error);
+
+      setScannerStarted(false);
+      scannerRef.current = null;
+
+      setResult({
+        type: "error",
+        message:
+          "Camera could not start. Please allow camera permission and use HTTPS.",
+      });
+    }
   }
 
   async function markSession(qrToken: string) {
     const cleanQrToken = qrToken.trim();
+
     console.log("Scanned QR token:", cleanQrToken);
 
     if (!trainerId) {
@@ -162,7 +206,7 @@ await markSession(qrToken);
     if (clientError || !client) {
       setResult({
         type: "error",
-        message: "Invalid QR code.",
+        message: `Invalid QR code. Scanned: ${cleanQrToken}`,
       });
       return;
     }
@@ -381,11 +425,14 @@ await markSession(qrToken);
             </div>
 
             <button
-              onClick={startScanner}
-              disabled={scannerStarted}
-              className="mb-6 w-full rounded-2xl bg-yellow-400 p-4 text-base font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60 md:text-lg"
+              onClick={scannerStarted ? stopScanner : startScanner}
+              className={`mb-6 w-full rounded-2xl p-4 text-base font-black uppercase tracking-wide transition md:text-lg ${
+                scannerStarted
+                  ? "bg-red-400 text-black hover:bg-red-300"
+                  : "bg-yellow-400 text-black hover:bg-yellow-300"
+              }`}
             >
-              {scannerStarted ? "Scanner Running..." : "Start QR Scanner"}
+              {scannerStarted ? "Stop Scanner" : "Start QR Scanner"}
             </button>
 
             <div className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-black/60 p-3 md:p-5">
