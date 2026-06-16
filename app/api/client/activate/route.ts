@@ -29,22 +29,64 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data: clients, error: clientError } = await supabaseAdmin
-      .from("clients")
-      .select("id, profile_id, full_name, email, qr_token, authorization_code, status")
-      .eq("email", email);
+    const { data: loginCode, error: loginCodeError } = await supabaseAdmin
+      .from("client_login_codes")
+      .select("id, client_id, email, code, used, expires_at")
+      .eq("email", email)
+      .eq("code", code)
+      .eq("used", false)
+      .maybeSingle();
 
-    if (clientError) {
-      return NextResponse.json({ error: clientError.message }, { status: 500 });
+    if (loginCodeError) {
+      return NextResponse.json(
+        { error: loginCodeError.message },
+        { status: 500 }
+      );
     }
 
-    const client = (clients || []).find((item) => {
-      return item.authorization_code === code || item.qr_token === code;
-    });
+    let clientId: string | null = loginCode?.client_id || null;
 
-    if (!client) {
+    if (loginCode?.expires_at && new Date(loginCode.expires_at) < new Date()) {
+      return NextResponse.json(
+        { error: "This activation code has expired. Please ask admin for a new code." },
+        { status: 400 }
+      );
+    }
+
+    if (!clientId) {
+      const { data: fallbackClient, error: fallbackError } = await supabaseAdmin
+        .from("clients")
+        .select("id")
+        .eq("email", email)
+        .eq("authorization_code", code)
+        .maybeSingle();
+
+      if (fallbackError) {
+        return NextResponse.json(
+          { error: fallbackError.message },
+          { status: 500 }
+        );
+      }
+
+      clientId = fallbackClient?.id || null;
+    }
+
+    if (!clientId) {
       return NextResponse.json(
         { error: "Invalid email or authorization code." },
+        { status: 404 }
+      );
+    }
+
+    const { data: client, error: clientError } = await supabaseAdmin
+      .from("clients")
+      .select("id, profile_id, full_name, email, status")
+      .eq("id", clientId)
+      .single();
+
+    if (clientError || !client) {
+      return NextResponse.json(
+        { error: "Client not found." },
         { status: 404 }
       );
     }
@@ -52,6 +94,19 @@ export async function POST(request: NextRequest) {
     if (client.profile_id) {
       return NextResponse.json(
         { error: "This client account is already activated." },
+        { status: 400 }
+      );
+    }
+
+    const { data: existingProfile } = await supabaseAdmin
+      .from("profiles")
+      .select("id, email, role")
+      .eq("email", email)
+      .maybeSingle();
+
+    if (existingProfile) {
+      return NextResponse.json(
+        { error: "A login already exists with this email." },
         { status: 400 }
       );
     }
@@ -100,12 +155,22 @@ export async function POST(request: NextRequest) {
 
     if (updateClientError) {
       await supabaseAdmin.auth.admin.deleteUser(createdUser.user.id);
-      await supabaseAdmin.from("profiles").delete().eq("id", createdUser.user.id);
+      await supabaseAdmin
+        .from("profiles")
+        .delete()
+        .eq("id", createdUser.user.id);
 
       return NextResponse.json(
         { error: updateClientError.message },
         { status: 500 }
       );
+    }
+
+    if (loginCode?.id) {
+      await supabaseAdmin
+        .from("client_login_codes")
+        .update({ used: true })
+        .eq("id", loginCode.id);
     }
 
     return NextResponse.json({ success: true });
