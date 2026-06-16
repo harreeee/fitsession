@@ -22,33 +22,15 @@ type ClientData = {
   }[];
 };
 
-type TrainerProfile =
-  | {
-      full_name: string | null;
-      role: string | null;
-    }
-  | {
-      full_name: string | null;
-      role: string | null;
-    }[]
-  | null;
-
 type SessionLog = {
   id: string;
+  trainer_id: string | null;
   status: string;
   message: string | null;
   remaining_after: number | null;
   scanned_at: string;
-  profiles: TrainerProfile;
+  trainer_name: string;
 };
-
-function getTrainerName(profile: TrainerProfile) {
-  if (Array.isArray(profile)) {
-    return profile[0]?.full_name || "Unknown Trainer";
-  }
-
-  return profile?.full_name || "Unknown Trainer";
-}
 
 export default function ClientPortalPage() {
   const router = useRouter();
@@ -62,6 +44,66 @@ export default function ClientPortalPage() {
   async function handleLogout() {
     await supabase.auth.signOut();
     router.push("/client/login");
+  }
+
+  async function fetchLogsWithTrainerNames(clientId: string) {
+    const { data: logData, error: logError } = await supabase
+      .from("session_logs")
+      .select(`
+        id,
+        trainer_id,
+        status,
+        message,
+        remaining_after,
+        scanned_at
+      `)
+      .eq("client_id", clientId)
+      .order("scanned_at", { ascending: false })
+      .limit(10);
+
+    if (logError) {
+      console.log("Session log error:", logError.message);
+      setLogs([]);
+      return;
+    }
+
+    const rawLogs = (logData || []) as Omit<SessionLog, "trainer_name">[];
+
+    const trainerIds = Array.from(
+      new Set(rawLogs.map((log) => log.trainer_id).filter(Boolean))
+    ) as string[];
+
+    if (trainerIds.length === 0) {
+      setLogs(
+        rawLogs.map((log) => ({
+          ...log,
+          trainer_name: "Unknown Trainer",
+        }))
+      );
+      return;
+    }
+
+    const { data: trainerProfiles } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", trainerIds);
+
+    const trainerNameMap = new Map(
+      (trainerProfiles || []).map((profile) => [
+        profile.id,
+        profile.full_name || "Unknown Trainer",
+      ])
+    );
+
+    setLogs(
+      rawLogs.map((log) => ({
+        ...log,
+        trainer_name:
+          log.trainer_id && trainerNameMap.get(log.trainer_id)
+            ? trainerNameMap.get(log.trainer_id)!
+            : "Unknown Trainer",
+      }))
+    );
   }
 
   async function fetchClientPortal() {
@@ -105,24 +147,8 @@ export default function ClientPortalPage() {
     const qrImage = await QRCode.toDataURL(clientData.qr_token);
     setQrCode(qrImage);
 
-    const { data: logData } = await supabase
-      .from("session_logs")
-      .select(`
-        id,
-        status,
-        message,
-        remaining_after,
-        scanned_at,
-        profiles (
-          full_name,
-          role
-        )
-      `)
-      .eq("client_id", clientData.id)
-      .order("scanned_at", { ascending: false })
-      .limit(10);
+    await fetchLogsWithTrainerNames(clientData.id);
 
-    setLogs((logData || []) as unknown as SessionLog[]);
     setLoading(false);
   }
 
@@ -206,7 +232,7 @@ export default function ClientPortalPage() {
   );
 
   const todaysTrainerNames = Array.from(
-    new Set(todaysSessions.map((log) => getTrainerName(log.profiles)))
+    new Set(todaysSessions.map((log) => log.trainer_name))
   );
 
   return (
@@ -413,7 +439,7 @@ export default function ClientPortalPage() {
                         </td>
 
                         <td className="p-3 font-bold text-gray-200">
-                          {getTrainerName(log.profiles)}
+                          {log.trainer_name}
                         </td>
 
                         <td className="p-3 font-black text-yellow-400">

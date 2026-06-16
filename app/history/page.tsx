@@ -8,18 +8,15 @@ import { getCurrentUserRole } from "../../lib/checkUserRole";
 
 type SessionLog = {
   id: string;
+  client_id: string | null;
+  trainer_id: string | null;
   status: string;
   message: string | null;
   remaining_after: number | null;
   scanned_at: string;
-  clients: {
-    full_name: string;
-    email: string | null;
-  } | null;
-  profiles: {
-    full_name: string | null;
-    role: string | null;
-  } | null;
+  client_name: string;
+  client_email: string;
+  trainer_name: string;
 };
 
 export default function HistoryPage() {
@@ -29,33 +26,89 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [checkingRole, setCheckingRole] = useState(true);
+  const [userRole, setUserRole] = useState("");
 
   async function fetchLogs() {
-    const { data, error } = await supabase
+    const { data: logData, error: logError } = await supabase
       .from("session_logs")
       .select(`
         id,
+        client_id,
+        trainer_id,
         status,
         message,
         remaining_after,
-        scanned_at,
-        clients (
-          full_name,
-          email
-        ),
-        profiles (
-          full_name,
-          role
-        )
+        scanned_at
       `)
       .order("scanned_at", { ascending: false });
 
-    if (error) {
-      alert(error.message);
-    } else {
-      setLogs((data || []) as unknown as SessionLog[]);
+    if (logError) {
+      alert(logError.message);
+      setLoading(false);
+      return;
     }
 
+    const rawLogs = (logData || []) as Omit<
+      SessionLog,
+      "client_name" | "client_email" | "trainer_name"
+    >[];
+
+    const clientIds = Array.from(
+      new Set(rawLogs.map((log) => log.client_id).filter(Boolean))
+    ) as string[];
+
+    const trainerIds = Array.from(
+      new Set(rawLogs.map((log) => log.trainer_id).filter(Boolean))
+    ) as string[];
+
+    const { data: clients } =
+      clientIds.length > 0
+        ? await supabase
+            .from("clients")
+            .select("id, full_name, email")
+            .in("id", clientIds)
+        : { data: [] };
+
+    const { data: trainers } =
+      trainerIds.length > 0
+        ? await supabase
+            .from("profiles")
+            .select("id, full_name")
+            .in("id", trainerIds)
+        : { data: [] };
+
+    const clientMap = new Map(
+      (clients || []).map((client) => [
+        client.id,
+        {
+          full_name: client.full_name || "Unknown Client",
+          email: client.email || "-",
+        },
+      ])
+    );
+
+    const trainerMap = new Map(
+      (trainers || []).map((trainer) => [
+        trainer.id,
+        trainer.full_name || "Unknown Trainer",
+      ])
+    );
+
+    const mergedLogs: SessionLog[] = rawLogs.map((log) => {
+      const client = log.client_id ? clientMap.get(log.client_id) : null;
+
+      return {
+        ...log,
+        client_name: client?.full_name || "Unknown Client",
+        client_email: client?.email || "-",
+        trainer_name:
+          log.trainer_id && trainerMap.get(log.trainer_id)
+            ? trainerMap.get(log.trainer_id)!
+            : "Unknown Trainer",
+      };
+    });
+
+    setLogs(mergedLogs);
     setLoading(false);
   }
 
@@ -79,6 +132,7 @@ export default function HistoryPage() {
         return;
       }
 
+      setUserRole(role || "");
       setCheckingRole(false);
       await fetchLogs();
     }
@@ -90,15 +144,9 @@ export default function HistoryPage() {
     const searchText = search.toLowerCase();
 
     return (
-      (log.clients?.full_name || "")
-        .toLowerCase()
-        .includes(searchText) ||
-      (log.clients?.email || "")
-        .toLowerCase()
-        .includes(searchText) ||
-      (log.profiles?.full_name || "")
-        .toLowerCase()
-        .includes(searchText) ||
+      log.client_name.toLowerCase().includes(searchText) ||
+      log.client_email.toLowerCase().includes(searchText) ||
+      log.trainer_name.toLowerCase().includes(searchText) ||
       log.status.toLowerCase().includes(searchText) ||
       new Date(log.scanned_at)
         .toLocaleString()
@@ -111,9 +159,7 @@ export default function HistoryPage() {
     return (
       <main className="min-h-screen bg-black text-white p-6">
         <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-          <p className="font-bold text-yellow-400">
-            Checking access...
-          </p>
+          <p className="font-bold text-yellow-400">Checking access...</p>
         </div>
       </main>
     );
@@ -135,10 +181,10 @@ export default function HistoryPage() {
             </div>
 
             <Link
-              href="/admin/clients"
+              href={userRole === "admin" ? "/admin" : "/trainer/scan"}
               className="rounded-xl bg-yellow-400 px-5 py-3 font-black uppercase text-black hover:bg-yellow-300 transition"
             >
-              Clients
+              {userRole === "admin" ? "Dashboard" : "Scanner"}
             </Link>
           </div>
 
@@ -196,15 +242,15 @@ export default function HistoryPage() {
                         className="border-b border-white/10 hover:bg-white/[0.04]"
                       >
                         <td className="p-3 font-black text-white">
-                          {log.clients?.full_name || "Unknown Client"}
+                          {log.client_name}
                         </td>
 
                         <td className="p-3 text-gray-300">
-                          {log.clients?.email || "-"}
+                          {log.client_email}
                         </td>
 
                         <td className="p-3 font-bold text-gray-200">
-                          {log.profiles?.full_name || "Unknown Trainer"}
+                          {log.trainer_name}
                         </td>
 
                         <td className="p-3">
