@@ -73,6 +73,7 @@ export default function AdminDashboardPage() {
       if (trainersResponse.ok) {
         const trainersData: { trainers: unknown[] } =
           await trainersResponse.json();
+
         setTotalTrainers(trainersData.trainers.length);
       }
     }
@@ -80,9 +81,11 @@ export default function AdminDashboardPage() {
     const allClients = clients || [];
 
     setTotalClients(allClients.length);
+
     setActiveClients(
       allClients.filter((client) => client.status === "active").length
     );
+
     setSessionsToday((logs || []).length);
     setPendingPurchases((purchases || []).length);
 
@@ -251,7 +254,8 @@ export default function AdminDashboardPage() {
                 Manage Trainers
               </h2>
               <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
-                View trainers, create trainer logins, and remove trainer access.
+                View trainer contact info, monthly sessions, and session
+                history.
               </p>
             </Link>
 
