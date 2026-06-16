@@ -106,19 +106,19 @@ export default function TrainerScanPage() {
 
     setScannerStarted(true);
 
-    const scanner = new Html5QrcodeScanner(
-      "qr-reader",
-      {
-        fps: 10,
-        qrbox: {
-          width: 260,
-          height: 260,
-        },
-        rememberLastUsedCamera: true,
-        supportedScanTypes: [],
-      },
-      false
-    );
+   const scanner = new Html5QrcodeScanner(
+  "qr-reader",
+  {
+    fps: 10,
+    qrbox: {
+      width: 250,
+      height: 250,
+    },
+    rememberLastUsedCamera: true,
+    supportedScanTypes: [],
+  },
+  false
+);
 
     scanner.render(
       async (decodedText) => {
