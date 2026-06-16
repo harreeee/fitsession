@@ -6,19 +6,37 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
 
+type TrainerSessionHistory = {
+  id: string;
+  client_id: string;
+  client_name: string;
+  client_email: string | null;
+  status: string;
+  message: string | null;
+  remaining_after: number | null;
+  scanned_at: string;
+};
+
 type Trainer = {
   id: string;
-  email: string;
+  email: string | null;
   full_name: string | null;
+  phone: string | null;
   role: string;
+  created_at: string;
+  total_sessions_this_month: number;
+  recent_session_history: TrainerSessionHistory[];
 };
 
 export default function AdminTrainersPage() {
   const router = useRouter();
 
   const [trainers, setTrainers] = useState<Trainer[]>([]);
+  const [expandedTrainerId, setExpandedTrainerId] = useState<string | null>(null);
+
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
 
   const [checkingRole, setCheckingRole] = useState(true);
@@ -85,6 +103,7 @@ export default function AdminTrainersPage() {
       body: JSON.stringify({
         full_name: fullName.trim(),
         email: email.trim().toLowerCase(),
+        phone: phone.trim(),
         password,
       }),
     });
@@ -99,6 +118,7 @@ export default function AdminTrainersPage() {
 
     setFullName("");
     setEmail("");
+    setPhone("");
     setPassword("");
     setMessage("Trainer added successfully.");
     setSaving(false);
@@ -107,7 +127,7 @@ export default function AdminTrainersPage() {
 
   async function handleRemoveTrainer(trainerId: string, trainerName: string) {
     const confirmed = window.confirm(
-      `Remove trainer access for ${trainerName}? This keeps old session history but prevents trainer login access.`
+      `Remove trainer access for ${trainerName}? Old session history will stay saved.`
     );
 
     if (!confirmed) return;
@@ -137,6 +157,10 @@ export default function AdminTrainersPage() {
 
     setMessage("Trainer access removed.");
     await fetchTrainers();
+  }
+
+  function formatDateTime(value: string) {
+    return new Date(value).toLocaleString();
   }
 
   useEffect(() => {
@@ -194,8 +218,8 @@ export default function AdminTrainersPage() {
                 Trainers
               </h1>
               <p className="mt-3 text-sm font-medium text-gray-400 md:text-base">
-                Add trainer logins, view active trainers, and remove trainer
-                access.
+                View trainer contact info, monthly sessions, and recent session
+                history.
               </p>
             </div>
 
@@ -218,7 +242,7 @@ export default function AdminTrainersPage() {
 
             <form
               onSubmit={handleAddTrainer}
-              className="mt-5 grid gap-4 md:grid-cols-4"
+              className="mt-5 grid gap-4 md:grid-cols-5"
             >
               <input
                 value={fullName}
@@ -234,6 +258,13 @@ export default function AdminTrainersPage() {
                 required
                 type="email"
                 placeholder="Email"
+                className="rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+              />
+
+              <input
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="Phone"
                 className="rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
               />
 
@@ -271,34 +302,110 @@ export default function AdminTrainersPage() {
                 No trainers found yet.
               </p>
             ) : (
-              <div className="space-y-3">
-                {trainers.map((trainer) => (
-                  <div
-                    key={trainer.id}
-                    className="flex flex-col gap-4 rounded-2xl border border-yellow-500/20 bg-black/40 p-4 md:flex-row md:items-center md:justify-between"
-                  >
-                    <div>
-                      <p className="text-lg font-black">
-                        {trainer.full_name || "Unnamed Trainer"}
-                      </p>
-                      <p className="text-sm font-bold text-gray-400">
-                        {trainer.email}
-                      </p>
-                    </div>
+              <div className="space-y-4">
+                {trainers.map((trainer) => {
+                  const isExpanded = expandedTrainerId === trainer.id;
 
-                    <button
-                      onClick={() =>
-                        handleRemoveTrainer(
-                          trainer.id,
-                          trainer.full_name || trainer.email
-                        )
-                      }
-                      className="rounded-2xl border border-red-400 px-4 py-3 text-sm font-black uppercase tracking-wide text-red-300 transition hover:bg-red-400 hover:text-black"
+                  return (
+                    <div
+                      key={trainer.id}
+                      className="rounded-[2rem] border border-yellow-500/20 bg-black/40 p-4"
                     >
-                      Remove Access
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="text-xl font-black">
+                            {trainer.full_name || "Unnamed Trainer"}
+                          </p>
+
+                          <div className="mt-3 grid gap-2 text-sm font-bold text-gray-400 md:grid-cols-2">
+                            <p>Email: {trainer.email || "No email saved"}</p>
+                            <p>Phone: {trainer.phone || "No phone saved"}</p>
+                            <p>
+                              Added:{" "}
+                              {trainer.created_at
+                                ? new Date(trainer.created_at).toLocaleDateString()
+                                : "Unknown"}
+                            </p>
+                            <p className="text-yellow-400">
+                              This Month:{" "}
+                              {trainer.total_sessions_this_month} sessions
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2 md:min-w-44">
+                          <button
+                            onClick={() =>
+                              setExpandedTrainerId(isExpanded ? null : trainer.id)
+                            }
+                            className="rounded-2xl bg-yellow-400 px-4 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300"
+                          >
+                            {isExpanded ? "Hide History" : "View History"}
+                          </button>
+
+                          <button
+                            onClick={() =>
+                              handleRemoveTrainer(
+                                trainer.id,
+                                trainer.full_name || trainer.email || "trainer"
+                              )
+                            }
+                            className="rounded-2xl border border-red-400 px-4 py-3 text-sm font-black uppercase tracking-wide text-red-300 transition hover:bg-red-400 hover:text-black"
+                          >
+                            Remove Access
+                          </button>
+                        </div>
+                      </div>
+
+                      {isExpanded ? (
+                        <div className="mt-5 rounded-2xl border border-yellow-500/20 bg-black/50 p-4">
+                          <h3 className="mb-4 text-lg font-black text-yellow-400">
+                            Recent Session History
+                          </h3>
+
+                          {trainer.recent_session_history.length === 0 ? (
+                            <p className="text-sm font-medium text-gray-400">
+                              No recent session history for this trainer.
+                            </p>
+                          ) : (
+                            <div className="space-y-3">
+                              {trainer.recent_session_history.map((log) => (
+                                <div
+                                  key={log.id}
+                                  className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"
+                                >
+                                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                      <p className="font-black">
+                                        {log.client_name}
+                                      </p>
+                                      <p className="text-xs font-bold text-gray-500">
+                                        {log.client_email || "No client email"}
+                                      </p>
+                                    </div>
+
+                                    <p className="text-sm font-black text-yellow-400">
+                                      {formatDateTime(log.scanned_at)}
+                                    </p>
+                                  </div>
+
+                                  <div className="mt-3 grid gap-2 text-sm font-bold text-gray-400 md:grid-cols-3">
+                                    <p>Status: {log.status}</p>
+                                    <p>
+                                      Remaining After:{" "}
+                                      {log.remaining_after ?? "N/A"}
+                                    </p>
+                                    <p>{log.message || "Session scanned"}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>

@@ -4,6 +4,7 @@ import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 type TrainerPayload = {
   full_name?: string;
   email?: string;
+  phone?: string;
   password?: string;
 };
 
@@ -12,7 +13,7 @@ async function verifyAdmin(request: NextRequest) {
   const token = authHeader?.replace("Bearer ", "");
 
   if (!token) {
-    return { error: "Missing authorization token.", userId: null };
+    return { error: "Missing authorization token." };
   }
 
   const {
@@ -21,7 +22,7 @@ async function verifyAdmin(request: NextRequest) {
   } = await supabaseAdmin.auth.getUser(token);
 
   if (userError || !user) {
-    return { error: "Invalid user session.", userId: null };
+    return { error: "Invalid user session." };
   }
 
   const { data: profile, error: profileError } = await supabaseAdmin
@@ -31,10 +32,10 @@ async function verifyAdmin(request: NextRequest) {
     .single();
 
   if (profileError || !profile || profile.role !== "admin") {
-    return { error: "Admin access required.", userId: null };
+    return { error: "Admin access required." };
   }
 
-  return { error: null, userId: user.id };
+  return { error: null };
 }
 
 export async function GET(request: NextRequest) {
@@ -44,20 +45,84 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: adminCheck.error }, { status: 401 });
   }
 
-  const { data: trainers, error } = await supabaseAdmin
+  const { data: trainers, error: trainersError } = await supabaseAdmin
     .from("profiles")
-    .select("id, email, full_name, role")
+    .select("id, email, full_name, phone, role, created_at")
     .eq("role", "trainer")
     .order("full_name", { ascending: true });
 
-  if (error) {
+  if (trainersError) {
     return NextResponse.json(
       { error: "Could not load trainers." },
       { status: 500 }
     );
   }
 
-  return NextResponse.json({ trainers: trainers || [] });
+  const trainerIds = (trainers || []).map((trainer) => trainer.id);
+
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const { data: monthlyLogs } = await supabaseAdmin
+    .from("session_logs")
+    .select("id, trainer_id, client_id, status, scanned_at, remaining_after")
+    .in("trainer_id", trainerIds)
+    .eq("status", "success")
+    .gte("scanned_at", startOfMonth.toISOString());
+
+  const { data: recentLogs } = await supabaseAdmin
+    .from("session_logs")
+    .select("id, trainer_id, client_id, status, message, scanned_at, remaining_after")
+    .in("trainer_id", trainerIds)
+    .order("scanned_at", { ascending: false })
+    .limit(100);
+
+  const clientIds = Array.from(
+    new Set((recentLogs || []).map((log) => log.client_id).filter(Boolean))
+  );
+
+  const { data: clients } =
+    clientIds.length > 0
+      ? await supabaseAdmin
+          .from("clients")
+          .select("id, full_name, email, phone")
+          .in("id", clientIds)
+      : { data: [] };
+
+  const clientMap = new Map((clients || []).map((client) => [client.id, client]));
+
+  const trainersWithStats = (trainers || []).map((trainer) => {
+    const trainerMonthlyLogs = (monthlyLogs || []).filter(
+      (log) => log.trainer_id === trainer.id
+    );
+
+    const trainerRecentLogs = (recentLogs || [])
+      .filter((log) => log.trainer_id === trainer.id)
+      .slice(0, 10)
+      .map((log) => {
+        const client = clientMap.get(log.client_id);
+
+        return {
+          id: log.id,
+          client_id: log.client_id,
+          client_name: client?.full_name || "Unknown Client",
+          client_email: client?.email || null,
+          status: log.status,
+          message: log.message,
+          remaining_after: log.remaining_after,
+          scanned_at: log.scanned_at,
+        };
+      });
+
+    return {
+      ...trainer,
+      total_sessions_this_month: trainerMonthlyLogs.length,
+      recent_session_history: trainerRecentLogs,
+    };
+  });
+
+  return NextResponse.json({ trainers: trainersWithStats });
 }
 
 export async function POST(request: NextRequest) {
@@ -71,6 +136,7 @@ export async function POST(request: NextRequest) {
 
   const fullName = body.full_name?.trim();
   const email = body.email?.trim().toLowerCase();
+  const phone = body.phone?.trim() || null;
   const password = body.password;
 
   if (!fullName || !email || !password) {
@@ -98,6 +164,7 @@ export async function POST(request: NextRequest) {
       .from("profiles")
       .update({
         full_name: fullName,
+        phone,
         role: "trainer",
       })
       .eq("id", existingProfile.id);
@@ -134,6 +201,7 @@ export async function POST(request: NextRequest) {
     id: createdUser.user.id,
     email,
     full_name: fullName,
+    phone,
     role: "trainer",
   });
 
