@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { supabase } from "../../../lib/supabaseClient";
 import { useRouter } from "next/navigation";
@@ -11,23 +11,49 @@ type ScanResult = {
   message: string;
 };
 
+type TrainerHistoryLog = {
+  id: string;
+  client_id: string;
+  status: string;
+  message: string | null;
+  remaining_after: number | null;
+  scanned_at: string;
+};
+
+type ClientInfo = {
+  id: string;
+  full_name: string;
+  email: string | null;
+};
+
 export default function TrainerScanPage() {
   const router = useRouter();
   const scannerRef = useRef<Html5Qrcode | null>(null);
 
-  const [result, setResult] = useState<ScanResult>({
-    type: "",
-    message: "",
-  });
+  const [result, setResult] = useState<ScanResult>({ type: "", message: "" });
 
   const [scannerStarted, setScannerStarted] = useState(false);
   const [trainerId, setTrainerId] = useState<string | null>(null);
   const [trainerName, setTrainerName] = useState("");
+  const [trainerEmail, setTrainerEmail] = useState("");
+  const [trainerPhone, setTrainerPhone] = useState("");
   const [trainerRole, setTrainerRole] = useState("");
+
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+
   const [sessionsToday, setSessionsToday] = useState(0);
   const [clientsToday, setClientsToday] = useState(0);
   const [lastScan, setLastScan] = useState<string | null>(null);
+
+  const [historyLogs, setHistoryLogs] = useState<TrainerHistoryLog[]>([]);
+  const [clientMap, setClientMap] = useState<Map<string, ClientInfo>>(new Map());
+
   const [checkingRole, setCheckingRole] = useState(true);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState("");
 
   async function handleLogout() {
     await stopScanner();
@@ -37,23 +63,15 @@ export default function TrainerScanPage() {
 
   function extractQrToken(decodedText: string) {
     const cleanText = decodedText.trim();
-
     const match = cleanText.match(/FXA-[a-zA-Z0-9-]+/);
-
-    if (match) {
-      return match[0];
-    }
-
-    return cleanText;
+    return match ? match[0] : cleanText;
   }
 
   async function stopScanner() {
     if (!scannerRef.current) return;
 
     try {
-      const isScanning = scannerRef.current.isScanning;
-
-      if (isScanning) {
+      if (scannerRef.current.isScanning) {
         await scannerRef.current.stop();
       }
 
@@ -70,7 +88,7 @@ export default function TrainerScanPage() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const { data: logs, error } = await supabase
+    const { data: todayLogs } = await supabase
       .from("session_logs")
       .select("id, client_id, scanned_at, status")
       .eq("trainer_id", userId)
@@ -78,17 +96,86 @@ export default function TrainerScanPage() {
       .gte("scanned_at", today.toISOString())
       .order("scanned_at", { ascending: false });
 
-    if (error) {
-      console.log(error.message);
+    const logsToday = todayLogs || [];
+    const uniqueClients = new Set(logsToday.map((log) => log.client_id));
+
+    setSessionsToday(logsToday.length);
+    setClientsToday(uniqueClients.size);
+    setLastScan(logsToday[0]?.scanned_at || null);
+
+    const { data: recentLogs } = await supabase
+      .from("session_logs")
+      .select("id, client_id, status, message, remaining_after, scanned_at")
+      .eq("trainer_id", userId)
+      .order("scanned_at", { ascending: false })
+      .limit(20);
+
+    const cleanLogs = recentLogs || [];
+    setHistoryLogs(cleanLogs);
+
+    const clientIds = Array.from(
+      new Set(cleanLogs.map((log) => log.client_id).filter(Boolean))
+    );
+
+    if (clientIds.length > 0) {
+      const { data: clients } = await supabase
+        .from("clients")
+        .select("id, full_name, email")
+        .in("id", clientIds);
+
+      const nextClientMap = new Map<string, ClientInfo>();
+
+      (clients || []).forEach((client) => {
+        nextClientMap.set(client.id, client);
+      });
+
+      setClientMap(nextClientMap);
+    }
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    setSavingProfile(true);
+    setProfileMessage("");
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session?.access_token) {
+      router.push("/login");
       return;
     }
 
-    const todayLogs = logs || [];
-    const uniqueClients = new Set(todayLogs.map((log) => log.client_id));
+    const response = await fetch("/api/trainer/profile", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        full_name: editName,
+        email: editEmail,
+        phone: editPhone,
+        password: editPassword,
+      }),
+    });
 
-    setSessionsToday(todayLogs.length);
-    setClientsToday(uniqueClients.size);
-    setLastScan(todayLogs[0]?.scanned_at || null);
+    const resultData: { error?: string } = await response.json();
+
+    if (!response.ok) {
+      setProfileMessage(resultData.error || "Could not update profile.");
+      setSavingProfile(false);
+      return;
+    }
+
+    setTrainerName(editName);
+    setTrainerEmail(editEmail);
+    setTrainerPhone(editPhone);
+    setEditPassword("");
+    setProfileMessage("Profile updated successfully.");
+    setSavingProfile(false);
   }
 
   useEffect(() => {
@@ -116,11 +203,21 @@ export default function TrainerScanPage() {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("full_name")
+        .select("full_name, email, phone")
         .eq("id", user.id)
         .single();
 
-      setTrainerName(profile?.full_name || user.email || "Trainer");
+      const name = profile?.full_name || user.email || "Trainer";
+      const email = profile?.email || user.email || "";
+      const phone = profile?.phone || "";
+
+      setTrainerName(name);
+      setTrainerEmail(email);
+      setTrainerPhone(phone);
+
+      setEditName(name);
+      setEditEmail(email);
+      setEditPhone(phone);
 
       await fetchTrainerStats(user.id);
       setCheckingRole(false);
@@ -136,11 +233,7 @@ export default function TrainerScanPage() {
   async function startScanner() {
     if (scannerStarted) return;
 
-    setResult({
-      type: "",
-      message: "",
-    });
-
+    setResult({ type: "", message: "" });
     setScannerStarted(true);
 
     const scanner = new Html5Qrcode("qr-reader");
@@ -148,23 +241,14 @@ export default function TrainerScanPage() {
 
     try {
       await scanner.start(
-        {
-          facingMode: "environment",
-        },
+        { facingMode: "environment" },
         {
           fps: 20,
-          qrbox: {
-            width: 280,
-            height: 280,
-          },
+          qrbox: { width: 280, height: 280 },
           aspectRatio: 1,
         },
         async (decodedText) => {
           const qrToken = extractQrToken(decodedText);
-
-          console.log("RAW SCANNED CODE:", decodedText);
-          console.log("LOOKING FOR QR TOKEN:", qrToken);
-
           await stopScanner();
           await markSession(qrToken);
         },
@@ -187,8 +271,6 @@ export default function TrainerScanPage() {
   async function markSession(qrToken: string) {
     const cleanQrToken = qrToken.trim();
 
-    console.log("Scanned QR token:", cleanQrToken);
-
     if (!trainerId) {
       setResult({
         type: "error",
@@ -204,20 +286,20 @@ export default function TrainerScanPage() {
       .maybeSingle();
 
     if (clientError) {
-  setResult({
-    type: "error",
-    message: `Client lookup error: ${clientError.message}`,
-  });
-  return;
-}
+      setResult({
+        type: "error",
+        message: `Client lookup error: ${clientError.message}`,
+      });
+      return;
+    }
 
-if (!client) {
-  setResult({
-    type: "error",
-    message: `Invalid QR code. Scanned: ${cleanQrToken}`,
-  });
-  return;
-}
+    if (!client) {
+      setResult({
+        type: "error",
+        message: `Invalid QR code. Scanned: ${cleanQrToken}`,
+      });
+      return;
+    }
 
     if (client.status !== "active") {
       setResult({
@@ -238,14 +320,6 @@ if (!client) {
       setResult({
         type: "error",
         message: "No active session package found.",
-      });
-      return;
-    }
-
-    if (!sessionPackage.id) {
-      setResult({
-        type: "error",
-        message: "Session package ID is missing.",
       });
       return;
     }
@@ -345,7 +419,7 @@ if (!client) {
   return (
     <main className="min-h-screen bg-black p-4 text-white md:p-6">
       <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
-        <div className="mx-auto max-w-5xl">
+        <div className="mx-auto max-w-6xl">
           <header className="mb-8 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="mb-2 text-xs font-black uppercase tracking-[0.45em] text-yellow-400">
@@ -353,12 +427,12 @@ if (!client) {
               </p>
 
               <h1 className="text-4xl font-black leading-none tracking-tight text-white md:text-6xl">
-                Trainer Scanner
+                Trainer Hub
               </h1>
 
               <p className="mt-3 max-w-xl text-sm font-medium leading-6 text-gray-400 md:text-base">
-                Scan client QR codes, deduct sessions, and track today&apos;s
-                training activity.
+                Scan QR codes, view your history, and manage your trainer
+                profile.
               </p>
             </div>
 
@@ -380,7 +454,15 @@ if (!client) {
                 {trainerName || "Loading..."}
               </p>
 
-              <p className="mt-2 inline-block rounded-full bg-yellow-400 px-3 py-1 text-xs font-black uppercase tracking-wide text-black">
+              <p className="mt-2 text-sm font-bold text-gray-400">
+                {trainerEmail || "No email saved"}
+              </p>
+
+              <p className="mt-1 text-sm font-bold text-gray-400">
+                {trainerPhone || "No phone saved"}
+              </p>
+
+              <p className="mt-3 inline-block rounded-full bg-yellow-400 px-3 py-1 text-xs font-black uppercase tracking-wide text-black">
                 {trainerRole || "-"}
               </p>
             </div>
@@ -389,7 +471,6 @@ if (!client) {
               <p className="text-xs font-black uppercase tracking-widest text-gray-400">
                 Sessions Today
               </p>
-
               <p className="mt-3 text-5xl font-black text-yellow-400">
                 {sessionsToday}
               </p>
@@ -399,7 +480,6 @@ if (!client) {
               <p className="text-xs font-black uppercase tracking-widest text-gray-400">
                 Clients Today
               </p>
-
               <p className="mt-3 text-5xl font-black text-yellow-400">
                 {clientsToday}
               </p>
@@ -409,10 +489,110 @@ if (!client) {
               <p className="text-xs font-black uppercase tracking-widest text-gray-400">
                 Last Scan
               </p>
-
               <p className="mt-4 text-xl font-black text-yellow-400">
                 {lastScan ? new Date(lastScan).toLocaleTimeString() : "-"}
               </p>
+            </div>
+          </section>
+
+          <section className="mb-8 grid gap-6 lg:grid-cols-2">
+            <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-7">
+              <h2 className="text-2xl font-black">Trainer Profile</h2>
+
+              <form onSubmit={saveProfile} className="mt-5 space-y-4">
+                <input
+                  value={editName}
+                  onChange={(event) => setEditName(event.target.value)}
+                  placeholder="Full name"
+                  className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
+
+                <input
+                  value={editEmail}
+                  onChange={(event) => setEditEmail(event.target.value)}
+                  type="email"
+                  placeholder="Email"
+                  className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
+
+                <input
+                  value={editPhone}
+                  onChange={(event) => setEditPhone(event.target.value)}
+                  placeholder="Phone number"
+                  className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
+
+                <input
+                  value={editPassword}
+                  onChange={(event) => setEditPassword(event.target.value)}
+                  type="password"
+                  minLength={6}
+                  placeholder="New password optional"
+                  className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
+
+                <button
+                  disabled={savingProfile}
+                  className="w-full rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingProfile ? "Saving..." : "Save Profile"}
+                </button>
+              </form>
+
+              {profileMessage ? (
+                <p className="mt-4 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-4 text-sm font-bold text-yellow-300">
+                  {profileMessage}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-7">
+              <h2 className="text-2xl font-black">Recent History</h2>
+
+              <div className="mt-5 max-h-[430px] space-y-3 overflow-y-auto pr-1">
+                {historyLogs.length === 0 ? (
+                  <p className="text-sm font-medium text-gray-400">
+                    No session history yet.
+                  </p>
+                ) : (
+                  historyLogs.map((log) => {
+                    const client = clientMap.get(log.client_id);
+
+                    return (
+                      <div
+                        key={log.id}
+                        className="rounded-2xl border border-yellow-500/20 bg-black/50 p-4"
+                      >
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="font-black">
+                              {client?.full_name || "Unknown Client"}
+                            </p>
+                            <p className="text-xs font-bold text-gray-500">
+                              {client?.email || "No client email"}
+                            </p>
+                          </div>
+
+                          <p className="text-sm font-black text-yellow-400">
+                            {new Date(log.scanned_at).toLocaleString()}
+                          </p>
+                        </div>
+
+                        <div className="mt-3 grid gap-2 text-sm font-bold text-gray-400 md:grid-cols-3">
+                          <p>Status: {log.status}</p>
+                          <p>
+                            Remaining:{" "}
+                            {log.remaining_after === null
+                              ? "N/A"
+                              : log.remaining_after}
+                          </p>
+                          <p>{log.message || "Session scanned"}</p>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </section>
 
