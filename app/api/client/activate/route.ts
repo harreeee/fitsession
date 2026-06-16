@@ -29,16 +29,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data: client, error: clientError } = await supabaseAdmin
+    const { data: clients, error: clientError } = await supabaseAdmin
       .from("clients")
-      .select("id, profile_id, full_name, email, authorization_code, status")
-      .eq("email", email)
-      .eq("authorization_code", code)
-      .maybeSingle();
+      .select("id, profile_id, full_name, email, qr_token, authorization_code, status")
+      .eq("email", email);
 
     if (clientError) {
       return NextResponse.json({ error: clientError.message }, { status: 500 });
     }
+
+    const client = (clients || []).find((item) => {
+      return item.authorization_code === code || item.qr_token === code;
+    });
 
     if (!client) {
       return NextResponse.json(
