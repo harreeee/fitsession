@@ -11,6 +11,7 @@ export default function AdminDashboardPage() {
 
   const [totalClients, setTotalClients] = useState(0);
   const [activeClients, setActiveClients] = useState(0);
+  const [totalTrainers, setTotalTrainers] = useState(0);
   const [sessionsToday, setSessionsToday] = useState(0);
   const [lowSessionClients, setLowSessionClients] = useState(0);
   const [pendingPurchases, setPendingPurchases] = useState(0);
@@ -24,15 +25,15 @@ export default function AdminDashboardPage() {
   }
 
   async function fetchDashboardStats() {
-    const { data: clients } = await supabase
-      .from("clients")
-      .select(`
-        id,
-        status,
-        session_packages (
-          remaining_sessions
-        )
-      `);
+    setLoading(true);
+
+    const { data: clients } = await supabase.from("clients").select(`
+      id,
+      status,
+      session_packages (
+        remaining_sessions
+      )
+    `);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -58,14 +59,30 @@ export default function AdminDashboardPage() {
       .eq("transaction_type", "income")
       .gte("transaction_date", startOfMonth.toISOString().slice(0, 10));
 
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (session?.access_token) {
+      const trainersResponse = await fetch("/api/admin/trainers", {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+
+      if (trainersResponse.ok) {
+        const trainersData: { trainers: unknown[] } =
+          await trainersResponse.json();
+        setTotalTrainers(trainersData.trainers.length);
+      }
+    }
+
     const allClients = clients || [];
 
     setTotalClients(allClients.length);
-
     setActiveClients(
       allClients.filter((client) => client.status === "active").length
     );
-
     setSessionsToday((logs || []).length);
     setPendingPurchases((purchases || []).length);
 
@@ -121,9 +138,7 @@ export default function AdminDashboardPage() {
     return (
       <main className="min-h-screen bg-black p-6 text-white">
         <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-          <p className="font-black text-yellow-400">
-            Checking admin access...
-          </p>
+          <p className="font-black text-yellow-400">Checking admin access...</p>
         </div>
       </main>
     );
@@ -144,7 +159,7 @@ export default function AdminDashboardPage() {
               </h1>
 
               <p className="mt-3 text-sm font-medium text-gray-400 md:text-base">
-                Manage clients, memberships, purchases, trainer activity, and
+                Manage clients, trainers, memberships, purchases, sessions, and
                 revenue.
               </p>
             </div>
@@ -158,11 +173,9 @@ export default function AdminDashboardPage() {
           </header>
 
           {loading ? (
-            <p className="font-black text-yellow-400">
-              Loading dashboard...
-            </p>
+            <p className="font-black text-yellow-400">Loading dashboard...</p>
           ) : (
-            <section className="mb-8 grid gap-4 md:grid-cols-6">
+            <section className="mb-8 grid gap-4 md:grid-cols-7">
               <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-2xl backdrop-blur">
                 <p className="text-xs font-black uppercase tracking-widest text-gray-400">
                   Clients
@@ -178,6 +191,15 @@ export default function AdminDashboardPage() {
                 </p>
                 <p className="mt-3 text-4xl font-black text-yellow-400">
                   {activeClients}
+                </p>
+              </div>
+
+              <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-2xl backdrop-blur">
+                <p className="text-xs font-black uppercase tracking-widest text-gray-400">
+                  Trainers
+                </p>
+                <p className="mt-3 text-4xl font-black text-yellow-400">
+                  {totalTrainers}
                 </p>
               </div>
 
@@ -221,6 +243,19 @@ export default function AdminDashboardPage() {
 
           <section className="grid gap-4 md:grid-cols-3">
             <Link
+              href="/admin/trainers"
+              className="rounded-[2rem] border border-yellow-400/60 bg-yellow-400/10 p-7 shadow-2xl backdrop-blur transition hover:border-yellow-400 hover:bg-yellow-400/20"
+            >
+              <p className="mb-4 text-4xl">🏋️</p>
+              <h2 className="text-2xl font-black text-white">
+                Manage Trainers
+              </h2>
+              <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
+                View trainers, create trainer logins, and remove trainer access.
+              </p>
+            </Link>
+
+            <Link
               href="/admin/clients"
               className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-7 shadow-2xl backdrop-blur transition hover:border-yellow-400 hover:bg-yellow-400/10"
             >
@@ -238,9 +273,7 @@ export default function AdminDashboardPage() {
               className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-7 shadow-2xl backdrop-blur transition hover:border-yellow-400 hover:bg-yellow-400/10"
             >
               <p className="mb-4 text-4xl">➕</p>
-              <h2 className="text-2xl font-black text-white">
-                Add Client
-              </h2>
+              <h2 className="text-2xl font-black text-white">Add Client</h2>
               <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
                 Create a new client profile and assign sessions.
               </p>
@@ -251,9 +284,7 @@ export default function AdminDashboardPage() {
               className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-7 shadow-2xl backdrop-blur transition hover:border-yellow-400 hover:bg-yellow-400/10"
             >
               <p className="mb-4 text-4xl">🧾</p>
-              <h2 className="text-2xl font-black text-white">
-                Purchases
-              </h2>
+              <h2 className="text-2xl font-black text-white">Purchases</h2>
               <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
                 Confirm client purchases and automatically add sessions.
               </p>
@@ -277,9 +308,7 @@ export default function AdminDashboardPage() {
               className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-7 shadow-2xl backdrop-blur transition hover:border-yellow-400 hover:bg-yellow-400/10"
             >
               <p className="mb-4 text-4xl">📈</p>
-              <h2 className="text-2xl font-black text-white">
-                Revenue
-              </h2>
+              <h2 className="text-2xl font-black text-white">Revenue</h2>
               <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
                 View income, expenses, cash flow, and monthly performance.
               </p>
@@ -303,9 +332,7 @@ export default function AdminDashboardPage() {
               className="rounded-[2rem] border border-red-500/30 bg-red-500/10 p-7 shadow-2xl backdrop-blur transition hover:border-red-400 hover:bg-red-400/10"
             >
               <p className="mb-4 text-4xl">⚠️</p>
-              <h2 className="text-2xl font-black text-white">
-                Low Sessions
-              </h2>
+              <h2 className="text-2xl font-black text-white">Low Sessions</h2>
               <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
                 Follow up with clients who have 2 or fewer sessions.
               </p>
