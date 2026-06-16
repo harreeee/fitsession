@@ -203,13 +203,21 @@ export default function TrainerScanPage() {
       .eq("qr_token", cleanQrToken)
       .maybeSingle();
 
-    if (clientError || !client) {
-      setResult({
-        type: "error",
-        message: `Invalid QR code. Scanned: ${cleanQrToken}`,
-      });
-      return;
-    }
+    if (clientError) {
+  setResult({
+    type: "error",
+    message: `Client lookup error: ${clientError.message}`,
+  });
+  return;
+}
+
+if (!client) {
+  setResult({
+    type: "error",
+    message: `Invalid QR code. Scanned: ${cleanQrToken}`,
+  });
+  return;
+}
 
     if (client.status !== "active") {
       setResult({

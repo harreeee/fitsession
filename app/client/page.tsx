@@ -22,13 +22,33 @@ type ClientData = {
   }[];
 };
 
+type TrainerProfile =
+  | {
+      full_name: string | null;
+      role: string | null;
+    }
+  | {
+      full_name: string | null;
+      role: string | null;
+    }[]
+  | null;
+
 type SessionLog = {
   id: string;
   status: string;
   message: string | null;
   remaining_after: number | null;
   scanned_at: string;
+  profiles: TrainerProfile;
 };
+
+function getTrainerName(profile: TrainerProfile) {
+  if (Array.isArray(profile)) {
+    return profile[0]?.full_name || "Unknown Trainer";
+  }
+
+  return profile?.full_name || "Unknown Trainer";
+}
 
 export default function ClientPortalPage() {
   const router = useRouter();
@@ -92,13 +112,17 @@ export default function ClientPortalPage() {
         status,
         message,
         remaining_after,
-        scanned_at
+        scanned_at,
+        profiles (
+          full_name,
+          role
+        )
       `)
       .eq("client_id", clientData.id)
       .order("scanned_at", { ascending: false })
       .limit(10);
 
-    setLogs(logData || []);
+    setLogs((logData || []) as unknown as SessionLog[]);
     setLoading(false);
   }
 
@@ -172,6 +196,19 @@ export default function ClientPortalPage() {
 
   const activePackage = client.session_packages?.[0];
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const todaysSessions = logs.filter(
+    (log) =>
+      log.status === "success" &&
+      new Date(log.scanned_at).getTime() >= today.getTime()
+  );
+
+  const todaysTrainerNames = Array.from(
+    new Set(todaysSessions.map((log) => getTrainerName(log.profiles)))
+  );
+
   return (
     <main className="min-h-screen bg-black text-white p-6">
       <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
@@ -214,7 +251,7 @@ export default function ClientPortalPage() {
             </p>
           </section>
 
-          <section className="mb-8 grid gap-4 md:grid-cols-2">
+          <section className="mb-8 grid gap-4 md:grid-cols-3">
             <Link
               href="/client/membership"
               className="rounded-3xl border border-yellow-500/30 bg-yellow-400 p-6 text-black shadow-2xl transition hover:bg-yellow-300"
@@ -245,6 +282,24 @@ export default function ClientPortalPage() {
                 </span>{" "}
                 sessions remaining.
               </p>
+            </div>
+
+            <div className="rounded-3xl border border-green-500/30 bg-green-500/10 p-6 shadow-2xl backdrop-blur">
+              <p className="mb-3 text-4xl">🏋️</p>
+
+              <h2 className="text-2xl font-black uppercase text-white">
+                Today&apos;s Trainer
+              </h2>
+
+              {todaysTrainerNames.length === 0 ? (
+                <p className="mt-2 text-sm font-bold leading-6 text-gray-400">
+                  No completed session today yet.
+                </p>
+              ) : (
+                <p className="mt-2 text-sm font-bold leading-6 text-green-300">
+                  {todaysTrainerNames.join(", ")}
+                </p>
+              )}
             </div>
           </section>
 
@@ -333,6 +388,7 @@ export default function ClientPortalPage() {
                   <thead>
                     <tr className="border-b border-yellow-500/30 text-left text-sm uppercase tracking-wide text-yellow-400">
                       <th className="p-3">Status</th>
+                      <th className="p-3">Trainer</th>
                       <th className="p-3">Remaining After</th>
                       <th className="p-3">Date / Time</th>
                     </tr>
@@ -354,6 +410,10 @@ export default function ClientPortalPage() {
                           >
                             {log.status}
                           </span>
+                        </td>
+
+                        <td className="p-3 font-bold text-gray-200">
+                          {getTrainerName(log.profiles)}
                         </td>
 
                         <td className="p-3 font-black text-yellow-400">
