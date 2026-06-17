@@ -341,7 +341,12 @@ export default function AdminDashboardPage() {
                 Follow up with clients who have 10 or fewer sessions.
               </p>
             </Link>
-
+<Link
+  href="/admin/import-clients"
+  className="rounded-xl border border-yellow-400 px-5 py-3 text-center font-black uppercase text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+>
+  Import Excel
+</Link>
             <Link
               href="/trainer/scan"
               className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-7 shadow-2xl backdrop-blur transition hover:border-yellow-400 hover:bg-yellow-400/10"
