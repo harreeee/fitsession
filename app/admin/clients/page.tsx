@@ -300,7 +300,7 @@ export default function AdminClientsPage() {
   );
 
   const lowSessionClients = tableRows.filter(
-    (row) => row.remainingSessions > 0 && row.remainingSessions <= 2
+    (row) => row.remainingSessions > 0 && row.remainingSessions <= 10
   ).length;
 
   useEffect(() => {
