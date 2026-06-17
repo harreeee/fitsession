@@ -80,8 +80,7 @@ export default function LoginPage() {
 
             <div className="hidden md:flex gap-8 text-sm font-bold uppercase tracking-wide">
               <span className="text-yellow-400">Home</span>
-              <span className="text-gray-300">Services</span>
-              <span className="text-gray-300">Contact</span>
+              
             </div>
           </div>
         </header>
