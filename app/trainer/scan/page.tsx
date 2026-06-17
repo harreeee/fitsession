@@ -26,6 +26,45 @@ type ClientInfo = {
   email: string | null;
 };
 
+type TrainerProfile = {
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+};
+
+type ClientRow = {
+  id: string;
+  full_name: string;
+  email: string | null;
+  qr_token: string;
+  status: string;
+};
+
+type SessionPackageRow = {
+  id: string;
+  client_id: string;
+  total_sessions: number;
+  used_sessions: number;
+  remaining_sessions: number;
+  status: string;
+};
+
+function formatDateTime(value: string | null) {
+  if (!value) return "-";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("en-CA", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export default function TrainerScanPage() {
   const router = useRouter();
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -88,13 +127,18 @@ export default function TrainerScanPage() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const { data: todayLogs } = await supabase
+    const { data: todayLogs, error: todayLogsError } = await supabase
       .from("session_logs")
       .select("id, client_id, scanned_at, status")
       .eq("trainer_id", userId)
       .eq("status", "success")
       .gte("scanned_at", today.toISOString())
       .order("scanned_at", { ascending: false });
+
+    if (todayLogsError) {
+      console.error(todayLogsError);
+      return;
+    }
 
     const logsToday = todayLogs || [];
     const uniqueClients = new Set(logsToday.map((log) => log.client_id));
@@ -103,38 +147,59 @@ export default function TrainerScanPage() {
     setClientsToday(uniqueClients.size);
     setLastScan(logsToday[0]?.scanned_at || null);
 
-    const { data: recentLogs } = await supabase
+    const { data: recentLogs, error: recentLogsError } = await supabase
       .from("session_logs")
       .select("id, client_id, status, message, remaining_after, scanned_at")
       .eq("trainer_id", userId)
       .order("scanned_at", { ascending: false })
       .limit(20);
 
-    const cleanLogs = recentLogs || [];
+    if (recentLogsError) {
+      console.error(recentLogsError);
+      return;
+    }
+
+    const cleanLogs = (recentLogs || []) as TrainerHistoryLog[];
     setHistoryLogs(cleanLogs);
 
     const clientIds = Array.from(
-      new Set(cleanLogs.map((log) => log.client_id).filter(Boolean))
+      new Set(
+        cleanLogs
+          .map((log) => log.client_id)
+          .filter((clientId): clientId is string => Boolean(clientId))
+      )
     );
 
     if (clientIds.length > 0) {
-      const { data: clients } = await supabase
+      const { data: clients, error: clientsError } = await supabase
         .from("clients")
         .select("id, full_name, email")
         .in("id", clientIds);
 
+      if (clientsError) {
+        console.error(clientsError);
+        return;
+      }
+
       const nextClientMap = new Map<string, ClientInfo>();
 
-      (clients || []).forEach((client) => {
+      ((clients || []) as ClientInfo[]).forEach((client) => {
         nextClientMap.set(client.id, client);
       });
 
       setClientMap(nextClientMap);
+    } else {
+      setClientMap(new Map());
     }
   }
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (!trainerId) {
+      setProfileMessage("Trainer account not loaded.");
+      return;
+    }
 
     setSavingProfile(true);
     setProfileMessage("");
@@ -201,15 +266,21 @@ export default function TrainerScanPage() {
       setTrainerId(user.id);
       setTrainerRole(role || "");
 
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("full_name, email, phone")
         .eq("id", user.id)
-        .single();
+        .maybeSingle();
 
-      const name = profile?.full_name || user.email || "Trainer";
-      const email = profile?.email || user.email || "";
-      const phone = profile?.phone || "";
+      if (profileError) {
+        console.error(profileError);
+      }
+
+      const trainerProfile = profile as TrainerProfile | null;
+
+      const name = trainerProfile?.full_name || user.email || "Trainer";
+      const email = trainerProfile?.email || user.email || "";
+      const phone = trainerProfile?.phone || "";
 
       setTrainerName(name);
       setTrainerEmail(email);
@@ -279,9 +350,21 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const { data: client, error: clientError } = await supabase
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !authData.user) {
+      setResult({
+        type: "error",
+        message: "Could not confirm trainer login. Please log in again.",
+      });
+      return;
+    }
+
+    const currentTrainerId = authData.user.id;
+
+    const { data: clientData, error: clientError } = await supabase
       .from("clients")
-      .select("*")
+      .select("id, full_name, email, qr_token, status")
       .eq("qr_token", cleanQrToken)
       .maybeSingle();
 
@@ -292,6 +375,8 @@ export default function TrainerScanPage() {
       });
       return;
     }
+
+    const client = clientData as ClientRow | null;
 
     if (!client) {
       setResult({
@@ -309,14 +394,26 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const { data: sessionPackage, error: packageError } = await supabase
+    const { data: packageData, error: packageError } = await supabase
       .from("session_packages")
-      .select("*")
+      .select("id, client_id, total_sessions, used_sessions, remaining_sessions, status")
       .eq("client_id", client.id)
       .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
-    if (packageError || !sessionPackage) {
+    if (packageError) {
+      setResult({
+        type: "error",
+        message: packageError.message,
+      });
+      return;
+    }
+
+    const sessionPackage = packageData as SessionPackageRow | null;
+
+    if (!sessionPackage) {
       setResult({
         type: "error",
         message: "No active session package found.",
@@ -337,7 +434,7 @@ export default function TrainerScanPage() {
 
     const { data: recentScan, error: recentScanError } = await supabase
       .from("session_logs")
-      .select("*")
+      .select("id")
       .eq("client_id", client.id)
       .eq("status", "success")
       .gte("scanned_at", thirtyMinutesAgo.toISOString())
@@ -368,6 +465,7 @@ export default function TrainerScanPage() {
       .update({
         used_sessions: newUsed,
         remaining_sessions: newRemaining,
+        status: newRemaining <= 0 ? "completed" : sessionPackage.status,
       })
       .eq("id", sessionPackage.id);
 
@@ -381,11 +479,12 @@ export default function TrainerScanPage() {
 
     const { error: logError } = await supabase.from("session_logs").insert({
       client_id: client.id,
-      trainer_id: trainerId,
+      trainer_id: currentTrainerId,
       package_id: sessionPackage.id,
       status: "success",
-      message: "Session marked successfully.",
+      message: `Session scanned by ${trainerName || trainerEmail || "trainer"}.`,
       remaining_after: newRemaining,
+      scanned_at: new Date().toISOString(),
     });
 
     if (logError) {
@@ -401,7 +500,7 @@ export default function TrainerScanPage() {
       message: `Success! ${client.full_name} now has ${newRemaining} sessions remaining.`,
     });
 
-    await fetchTrainerStats(trainerId);
+    await fetchTrainerStats(currentTrainerId);
   }
 
   if (checkingRole) {
@@ -574,7 +673,7 @@ export default function TrainerScanPage() {
                           </div>
 
                           <p className="text-sm font-black text-yellow-400">
-                            {new Date(log.scanned_at).toLocaleString()}
+                            {formatDateTime(log.scanned_at)}
                           </p>
                         </div>
 

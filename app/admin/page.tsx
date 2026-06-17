@@ -338,7 +338,7 @@ export default function AdminDashboardPage() {
               <p className="mb-4 text-4xl">⚠️</p>
               <h2 className="text-2xl font-black text-white">Low Sessions</h2>
               <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
-                Follow up with clients who have 2 or fewer sessions.
+                Follow up with clients who have 10 or fewer sessions.
               </p>
             </Link>
 

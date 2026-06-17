@@ -63,6 +63,8 @@ type ClientSessionHistory = {
   remaining_after: number | null;
   scanned_at: string | null;
   trainer_id: string | null;
+  trainer_name: string | null;
+  trainer_email: string | null;
 };
 
 function formatDate(value: string | null) {
@@ -139,6 +141,7 @@ export default function ClientDetailPage() {
   const [sessionHistory, setSessionHistory] = useState<ClientSessionHistory[]>(
     []
   );
+
   const [qrCode, setQrCode] = useState("");
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
@@ -346,19 +349,74 @@ export default function ClientDetailPage() {
   async function fetchSessionHistory() {
     if (!clientId) return;
 
-    const { data, error } = await supabase
+    const { data: logsData, error: logsError } = await supabase
       .from("session_logs")
       .select("id, status, message, remaining_after, scanned_at, trainer_id")
       .eq("client_id", clientId)
       .order("scanned_at", { ascending: false })
       .limit(20);
 
-    if (error) {
-      alert(error.message);
+    if (logsError) {
+      alert(logsError.message);
       return;
     }
 
-    setSessionHistory((data || []) as ClientSessionHistory[]);
+    const logs = logsData || [];
+
+    const trainerIds = Array.from(
+      new Set(
+        logs
+          .map((log) => log.trainer_id)
+          .filter((trainerId): trainerId is string => Boolean(trainerId))
+      )
+    );
+
+    let trainerMap = new Map<
+      string,
+      {
+        full_name: string | null;
+        email: string | null;
+      }
+    >();
+
+    if (trainerIds.length > 0) {
+      const { data: trainersData, error: trainersError } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .in("id", trainerIds);
+
+      if (trainersError) {
+        alert(trainersError.message);
+        return;
+      }
+
+      trainerMap = new Map(
+        (trainersData || []).map((trainer) => [
+          trainer.id,
+          {
+            full_name: trainer.full_name,
+            email: trainer.email,
+          },
+        ])
+      );
+    }
+
+    const historyWithTrainerNames: ClientSessionHistory[] = logs.map((log) => {
+      const trainer = log.trainer_id ? trainerMap.get(log.trainer_id) : null;
+
+      return {
+        id: log.id,
+        status: log.status,
+        message: log.message,
+        remaining_after: log.remaining_after,
+        scanned_at: log.scanned_at,
+        trainer_id: log.trainer_id,
+        trainer_name: trainer?.full_name || null,
+        trainer_email: trainer?.email || null,
+      };
+    });
+
+    setSessionHistory(historyWithTrainerNames);
   }
 
   async function updateClientInfo(e: React.FormEvent<HTMLFormElement>) {
@@ -725,6 +783,51 @@ export default function ClientDetailPage() {
     await fetchClient();
   }
 
+  async function generateClientLoginCode() {
+    if (!client) {
+      alert("No client loaded.");
+      return;
+    }
+
+    setGeneratingCode(true);
+    setLoginCode("");
+    setLoginCodeEmail("");
+
+    try {
+      const response = await fetch("/api/admin/client-code", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          clientId: client.id,
+        }),
+      });
+
+      const result: {
+        code?: string;
+        email?: string;
+        error?: string;
+      } = await response.json();
+
+      setGeneratingCode(false);
+
+      if (!response.ok) {
+        alert(result.error || "Could not generate login code.");
+        return;
+      }
+
+      setLoginCode(result.code || "");
+      setLoginCodeEmail(result.email || client.email || "");
+
+      alert(`Code generated: ${result.code}`);
+    } catch (error) {
+      console.error(error);
+      setGeneratingCode(false);
+      alert("Server error. Check if app/api/admin/client-code/route.ts exists.");
+    }
+  }
+
   async function deleteClient() {
     if (!client) return;
 
@@ -783,49 +886,6 @@ export default function ClientDetailPage() {
 
     alert("Client deleted successfully.");
     router.push("/admin/clients");
-  }
-
-  async function generateClientLoginCode() {
-    if (!client) {
-      alert("No client loaded.");
-      return;
-    }
-
-    setGeneratingCode(true);
-    setLoginCode("");
-    setLoginCodeEmail("");
-
-    try {
-      const response = await fetch("/api/admin/client-code", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          clientId: client.id,
-        }),
-      });
-
-      const result = await response.json();
-
-      console.log("Generate code response:", result);
-
-      setGeneratingCode(false);
-
-      if (!response.ok) {
-        alert(result.error || "Could not generate login code.");
-        return;
-      }
-
-      setLoginCode(result.code);
-      setLoginCodeEmail(result.email);
-
-      alert(`Code generated: ${result.code}`);
-    } catch (error) {
-      console.error(error);
-      setGeneratingCode(false);
-      alert("Server error. Check if app/api/admin/client-code/route.ts exists.");
-    }
   }
 
   useEffect(() => {
@@ -1425,6 +1485,52 @@ export default function ClientDetailPage() {
               <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur print:hidden">
                 <div className="mb-6">
                   <p className="text-yellow-400 font-black uppercase tracking-widest text-sm">
+                    Client Login
+                  </p>
+
+                  <h2 className="text-3xl font-black text-white">Login Code</h2>
+
+                  <p className="mt-2 text-sm text-gray-400">
+                    Generate a temporary login code for this client. Give this
+                    code to the client so they can access their client page.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={generateClientLoginCode}
+                  disabled={generatingCode}
+                  className="w-full rounded-xl bg-yellow-400 p-3 font-black uppercase text-black hover:bg-yellow-300 disabled:opacity-60 transition"
+                >
+                  {generatingCode
+                    ? "Generating Code..."
+                    : "Generate Client Login Code"}
+                </button>
+
+                {loginCode ? (
+                  <div className="mt-5 rounded-2xl border border-yellow-500/30 bg-black/40 p-5 text-center">
+                    <p className="text-sm font-bold text-gray-400">
+                      Client Email
+                    </p>
+
+                    <p className="mt-1 font-black text-white">
+                      {loginCodeEmail || client.email || "-"}
+                    </p>
+
+                    <p className="mt-5 text-sm font-bold uppercase tracking-widest text-gray-400">
+                      Login Code
+                    </p>
+
+                    <p className="mt-2 text-5xl font-black tracking-[0.25em] text-yellow-400">
+                      {loginCode}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur print:hidden">
+                <div className="mb-6">
+                  <p className="text-yellow-400 font-black uppercase tracking-widest text-sm">
                     Session History
                   </p>
 
@@ -1458,6 +1564,17 @@ export default function ClientDetailPage() {
                             {formatDateTime(log.scanned_at)}
                           </p>
                         </div>
+
+                        <p className="mt-2 text-sm font-bold text-gray-300">
+                          Trainer:{" "}
+                          <span className="text-yellow-400">
+                            {log.trainer_name ||
+                              log.trainer_email ||
+                              (log.trainer_id
+                                ? "Trainer account removed"
+                                : "Admin / Manual")}
+                          </span>
+                        </p>
 
                         <p className="mt-2 text-sm font-bold text-gray-300">
                           Remaining After:{" "}
