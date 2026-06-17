@@ -156,15 +156,15 @@ export default function AdminClientsPage() {
         .order("created_at", { ascending: false }),
 
       supabase
-        .from("session_packages")
-        .select(
-          "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
-        )
+       .from("session_packages")
+.select(
+  "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
+)
         .order("created_at", { ascending: false }),
 
       supabase
         .from("client_purchases")
-        .select("id, client_id, plan_name, session_count, price, status, created_at")
+.select("id, client_id, plan_name, session_count, price, status, created_at")
         .order("created_at", { ascending: false }),
     ]);
 
