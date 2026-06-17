@@ -24,23 +24,18 @@ export async function POST(request: Request) {
       .single();
 
     if (clientError || !client) {
-      return NextResponse.json(
-        { error: "Client not found." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Client not found." }, { status: 404 });
     }
 
     if (!client.email) {
       return NextResponse.json(
-        {
-          error:
-            "Client must have an email before creating a login code.",
-        },
+        { error: "Client must have an email before creating a login code." },
         { status: 400 }
       );
     }
 
     const code = generateCode();
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
     await supabaseAdmin
       .from("client_login_codes")
@@ -55,17 +50,17 @@ export async function POST(request: Request) {
         email: client.email.toLowerCase(),
         code,
         used: false,
-        expires_at: new Date(
-          Date.now() + 7 * 24 * 60 * 60 * 1000
-        ).toISOString(),
+        expires_at: expiresAt,
       });
 
     if (insertError) {
-      return NextResponse.json(
-        { error: insertError.message },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: insertError.message }, { status: 400 });
     }
+
+    await supabaseAdmin
+      .from("clients")
+      .update({ authorization_code: code })
+      .eq("id", client.id);
 
     return NextResponse.json({
       success: true,
