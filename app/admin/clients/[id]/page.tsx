@@ -174,6 +174,8 @@ export default function ClientDetailPage() {
   const [loginCodeEmail, setLoginCodeEmail] = useState("");
   const [generatingCode, setGeneratingCode] = useState(false);
 
+  const [deletingClient, setDeletingClient] = useState(false);
+
   async function fetchClient() {
     if (!clientId) return;
 
@@ -721,6 +723,66 @@ export default function ClientDetailPage() {
 
     alert(`Client is now ${newStatus}.`);
     await fetchClient();
+  }
+
+  async function deleteClient() {
+    if (!client) return;
+
+    const firstConfirm = window.confirm(
+      `Delete ${client.full_name}? This will remove this client from FXA FITNESS. This action cannot be undone.`
+    );
+
+    if (!firstConfirm) return;
+
+    const typedName = window.prompt(
+      `Type the client name exactly to confirm deletion:\n\n${client.full_name}`
+    );
+
+    if (typedName !== client.full_name) {
+      alert("Client name did not match. Delete cancelled.");
+      return;
+    }
+
+    setDeletingClient(true);
+
+    const deleteSteps: {
+      table: string;
+      label: string;
+    }[] = [
+      { table: "session_logs", label: "session history" },
+      { table: "package_renewals", label: "renewal history" },
+      { table: "client_notes", label: "client notes" },
+      { table: "client_login_codes", label: "client login codes" },
+      { table: "client_purchases", label: "client purchases" },
+      { table: "session_packages", label: "session packages" },
+    ];
+
+    for (const step of deleteSteps) {
+      const { error } = await supabase
+        .from(step.table)
+        .delete()
+        .eq("client_id", client.id);
+
+      if (error) {
+        alert(`Could not delete ${step.label}: ${error.message}`);
+        setDeletingClient(false);
+        return;
+      }
+    }
+
+    const { error: clientError } = await supabase
+      .from("clients")
+      .delete()
+      .eq("id", client.id);
+
+    if (clientError) {
+      alert(clientError.message);
+      setDeletingClient(false);
+      return;
+    }
+
+    alert("Client deleted successfully.");
+    router.push("/admin/clients");
   }
 
   async function generateClientLoginCode() {
@@ -1496,6 +1558,33 @@ export default function ClientDetailPage() {
                   {savingNotes ? "Saving Notes..." : "Save Client Notes"}
                 </button>
               </form>
+
+              <div className="rounded-3xl border border-red-500/40 bg-red-500/10 p-8 shadow-2xl backdrop-blur print:hidden">
+                <div className="mb-5">
+                  <p className="text-red-300 font-black uppercase tracking-widest text-sm">
+                    Danger Zone
+                  </p>
+
+                  <h2 className="text-3xl font-black text-white">
+                    Delete Client
+                  </h2>
+
+                  <p className="mt-2 text-sm text-red-100/80">
+                    This permanently removes this client, their packages, notes,
+                    purchases, login codes, renewal history, and session history.
+                    This cannot be undone.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={deleteClient}
+                  disabled={deletingClient}
+                  className="w-full rounded-xl border border-red-300 bg-red-600 p-3 font-black uppercase text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {deletingClient ? "Deleting Client..." : "Delete Client"}
+                </button>
+              </div>
             </section>
           </div>
         </div>

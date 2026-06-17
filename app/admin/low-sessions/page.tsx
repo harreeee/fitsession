@@ -53,7 +53,7 @@ export default function LowSessionsPage() {
 
         return (
           activePackage &&
-          activePackage.remaining_sessions <= 2
+          activePackage.remaining_sessions <= 10
         );
       });
 
@@ -133,7 +133,7 @@ export default function LowSessionsPage() {
           <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-6 shadow-2xl backdrop-blur">
             <div className="mb-6">
               <h2 className="text-3xl font-black text-white">
-                Clients With 2 Or Fewer Sessions
+                Clients With 10 Or Fewer Sessions
               </h2>
 
               <p className="mt-2 text-gray-300">
