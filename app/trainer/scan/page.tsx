@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Html5Qrcode } from "html5-qrcode";
 import { supabase } from "../../../lib/supabaseClient";
 import { useRouter } from "next/navigation";
@@ -49,6 +50,13 @@ type SessionPackageRow = {
   status: string;
 };
 
+function getRoleLabel(role: string) {
+  if (role === "nutrition_coach") return "Nutrition Coach";
+  if (role === "trainer") return "Trainer";
+  if (role === "admin") return "Admin";
+  return "Staff";
+}
+
 function formatDateTime(value: string | null) {
   if (!value) return "-";
 
@@ -91,6 +99,9 @@ export default function TrainerScanPage() {
   const [clientMap, setClientMap] = useState<Map<string, ClientInfo>>(new Map());
 
   const [checkingRole, setCheckingRole] = useState(true);
+  const [checkingMessage, setCheckingMessage] = useState(
+    "Checking scanner access..."
+  );
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMessage, setProfileMessage] = useState("");
 
@@ -197,7 +208,7 @@ export default function TrainerScanPage() {
     event.preventDefault();
 
     if (!trainerId) {
-      setProfileMessage("Trainer account not loaded.");
+      setProfileMessage("Staff account not loaded.");
       return;
     }
 
@@ -248,16 +259,19 @@ export default function TrainerScanPage() {
       const { user, role } = await getCurrentUserRole();
 
       if (!user) {
+        setCheckingMessage("Redirecting to login...");
         router.push("/login");
         return;
       }
 
-      if (role !== "trainer" && role !== "admin") {
-        if (role === "client") {
-          router.push("/client");
-          return;
-        }
+      if (role === "client") {
+        setCheckingMessage("Redirecting to client portal...");
+        router.push("/client");
+        return;
+      }
 
+      if (role !== "trainer" && role !== "nutrition_coach" && role !== "admin") {
+        setCheckingMessage("Redirecting to login...");
         await supabase.auth.signOut();
         router.push("/login");
         return;
@@ -278,7 +292,7 @@ export default function TrainerScanPage() {
 
       const trainerProfile = profile as TrainerProfile | null;
 
-      const name = trainerProfile?.full_name || user.email || "Trainer";
+      const name = trainerProfile?.full_name || user.email || "Staff";
       const email = trainerProfile?.email || user.email || "";
       const phone = trainerProfile?.phone || "";
 
@@ -345,7 +359,7 @@ export default function TrainerScanPage() {
     if (!trainerId) {
       setResult({
         type: "error",
-        message: "Please log in as a trainer before scanning.",
+        message: "Please log in before scanning.",
       });
       return;
     }
@@ -355,7 +369,7 @@ export default function TrainerScanPage() {
     if (authError || !authData.user) {
       setResult({
         type: "error",
-        message: "Could not confirm trainer login. Please log in again.",
+        message: "Could not confirm login. Please log in again.",
       });
       return;
     }
@@ -396,7 +410,9 @@ export default function TrainerScanPage() {
 
     const { data: packageData, error: packageError } = await supabase
       .from("session_packages")
-      .select("id, client_id, total_sessions, used_sessions, remaining_sessions, status")
+      .select(
+        "id, client_id, total_sessions, used_sessions, remaining_sessions, status"
+      )
       .eq("client_id", client.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -482,7 +498,7 @@ export default function TrainerScanPage() {
       trainer_id: currentTrainerId,
       package_id: sessionPackage.id,
       status: "success",
-      message: `Session scanned by ${trainerName || trainerEmail || "trainer"}.`,
+      message: `Session scanned by ${trainerName || trainerEmail || "staff"}.`,
       remaining_after: newRemaining,
       scanned_at: new Date().toISOString(),
     });
@@ -508,7 +524,7 @@ export default function TrainerScanPage() {
       <main className="min-h-screen bg-black p-5 text-white">
         <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
           <p className="text-base font-black text-yellow-400">
-            Checking scanner access...
+            {checkingMessage}
           </p>
         </div>
       </main>
@@ -526,21 +542,46 @@ export default function TrainerScanPage() {
               </p>
 
               <h1 className="text-4xl font-black leading-none tracking-tight text-white md:text-6xl">
-                Trainer Hub
+                {getRoleLabel(trainerRole)} Hub
               </h1>
 
               <p className="mt-3 max-w-xl text-sm font-medium leading-6 text-gray-400 md:text-base">
-                Scan QR codes, view your history, and manage your trainer
-                profile.
+                Scan QR codes, view your history, manage your profile, and open
+                client management.
               </p>
             </div>
 
-            <button
-              onClick={handleLogout}
-              className="rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
-            >
-              Logout
-            </button>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Link
+                href="/admin/clients"
+                className="rounded-2xl bg-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300"
+              >
+                Client Management
+              </Link>
+
+              <Link
+                href="/history"
+                className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+              >
+                History
+              </Link>
+
+              {trainerRole === "admin" ? (
+                <Link
+                  href="/admin"
+                  className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+                >
+                  Admin
+                </Link>
+              ) : null}
+
+              <button
+                onClick={handleLogout}
+                className="rounded-2xl border border-red-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-red-300 transition hover:bg-red-400 hover:text-black"
+              >
+                Logout
+              </button>
+            </div>
           </header>
 
           <section className="mb-8 grid gap-4 md:grid-cols-4">
@@ -562,7 +603,7 @@ export default function TrainerScanPage() {
               </p>
 
               <p className="mt-3 inline-block rounded-full bg-yellow-400 px-3 py-1 text-xs font-black uppercase tracking-wide text-black">
-                {trainerRole || "-"}
+                {getRoleLabel(trainerRole)}
               </p>
             </div>
 
@@ -596,7 +637,7 @@ export default function TrainerScanPage() {
 
           <section className="mb-8 grid gap-6 lg:grid-cols-2">
             <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-7">
-              <h2 className="text-2xl font-black">Trainer Profile</h2>
+              <h2 className="text-2xl font-black">Profile</h2>
 
               <form onSubmit={saveProfile} className="mt-5 space-y-4">
                 <input
@@ -740,29 +781,6 @@ export default function TrainerScanPage() {
                 {result.message}
               </div>
             )}
-
-            <div className="mt-8 grid gap-4 md:grid-cols-3">
-              <div className="rounded-3xl border border-yellow-500/30 bg-black/40 p-5 text-center">
-                <p className="mb-3 text-4xl">✅</p>
-                <p className="text-xs font-black uppercase tracking-widest text-gray-300">
-                  Auto Deduct
-                </p>
-              </div>
-
-              <div className="rounded-3xl border border-yellow-500/30 bg-black/40 p-5 text-center">
-                <p className="mb-3 text-4xl">⏱️</p>
-                <p className="text-xs font-black uppercase tracking-widest text-gray-300">
-                  Duplicate Block
-                </p>
-              </div>
-
-              <div className="rounded-3xl border border-yellow-500/30 bg-black/40 p-5 text-center">
-                <p className="mb-3 text-4xl">📋</p>
-                <p className="text-xs font-black uppercase tracking-widest text-gray-300">
-                  History Logged
-                </p>
-              </div>
-            </div>
           </section>
         </div>
       </div>

@@ -897,7 +897,7 @@ export default function ClientDetailPage() {
         return;
       }
 
-      if (role !== "admin") {
+     if (role !== "admin" && role !== "nutrition_coach") {
         if (role === "trainer") {
           router.push("/trainer/scan");
           return;

@@ -9,7 +9,10 @@ async function getUserFromRequest(request: NextRequest) {
 
   const {
     data: { user },
+    error,
   } = await supabaseAdmin.auth.getUser(token);
+
+  if (error || !user) return null;
 
   return user;
 }
@@ -21,21 +24,39 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
-  const body = await request.json();
+  const body: {
+    full_name?: string;
+    phone?: string;
+    email?: string;
+    password?: string;
+  } = await request.json();
 
   const fullName = String(body.full_name || "").trim();
   const phone = String(body.phone || "").trim();
   const email = String(body.email || "").trim().toLowerCase();
   const password = String(body.password || "");
 
-  const { data: profile } = await supabaseAdmin
+  const { data: profile, error: profileLookupError } = await supabaseAdmin
     .from("profiles")
     .select("id, role")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
 
-  if (!profile || !["trainer", "admin"].includes(profile.role)) {
-    return NextResponse.json({ error: "Trainer access required." }, { status: 403 });
+  if (profileLookupError) {
+    return NextResponse.json(
+      { error: profileLookupError.message },
+      { status: 500 }
+    );
+  }
+
+  if (
+    !profile ||
+    !["trainer", "nutrition_coach", "admin"].includes(profile.role)
+  ) {
+    return NextResponse.json(
+      { error: "Staff access required." },
+      { status: 403 }
+    );
   }
 
   const profileUpdates: {
@@ -44,7 +65,10 @@ export async function PATCH(request: NextRequest) {
     email?: string;
   } = {};
 
-  if (fullName) profileUpdates.full_name = fullName;
+  if (fullName) {
+    profileUpdates.full_name = fullName;
+  }
+
   profileUpdates.phone = phone || null;
 
   const authUpdates: {
@@ -79,14 +103,19 @@ export async function PATCH(request: NextRequest) {
     }
   }
 
-  const { error: profileError } = await supabaseAdmin
-    .from("profiles")
-    .update(profileUpdates)
-    .eq("id", user.id);
+  if (Object.keys(profileUpdates).length > 0) {
+    const { error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .update(profileUpdates)
+      .eq("id", user.id);
 
-  if (profileError) {
-    return NextResponse.json({ error: profileError.message }, { status: 500 });
+    if (profileError) {
+      return NextResponse.json({ error: profileError.message }, { status: 500 });
+    }
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({
+    success: true,
+    role: profile.role,
+  });
 }

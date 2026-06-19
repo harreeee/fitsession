@@ -207,7 +207,7 @@ export default function HistoryPage() {
         return;
       }
 
-      if (role !== "admin" && role !== "trainer") {
+      if (role !== "admin" && role !== "trainer" && role !== "nutrition_coach") {
         if (role === "client") {
           router.push("/client");
           return;

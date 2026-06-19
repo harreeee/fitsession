@@ -145,6 +145,10 @@ export default function AdminClientsPage() {
 
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
+  const [checkingMessage, setCheckingMessage] = useState("Checking access...");
+  const [userRole, setUserRole] = useState("");
+
+  const canManageClients = userRole === "admin";
 
   async function fetchClientsPageData() {
     setLoading(true);
@@ -156,15 +160,15 @@ export default function AdminClientsPage() {
         .order("created_at", { ascending: false }),
 
       supabase
-       .from("session_packages")
-.select(
-  "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
-)
+        .from("session_packages")
+        .select(
+          "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
+        )
         .order("created_at", { ascending: false }),
 
       supabase
         .from("client_purchases")
-.select("id, client_id, plan_name, session_count, price, status, created_at")
+        .select("id, client_id, plan_name, session_count, price, status, created_at")
         .order("created_at", { ascending: false }),
     ]);
 
@@ -204,45 +208,45 @@ export default function AdminClientsPage() {
   }
 
   const tableRows = useMemo<ClientTableRow[]>(() => {
-    return clients.map((client) => {
-      const clientPackages = packages.filter(
-        (packageRow) => packageRow.client_id === client.id
-      );
+  return clients.map((client) => {
+    const clientPackages = packages.filter(
+      (packageRow) => packageRow.client_id === client.id
+    );
 
-      const clientPurchases = purchases.filter(
-        (purchase) => purchase.client_id === client.id
-      );
+    const clientPurchases = purchases.filter(
+      (purchase) => purchase.client_id === client.id
+    );
 
-      const latestPackage = getLatestByDate(clientPackages);
+    const latestPackage = getLatestByDate(clientPackages);
 
-      const confirmedPurchases = clientPurchases.filter(
-        (purchase) => purchase.status === "confirmed"
-      );
+    const confirmedPurchases = clientPurchases.filter(
+      (purchase) => purchase.status === "confirmed"
+    );
 
-      const latestConfirmedPurchase =
-        getLatestByDate(confirmedPurchases) || getLatestByDate(clientPurchases);
+    const latestConfirmedPurchase =
+      getLatestByDate(confirmedPurchases) || getLatestByDate(clientPurchases);
 
-      return {
-        id: client.id,
-        purchaseDate:
-          latestConfirmedPurchase?.created_at || latestPackage?.created_at || null,
-        startDate: latestPackage?.starts_at || latestPackage?.created_at || null,
-        expireDate: latestPackage?.expires_at || null,
-        name: client.full_name || "-",
-        totalSessions: latestPackage?.total_sessions ?? 0,
-        remainingSessions: latestPackage?.remaining_sessions ?? 0,
-        packageType:
-          latestPackage?.package_name || latestConfirmedPurchase?.plan_name || "-",
-        packageValue:
-          typeof latestPackage?.package_value === "number"
-            ? latestPackage.package_value
-            : typeof latestConfirmedPurchase?.price === "number"
-            ? latestConfirmedPurchase.price
-            : null,
-        status: client.status || "-",
-      };
-    });
-  }, [clients, packages, purchases]);
+    return {
+      id: client.id,
+      purchaseDate:
+        latestConfirmedPurchase?.created_at || latestPackage?.created_at || null,
+      startDate: latestPackage?.starts_at || latestPackage?.created_at || null,
+      expireDate: latestPackage?.expires_at || null,
+      name: client.full_name || "-",
+      totalSessions: latestPackage?.total_sessions ?? 0,
+      remainingSessions: latestPackage?.remaining_sessions ?? 0,
+      packageType:
+        latestPackage?.package_name || latestConfirmedPurchase?.plan_name || "-",
+      packageValue:
+        typeof latestPackage?.package_value === "number"
+          ? latestPackage.package_value
+          : typeof latestConfirmedPurchase?.price === "number"
+          ? latestConfirmedPurchase.price
+          : null,
+      status: client.status || "-",
+    };
+  });
+}, [clients, packages, purchases]);
 
   const filteredAndSortedRows = useMemo(() => {
     const searchText = search.trim().toLowerCase();
@@ -304,42 +308,41 @@ export default function AdminClientsPage() {
   ).length;
 
   useEffect(() => {
-    async function protectAdminClientsPage() {
+    async function protectClientsPage() {
       const { user, role } = await getCurrentUserRole();
 
       if (!user) {
+        setCheckingMessage("Redirecting to login...");
         router.push("/login");
         return;
       }
 
-      if (role !== "admin") {
-        if (role === "trainer") {
-          router.push("/trainer/scan");
-          return;
-        }
+      if (role === "client") {
+        setCheckingMessage("Redirecting to client portal...");
+        router.push("/client");
+        return;
+      }
 
-        if (role === "client") {
-          router.push("/client");
-          return;
-        }
-
+      if (role !== "admin" && role !== "trainer" && role !== "nutrition_coach") {
+        setCheckingMessage("Redirecting to login...");
         await supabase.auth.signOut();
         router.push("/login");
         return;
       }
 
+      setUserRole(role || "");
       setCheckingRole(false);
       await fetchClientsPageData();
     }
 
-    protectAdminClientsPage();
+    protectClientsPage();
   }, [router]);
 
   if (checkingRole) {
     return (
       <main className="min-h-screen bg-black p-6 text-white">
         <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-          <p className="font-black text-yellow-400">Checking admin access...</p>
+          <p className="font-black text-yellow-400">{checkingMessage}</p>
         </div>
       </main>
     );
@@ -356,7 +359,7 @@ export default function AdminClientsPage() {
               </p>
 
               <h1 className="text-4xl font-black tracking-tight md:text-6xl">
-                Manage Clients
+                Client Directory
               </h1>
 
               <p className="mt-3 text-sm font-medium text-gray-400 md:text-base">
@@ -366,18 +369,29 @@ export default function AdminClientsPage() {
 
             <div className="flex flex-col gap-3 sm:flex-row">
               <Link
-                href="/admin"
+                href={userRole === "admin" ? "/admin" : "/trainer/scan"}
                 className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
               >
-                Back to Admin
+                {userRole === "admin" ? "Back to Admin" : "Back to Scanner"}
               </Link>
 
-              <Link
-                href="/admin/clients/new"
-                className="rounded-2xl bg-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300"
-              >
-                Add Client
-              </Link>
+              {canManageClients ? (
+                <>
+                  <Link
+                    href="/admin/import-clients"
+                    className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+                  >
+                    Import Excel
+                  </Link>
+
+                  <Link
+                    href="/admin/clients/new"
+                    className="rounded-2xl bg-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300"
+                  >
+                    Add Client
+                  </Link>
+                </>
+              ) : null}
             </div>
           </header>
 

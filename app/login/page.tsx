@@ -16,11 +16,10 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
 
-    const { data: loginData, error } =
-      await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
-        password,
-      });
+    const { data: loginData, error } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
 
     if (error) {
       setLoading(false);
@@ -34,7 +33,7 @@ export default function LoginPage() {
       .from("profiles")
       .select("role")
       .eq("id", userId)
-      .single();
+      .maybeSingle();
 
     if (profileError || !profile) {
       setLoading(false);
@@ -43,17 +42,19 @@ export default function LoginPage() {
       return;
     }
 
-    if (profile.role === "admin") {
+    const role = profile.role;
+
+    if (role === "admin") {
       router.push("/admin");
       return;
     }
 
-    if (profile.role === "trainer") {
+    if (role === "trainer" || role === "nutrition_coach") {
       router.push("/trainer/scan");
       return;
     }
 
-    if (profile.role === "client") {
+    if (role === "client") {
       router.push("/client");
       return;
     }
@@ -80,7 +81,6 @@ export default function LoginPage() {
 
             <div className="hidden md:flex gap-8 text-sm font-bold uppercase tracking-wide">
               <span className="text-yellow-400">Home</span>
-              
             </div>
           </div>
         </header>
@@ -163,7 +163,7 @@ export default function LoginPage() {
                 </h3>
 
                 <p className="text-gray-400 mt-2">
-                  Admin and trainer access
+                  Admin, trainer, and nutrition coach access
                 </p>
               </div>
 
@@ -175,7 +175,7 @@ export default function LoginPage() {
                 <input
                   className="w-full rounded-xl border border-white/20 bg-black/50 p-3 text-white placeholder:text-gray-500 outline-none focus:border-yellow-400"
                   type="email"
-                  placeholder="Email or username"
+                  placeholder="Email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -233,6 +233,29 @@ export default function LoginPage() {
               <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur">
                 <div className="text-center mb-6">
                   <div className="mx-auto mb-4 h-16 w-16 rounded-2xl border border-yellow-500/30 bg-black/50 flex items-center justify-center text-3xl">
+                    🥗
+                  </div>
+
+                  <h3 className="text-xl font-black text-white uppercase">
+                    Nutrition Coach
+                  </h3>
+
+                  <p className="text-gray-400 mt-2">
+                    Access client info and coaching tools.
+                  </p>
+                </div>
+
+                <Link
+                  href="/trainer/scan"
+                  className="block w-full rounded-xl border border-yellow-400 text-yellow-400 p-3 text-center font-black uppercase hover:bg-yellow-400 hover:text-black transition"
+                >
+                  Coach Hub
+                </Link>
+              </div>
+
+              <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur">
+                <div className="text-center mb-6">
+                  <div className="mx-auto mb-4 h-16 w-16 rounded-2xl border border-yellow-500/30 bg-black/50 flex items-center justify-center text-3xl">
                     📋
                   </div>
 
@@ -252,22 +275,24 @@ export default function LoginPage() {
                   Dashboard
                 </Link>
               </div>
+            </div>
 
-              <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur">
-                <div className="text-center mb-6">
-                  <div className="mx-auto mb-4 h-16 w-16 rounded-2xl border border-yellow-500/30 bg-black/50 flex items-center justify-center text-3xl">
-                    👤
-                  </div>
-
-                  <h3 className="text-xl font-black text-white uppercase">
-                    Client
-                  </h3>
-
-                  <p className="text-gray-400 mt-2">
-                    View sessions and account status.
-                  </p>
+            <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur">
+              <div className="text-center mb-6">
+                <div className="mx-auto mb-4 h-16 w-16 rounded-2xl border border-yellow-500/30 bg-black/50 flex items-center justify-center text-3xl">
+                  👤
                 </div>
 
+                <h3 className="text-xl font-black text-white uppercase">
+                  Client
+                </h3>
+
+                <p className="text-gray-400 mt-2">
+                  View sessions and account status.
+                </p>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
                 <Link
                   href="/client/login"
                   className="block w-full rounded-xl bg-yellow-400 text-black p-3 text-center font-black uppercase hover:bg-yellow-300 transition"
@@ -277,17 +302,23 @@ export default function LoginPage() {
 
                 <Link
                   href="/client/activate"
-                  className="mt-3 block text-center text-sm font-bold text-yellow-400 hover:text-yellow-300"
+                  className="block w-full rounded-xl border border-yellow-400 text-yellow-400 p-3 text-center font-black uppercase hover:bg-yellow-400 hover:text-black transition"
                 >
-                  First-time setup
+                  First-Time Setup
                 </Link>
               </div>
             </div>
           </div>
         </section>
 
-        <footer className="border-t border-yellow-500/20 py-6 text-center text-gray-500 text-sm">
-          © 2026 FXA FITNESS. All rights reserved.
+        <footer className="border-t border-yellow-500/20 py-6 text-center">
+          <p className="text-sm text-gray-500">
+            © 2026 FXA FITNESS. All rights reserved.
+          </p>
+
+          <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-gray-600">
+            Designed by HarryDang
+          </p>
         </footer>
       </div>
     </main>
