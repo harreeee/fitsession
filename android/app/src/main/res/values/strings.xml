@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FXA FITNESS</string>
+    <string name="title_activity_main">FXA FITNESS</string>
+    <string name="package_name">com.fxafitness.app</string>
+    <string name="custom_url_scheme">com.fxafitness.app</string>
+</resources>
