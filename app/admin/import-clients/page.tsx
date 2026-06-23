@@ -7,33 +7,69 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
 
-type ExcelClientRow = {
-  "Tên Khách hàng"?: string;
-  "Ngày mua"?: string | number;
-  "Ngày hết hạn"?: string | number;
-  "Số buổi"?: string | number;
-  "Loại gói"?: string;
-  "Giá trị hợp đồng"?: string | number;
-  "Trạng thái"?: string;
+type ExcelCellValue = string | number | boolean | Date | null | undefined;
 
-  full_name?: string;
-  purchase_date?: string | number;
-  expires_at?: string | number;
-  total_sessions?: string | number;
-  package_name?: string;
-  package_value?: string | number;
-  status?: string;
-};
+type ExcelClientRow = Record<string, ExcelCellValue>;
 
 type PreviewRow = {
+  clientCode: string;
   fullName: string;
   purchaseDate: string | null;
   expireDate: string | null;
-  totalSessions: number;
+  remainingSessions: number;
   packageName: string;
   packageValue: number | null;
-  status: string;
+  status: "active" | "inactive";
+  email: string;
+  phone: string;
+  gender: string;
 };
+
+type ExistingClientRow = {
+  id: string;
+  full_name: string;
+  client_code: string | null;
+  email: string | null;
+  phone: string | null;
+  status: string | null;
+};
+
+type ExistingPackageRow = {
+  id: string;
+};
+
+type ExistingPurchaseRow = {
+  id: string;
+};
+
+type ImportErrorLike = {
+  message?: unknown;
+  details?: unknown;
+  hint?: unknown;
+  code?: unknown;
+};
+
+function normalizeKey(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[^a-z0-9 ]/g, "")
+    .trim();
+}
+
+function getCell(row: ExcelClientRow, aliases: string[]) {
+  const normalizedAliases = aliases.map(normalizeKey);
+
+  for (const [key, value] of Object.entries(row)) {
+    if (normalizedAliases.includes(normalizeKey(key))) {
+      return value;
+    }
+  }
+
+  return "";
+}
 
 function cleanText(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -57,7 +93,16 @@ function cleanDate(value: unknown) {
   if (!value) return null;
 
   if (value instanceof Date) {
-    return value.toISOString();
+    const date = new Date(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate(),
+      12,
+      0,
+      0
+    );
+
+    return date.toISOString();
   }
 
   if (typeof value === "number") {
@@ -81,15 +126,33 @@ function cleanDate(value: unknown) {
 
   if (!textValue) return null;
 
-  const parts = textValue.split("/");
+  const slashParts = textValue.split("/");
 
-  if (parts.length === 3) {
-    const day = Number(parts[0]);
-    const month = Number(parts[1]);
-    const year = Number(parts[2]);
+  if (slashParts.length === 3) {
+    const day = Number(slashParts[0]);
+    const month = Number(slashParts[1]);
+    const year = Number(slashParts[2]);
 
     if (!Number.isNaN(day) && !Number.isNaN(month) && !Number.isNaN(year)) {
       const date = new Date(year, month - 1, day, 12, 0, 0);
+      return date.toISOString();
+    }
+  }
+
+  const dashParts = textValue.split("-");
+
+  if (dashParts.length === 3) {
+    const first = Number(dashParts[0]);
+    const second = Number(dashParts[1]);
+    const third = Number(dashParts[2]);
+
+    if (!Number.isNaN(first) && !Number.isNaN(second) && !Number.isNaN(third)) {
+      if (String(dashParts[0]).length === 4) {
+        const date = new Date(first, second - 1, third, 12, 0, 0);
+        return date.toISOString();
+      }
+
+      const date = new Date(third, second - 1, first, 12, 0, 0);
       return date.toISOString();
     }
   }
@@ -115,78 +178,160 @@ function formatDate(value: string | null) {
   });
 }
 
-function normalizeStatus(value: string) {
+function normalizeStatus(value: string): "active" | "inactive" {
   const status = value.trim().toLowerCase();
 
   if (!status) return "active";
 
   if (status.includes("đang") || status.includes("dang")) return "active";
+  if (status.includes("active")) return "active";
+
   if (status.includes("hết") || status.includes("het")) return "inactive";
   if (status.includes("expired")) return "inactive";
   if (status.includes("inactive")) return "inactive";
-  if (status.includes("completed")) return "completed";
+  if (status.includes("completed")) return "inactive";
 
   return "active";
+}
+
+function normalizeGender(value: string) {
+  const gender = value.trim();
+
+  if (!gender) return "";
+
+  const lowerGender = gender.toLowerCase();
+
+  if (lowerGender === "nam" || lowerGender === "male") return "Nam";
+
+  if (
+    lowerGender === "nữ" ||
+    lowerGender === "nu" ||
+    lowerGender === "female"
+  ) {
+    return "Nữ";
+  }
+
+  return gender;
 }
 
 function normalizePackageName(value: string) {
   const packageName = value.trim();
 
-  if (!packageName) return null;
+  if (!packageName) return "";
 
   return packageName;
 }
 
-function getRowValue(row: ExcelClientRow, vietnameseKey: keyof ExcelClientRow, englishKey: keyof ExcelClientRow) {
-  return row[vietnameseKey] || row[englishKey] || "";
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const errorLike = error as ImportErrorLike;
+
+    const parts = [
+      errorLike.message,
+      errorLike.details,
+      errorLike.hint,
+      errorLike.code,
+    ]
+      .filter((part) => part !== null && part !== undefined && part !== "")
+      .map(String);
+
+    if (parts.length > 0) {
+      return parts.join(" | ");
+    }
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Unknown import error.";
+  }
 }
 
 function mapExcelRow(row: ExcelClientRow): PreviewRow {
+  const clientCode = cleanText(
+    getCell(row, [
+      "Mã Khách hàng",
+      "Mã khách hàng",
+      "Ma Khach hang",
+      "client_code",
+    ])
+  );
+
   const fullName = cleanText(
-    getRowValue(row, "Tên Khách hàng", "full_name")
+    getCell(row, [
+      "Tên Khách hàng",
+      "Tên khách hàng",
+      "Ten Khach hang",
+      "full_name",
+    ])
   );
 
   const purchaseDate = cleanDate(
-    getRowValue(row, "Ngày mua", "purchase_date")
+    getCell(row, ["Ngày mua", "Ngay mua", "purchase_date"])
   );
 
   const expireDate = cleanDate(
-    getRowValue(row, "Ngày hết hạn", "expires_at")
+    getCell(row, [
+      "Ngày hết hạn",
+      "Ngay het han",
+      "expires_at",
+      "expire_date",
+    ])
   );
 
-  const totalSessions = cleanNumber(
-    getRowValue(row, "Số buổi", "total_sessions"),
+  const remainingSessions = cleanNumber(
+    getCell(row, ["Số buổi", "So buoi", "remaining_sessions"]),
     0
   );
 
-  const packageName =
-    normalizePackageName(
-      cleanText(getRowValue(row, "Loại gói", "package_name"))
-    ) || "";
-
-  const packageValueRaw = getRowValue(
-    row,
-    "Giá trị hợp đồng",
-    "package_value"
+  const packageName = normalizePackageName(
+    cleanText(getCell(row, ["Loại gói", "Loai goi", "package_name"]))
   );
 
+  const packageValueRaw = getCell(row, [
+    "Giá trị hợp đồng",
+    "Gia tri hop dong",
+    "Giá trị hợ đồng",
+    "package_value",
+  ]);
+
   const packageValue =
-    packageValueRaw === "" || packageValueRaw === null || packageValueRaw === undefined
+    packageValueRaw === "" ||
+    packageValueRaw === null ||
+    packageValueRaw === undefined
       ? null
       : cleanNumber(packageValueRaw, 0);
 
   const status = normalizeStatus(
-    cleanText(getRowValue(row, "Trạng thái", "status"))
+    cleanText(getCell(row, ["Trạng thái", "Trang thai", "status"]))
+  );
+
+  const email = cleanText(getCell(row, ["Email", "email"]));
+
+  const phone = cleanText(
+    getCell(row, ["Số điện thoại", "So dien thoai", "Phone", "phone"])
+  );
+
+  const gender = normalizeGender(
+    cleanText(getCell(row, ["Giới tính", "Gioi tinh", "Gender", "gender"]))
   );
 
   return {
+    clientCode,
     fullName,
     purchaseDate,
     expireDate,
-    totalSessions,
+    remainingSessions,
     packageName,
     packageValue,
     status,
+    email,
+    phone,
+    gender,
   };
 }
 
@@ -197,6 +342,7 @@ export default function ImportClientsPage() {
   const [rows, setRows] = useState<PreviewRow[]>([]);
   const [importing, setImporting] = useState(false);
   const [resultMessage, setResultMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     async function protectPage() {
@@ -208,7 +354,7 @@ export default function ImportClientsPage() {
       }
 
       if (role !== "admin") {
-        if (role === "trainer") {
+        if (role === "trainer" || role === "nutrition_coach") {
           router.push("/trainer/scan");
           return;
         }
@@ -234,11 +380,17 @@ export default function ImportClientsPage() {
 
     setRows([]);
     setResultMessage("");
+    setErrorMessage("");
 
     if (!file) return;
 
     const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: "array" });
+
+    const workbook = XLSX.read(buffer, {
+      type: "array",
+      cellDates: true,
+    });
+
     const firstSheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[firstSheetName];
 
@@ -249,9 +401,170 @@ export default function ImportClientsPage() {
 
     const mappedRows = parsedRows
       .map(mapExcelRow)
-      .filter((row) => row.fullName || row.totalSessions > 0 || row.packageName);
+      .filter((row) => {
+        return (
+          row.clientCode ||
+          row.fullName ||
+          row.email ||
+          row.phone ||
+          row.remainingSessions > 0 ||
+          row.packageName
+        );
+      });
 
     setRows(mappedRows);
+  }
+
+  async function findExistingClient(row: PreviewRow) {
+    if (row.clientCode) {
+      const { data, error } = await supabase
+        .from("clients")
+        .select("id, full_name, client_code, email, phone, status")
+        .eq("client_code", row.clientCode)
+        .limit(1)
+        .maybeSingle();
+
+      if (!error && data) {
+        return data as ExistingClientRow;
+      }
+
+      if (error) {
+        console.warn("Client code search failed:", error.message);
+      }
+    }
+
+    if (row.email) {
+      const { data, error } = await supabase
+        .from("clients")
+        .select("id, full_name, client_code, email, phone, status")
+        .ilike("email", row.email)
+        .limit(1)
+        .maybeSingle();
+
+      if (!error && data) {
+        return data as ExistingClientRow;
+      }
+
+      if (error) {
+        console.warn("Email search failed:", error.message);
+      }
+    }
+
+    if (row.fullName) {
+      const { data, error } = await supabase
+        .from("clients")
+        .select("id, full_name, client_code, email, phone, status")
+        .ilike("full_name", row.fullName)
+        .limit(1)
+        .maybeSingle();
+
+      if (!error && data) {
+        return data as ExistingClientRow;
+      }
+
+      if (error) {
+        console.warn("Name search failed:", error.message);
+      }
+    }
+
+    return null;
+  }
+
+  async function upsertPackage(clientId: string, row: PreviewRow) {
+    const { data: latestPackage, error: packageSearchError } = await supabase
+      .from("session_packages")
+      .select("id")
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (packageSearchError) {
+      throw packageSearchError;
+    }
+
+    const packageStatus = row.status === "active" ? "active" : "completed";
+
+    const packagePayload = {
+      client_id: clientId,
+      package_name: row.packageName || null,
+      package_value: row.packageValue,
+      total_sessions: null,
+      used_sessions: 0,
+      remaining_sessions: row.remainingSessions,
+      starts_at: row.purchaseDate,
+      expires_at: row.expireDate,
+      status: packageStatus,
+    };
+
+    if (latestPackage) {
+      const packageRow = latestPackage as ExistingPackageRow;
+
+      const { error: updatePackageError } = await supabase
+        .from("session_packages")
+        .update(packagePayload)
+        .eq("id", packageRow.id);
+
+      if (updatePackageError) {
+        throw updatePackageError;
+      }
+
+      return;
+    }
+
+    const { error: createPackageError } = await supabase
+      .from("session_packages")
+      .insert(packagePayload);
+
+    if (createPackageError) {
+      throw createPackageError;
+    }
+  }
+
+  async function upsertPurchase(clientId: string, row: PreviewRow) {
+    const { data: latestPurchase, error: purchaseSearchError } = await supabase
+      .from("client_purchases")
+      .select("id")
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (purchaseSearchError) {
+      throw purchaseSearchError;
+    }
+
+   const purchasePayload = {
+  client_id: clientId,
+  plan_name: row.packageName || null,
+  session_count: row.remainingSessions,
+  price: row.packageValue,
+  status: "paid",
+  created_at: row.purchaseDate,
+};
+
+    if (latestPurchase) {
+      const purchaseRow = latestPurchase as ExistingPurchaseRow;
+
+      const { error: updatePurchaseError } = await supabase
+        .from("client_purchases")
+        .update(purchasePayload)
+        .eq("id", purchaseRow.id);
+
+      if (updatePurchaseError) {
+        throw updatePurchaseError;
+      }
+
+      return;
+    }
+
+    const { error: createPurchaseError } = await supabase
+      .from("client_purchases")
+      .insert(purchasePayload);
+
+    if (createPurchaseError) {
+      throw createPurchaseError;
+    }
   }
 
   async function importRows() {
@@ -261,148 +574,102 @@ export default function ImportClientsPage() {
     }
 
     const confirmed = window.confirm(
-      `Import ${rows.length} rows? Existing clients will be matched by client name.`
+      `Import ${rows.length} rows? Existing clients will be matched by Mã khách hàng, then email, then client name.`
     );
 
     if (!confirmed) return;
 
     setImporting(true);
     setResultMessage("");
+    setErrorMessage("");
 
     let createdClients = 0;
     let updatedClients = 0;
     let skippedRows = 0;
+    const failedMessages: string[] = [];
 
     for (const row of rows) {
       if (!row.fullName) {
         skippedRows += 1;
+        failedMessages.push("Skipped row with missing client name.");
         continue;
       }
 
-      const { data: existingClients, error: searchError } = await supabase
-        .from("clients")
-        .select("id, full_name, status")
-        .ilike("full_name", row.fullName);
+      try {
+        const existingClient = await findExistingClient(row);
 
-      if (searchError) {
-        console.error(searchError);
+        let clientId = "";
+
+        const clientPayload = {
+          client_code: row.clientCode || null,
+          full_name: row.fullName,
+          email: row.email || null,
+          phone: row.phone || null,
+          gender: row.gender || null,
+          status: row.status === "active" ? "active" : "inactive",
+        };
+
+        if (existingClient) {
+          const { error: updateClientError } = await supabase
+            .from("clients")
+            .update(clientPayload)
+            .eq("id", existingClient.id);
+
+          if (updateClientError) {
+            throw updateClientError;
+          }
+
+          clientId = existingClient.id;
+          updatedClients += 1;
+        } else {
+          const qrToken = `FXA-${crypto.randomUUID()}`;
+
+          const { data: newClient, error: createClientError } = await supabase
+            .from("clients")
+            .insert({
+              ...clientPayload,
+              qr_token: qrToken,
+            })
+            .select("id")
+            .single();
+
+          if (createClientError || !newClient) {
+            throw createClientError || new Error("Client was not created.");
+          }
+
+          clientId = newClient.id;
+          createdClients += 1;
+        }
+
+        if (!clientId) {
+          skippedRows += 1;
+          failedMessages.push(`Skipped ${row.fullName}: missing client ID.`);
+          continue;
+        }
+
+        await upsertPackage(clientId, row);
+        await upsertPurchase(clientId, row);
+      } catch (error) {
+        const message = getErrorMessage(error);
+
+        console.error("Import row failed:", {
+          row,
+          error,
+          message,
+        });
+
         skippedRows += 1;
-        continue;
-      }
-
-      const existingClient = existingClients?.[0] || null;
-
-      let clientId = "";
-
-      if (existingClient) {
-        const { error: updateClientError } = await supabase
-          .from("clients")
-          .update({
-            full_name: row.fullName,
-            status: row.status === "active" ? "active" : "inactive",
-          })
-          .eq("id", existingClient.id);
-
-        if (updateClientError) {
-          console.error(updateClientError);
-          skippedRows += 1;
-          continue;
-        }
-
-        clientId = existingClient.id;
-        updatedClients += 1;
-      } else {
-        const qrToken = `FXA-${crypto.randomUUID()}`;
-
-        const { data: newClient, error: createClientError } = await supabase
-          .from("clients")
-          .insert({
-            full_name: row.fullName,
-            email: null,
-            phone: null,
-            qr_token: qrToken,
-            status: row.status === "active" ? "active" : "inactive",
-          })
-          .select("id")
-          .single();
-
-        if (createClientError || !newClient) {
-          console.error(createClientError);
-          skippedRows += 1;
-          continue;
-        }
-
-        clientId = newClient.id;
-        createdClients += 1;
-      }
-
-      if (!clientId || row.totalSessions <= 0) {
-        continue;
-      }
-
-      const { data: activePackage, error: packageSearchError } = await supabase
-        .from("session_packages")
-        .select("id")
-        .eq("client_id", clientId)
-        .in("status", ["active", "pending"])
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (packageSearchError) {
-        console.error(packageSearchError);
-        skippedRows += 1;
-        continue;
-      }
-
-      const packageStatus = row.status === "active" ? "active" : "completed";
-
-      if (activePackage) {
-        const { error: updatePackageError } = await supabase
-          .from("session_packages")
-          .update({
-            package_name: row.packageName || null,
-            package_value: row.packageValue,
-            total_sessions: row.totalSessions,
-            used_sessions: 0,
-            remaining_sessions: row.totalSessions,
-            starts_at: row.purchaseDate,
-            expires_at: row.expireDate,
-            status: packageStatus,
-          })
-          .eq("id", activePackage.id);
-
-        if (updatePackageError) {
-          console.error(updatePackageError);
-          skippedRows += 1;
-          continue;
-        }
-      } else {
-        const { error: createPackageError } = await supabase
-          .from("session_packages")
-          .insert({
-            client_id: clientId,
-            package_name: row.packageName || null,
-            package_value: row.packageValue,
-            total_sessions: row.totalSessions,
-            used_sessions: 0,
-            remaining_sessions: row.totalSessions,
-            starts_at: row.purchaseDate,
-            expires_at: row.expireDate,
-            status: packageStatus,
-          });
-
-        if (createPackageError) {
-          console.error(createPackageError);
-          skippedRows += 1;
-          continue;
-        }
+        failedMessages.push(`${row.fullName}: ${message}`);
       }
     }
 
     setResultMessage(
       `Import finished. Created: ${createdClients}. Updated: ${updatedClients}. Skipped: ${skippedRows}.`
     );
+
+    if (failedMessages.length > 0) {
+      setErrorMessage(failedMessages.slice(0, 8).join("\n"));
+    }
 
     setImporting(false);
   }
@@ -430,7 +697,9 @@ export default function ImportClientsPage() {
               </h1>
 
               <p className="mt-3 text-gray-400">
-                Import only the fields shown on your Manage Clients page.
+                Import Mã khách hàng, Ngày mua, Ngày hết hạn, Tên khách hàng,
+                Số buổi còn lại, Loại gói, Giá trị hợp đồng, Email, Số điện
+                thoại, and Giới tính.
               </p>
             </div>
 
@@ -449,8 +718,14 @@ export default function ImportClientsPage() {
               </h2>
 
               <p className="mt-2 text-sm text-gray-400">
-                This importer reads: Tên Khách hàng, Ngày mua, Ngày hết hạn, Số
-                buổi, Loại gói, Giá trị hợp đồng, and Trạng thái.
+                This importer reads: Mã khách hàng, Ngày mua, Ngày hết hạn, Tên
+                khách hàng, Số buổi, Loại gói, Giá trị hợp đồng, Email, Số điện
+                thoại, Giới tính, and Trạng thái.
+              </p>
+
+              <p className="mt-2 text-sm font-bold text-yellow-300">
+                Important: Số buổi is saved as remaining sessions. Total
+                sessions is saved blank.
               </p>
             </div>
 
@@ -475,6 +750,12 @@ export default function ImportClientsPage() {
                 {resultMessage}
               </p>
             ) : null}
+
+            {errorMessage ? (
+              <pre className="mt-5 whitespace-pre-wrap rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm font-bold text-red-200">
+                {errorMessage}
+              </pre>
+            ) : null}
           </section>
 
           {rows.length > 0 ? (
@@ -484,15 +765,20 @@ export default function ImportClientsPage() {
               </h2>
 
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1000px] border-collapse">
+                <table className="w-full min-w-[1300px] border-collapse">
                   <thead>
                     <tr className="border-b border-yellow-500/30 text-left text-sm uppercase tracking-wide text-yellow-400">
+                      <th className="p-3">Mã khách hàng</th>
                       <th className="p-3">Date of Purchase</th>
                       <th className="p-3">Date Expire</th>
                       <th className="p-3">Name</th>
-                      <th className="p-3">Total Session</th>
+                      <th className="p-3">Remaining Sessions</th>
+                      <th className="p-3">Total Sessions</th>
                       <th className="p-3">Package Type</th>
                       <th className="p-3">Package Value</th>
+                      <th className="p-3">Email</th>
+                      <th className="p-3">Phone</th>
+                      <th className="p-3">Gender</th>
                       <th className="p-3">Status</th>
                     </tr>
                   </thead>
@@ -500,9 +786,13 @@ export default function ImportClientsPage() {
                   <tbody>
                     {rows.slice(0, 20).map((row, index) => (
                       <tr
-                        key={`${row.fullName}-${index}`}
+                        key={`${row.clientCode}-${row.fullName}-${index}`}
                         className="border-b border-white/10"
                       >
+                        <td className="p-3 text-gray-300">
+                          {row.clientCode || "-"}
+                        </td>
+
                         <td className="p-3 text-gray-300">
                           {formatDate(row.purchaseDate)}
                         </td>
@@ -516,8 +806,10 @@ export default function ImportClientsPage() {
                         </td>
 
                         <td className="p-3 font-black text-yellow-400">
-                          {row.totalSessions}
+                          {row.remainingSessions}
                         </td>
+
+                        <td className="p-3 text-gray-300">-</td>
 
                         <td className="p-3 text-gray-300">
                           {row.packageName || "-"}
@@ -527,6 +819,18 @@ export default function ImportClientsPage() {
                           {row.packageValue === null
                             ? "-"
                             : `$${Number(row.packageValue).toFixed(2)}`}
+                        </td>
+
+                        <td className="p-3 text-gray-300">
+                          {row.email || "-"}
+                        </td>
+
+                        <td className="p-3 text-gray-300">
+                          {row.phone || "-"}
+                        </td>
+
+                        <td className="p-3 text-gray-300">
+                          {row.gender || "-"}
                         </td>
 
                         <td className="p-3">
