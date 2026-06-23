@@ -15,7 +15,7 @@ type ClientData = {
   qr_token: string;
   status: string;
   session_packages: {
-    total_sessions: number;
+    total_sessions: number | null;
     used_sessions: number;
     remaining_sessions: number;
     status: string;
@@ -142,7 +142,7 @@ export default function ClientPortalPage() {
       return;
     }
 
-    setClient(clientData);
+    setClient(clientData as ClientData);
 
     const qrImage = await QRCode.toDataURL(clientData.qr_token);
     setQrCode(qrImage);
@@ -167,7 +167,7 @@ export default function ClientPortalPage() {
           return;
         }
 
-        if (role === "trainer") {
+        if (role === "trainer" || role === "nutrition_coach") {
           router.push("/trainer/scan");
           return;
         }
@@ -186,7 +186,7 @@ export default function ClientPortalPage() {
 
   if (checkingRole) {
     return (
-      <main className="min-h-screen bg-black text-white p-6">
+      <main className="min-h-screen bg-black p-6 text-white">
         <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
           <p className="font-bold text-yellow-400">
             Checking client access...
@@ -198,7 +198,7 @@ export default function ClientPortalPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-black text-white p-6">
+      <main className="min-h-screen bg-black p-6 text-white">
         <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
           <p className="font-bold text-yellow-400">
             Loading your client portal...
@@ -210,7 +210,7 @@ export default function ClientPortalPage() {
 
   if (!client) {
     return (
-      <main className="min-h-screen bg-black text-white p-6">
+      <main className="min-h-screen bg-black p-6 text-white">
         <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
           <p className="font-bold text-yellow-400">
             Client account not found.
@@ -220,7 +220,9 @@ export default function ClientPortalPage() {
     );
   }
 
-  const activePackage = client.session_packages?.[0];
+  const activePackage =
+    client.session_packages?.find((packageRow) => packageRow.status === "active") ||
+    client.session_packages?.[0];
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -236,26 +238,36 @@ export default function ClientPortalPage() {
   );
 
   return (
-    <main className="min-h-screen bg-black text-white p-6">
-      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-        <div className="max-w-5xl mx-auto">
+    <main className="min-h-screen bg-black p-4 text-white md:p-6">
+      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-6">
+        <div className="mx-auto max-w-5xl">
           <header className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h1 className="text-5xl font-black text-yellow-400">
                 FXA FITNESS
               </h1>
 
-              <p className="text-gray-400 tracking-[0.25em] uppercase text-sm">
+              <p className="text-sm uppercase tracking-[0.25em] text-gray-400">
                 Client Portal
               </p>
             </div>
 
-            <button
-              onClick={handleLogout}
-              className="rounded-xl border border-yellow-400 px-5 py-3 font-black uppercase text-yellow-400 hover:bg-yellow-400 hover:text-black transition"
-            >
-              Logout
-            </button>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Link
+                href="/client/book"
+                className="rounded-xl bg-yellow-400 px-5 py-3 text-center font-black uppercase text-black transition hover:bg-yellow-300"
+              >
+                Book Session
+              </Link>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="rounded-xl border border-yellow-400 px-5 py-3 font-black uppercase text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+              >
+                Logout
+              </button>
+            </div>
           </header>
 
           <section className="mb-8 rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur">
@@ -277,10 +289,24 @@ export default function ClientPortalPage() {
             </p>
           </section>
 
-          <section className="mb-8 grid gap-4 md:grid-cols-3">
+          <section className="mb-8 grid gap-4 md:grid-cols-4">
+            <Link
+              href="/client/book"
+              className="rounded-3xl border border-yellow-500/30 bg-yellow-400 p-6 text-black shadow-2xl transition hover:bg-yellow-300"
+            >
+              <p className="mb-3 text-4xl">📅</p>
+
+              <h2 className="text-2xl font-black uppercase">Book Session</h2>
+
+              <p className="mt-2 text-sm font-bold leading-6 text-black/70">
+                Choose a trainer, view available times, and book your next
+                session.
+              </p>
+            </Link>
+
             <Link
               href="/client/membership"
-              className="rounded-3xl border border-yellow-500/30 bg-yellow-400 p-6 text-black shadow-2xl transition hover:bg-yellow-300"
+              className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-6 shadow-2xl backdrop-blur transition hover:bg-yellow-400 hover:text-black"
             >
               <p className="mb-3 text-4xl">💳</p>
 
@@ -288,7 +314,7 @@ export default function ClientPortalPage() {
                 Membership / Buy Packages
               </h2>
 
-              <p className="mt-2 text-sm font-bold leading-6 text-black/70">
+              <p className="mt-2 text-sm font-bold leading-6 text-gray-400">
                 View available packages, request a new purchase, and track your
                 purchase history.
               </p>
@@ -346,7 +372,7 @@ export default function ClientPortalPage() {
                   className="mx-auto h-72 w-72 rounded-xl"
                 />
               ) : (
-                <p className="text-black font-bold">Loading QR...</p>
+                <p className="font-bold text-black">Loading QR...</p>
               )}
             </div>
 
@@ -362,7 +388,7 @@ export default function ClientPortalPage() {
               </p>
 
               <p className="mt-3 text-5xl font-black text-yellow-400">
-                {activePackage?.total_sessions ?? 0}
+                {activePackage?.total_sessions ?? "-"}
               </p>
             </div>
 

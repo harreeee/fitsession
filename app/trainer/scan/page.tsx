@@ -44,7 +44,7 @@ type ClientRow = {
 type SessionPackageRow = {
   id: string;
   client_id: string;
-  total_sessions: number;
+  total_sessions: number | null;
   used_sessions: number;
   remaining_sessions: number;
   status: string;
@@ -546,15 +546,22 @@ export default function TrainerScanPage() {
               </h1>
 
               <p className="mt-3 max-w-xl text-sm font-medium leading-6 text-gray-400 md:text-base">
-                Scan QR codes, view your history, manage your profile, and open
-                client management.
+                Scan QR codes, view your history, manage your profile, connect
+                Google Calendar, and open client management.
               </p>
             </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <Link
-                href="/admin/clients"
+                href="/trainer/calendar"
                 className="rounded-2xl bg-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300"
+              >
+                Google Calendar
+              </Link>
+
+              <Link
+                href="/trainer/clients"
+                className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
               >
                 Client Management
               </Link>
@@ -576,6 +583,7 @@ export default function TrainerScanPage() {
               ) : null}
 
               <button
+                type="button"
                 onClick={handleLogout}
                 className="rounded-2xl border border-red-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-red-300 transition hover:bg-red-400 hover:text-black"
               >
