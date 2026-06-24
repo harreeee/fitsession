@@ -743,7 +743,7 @@ export default function AdminDashboardPage() {
                 </Link>
 
                 <Link
-                  href="/admin/import"
+                  href="/admin/import-clientsrt"
                   className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl transition hover:bg-yellow-400 hover:text-black"
                 >
                   <h2 className="text-xl font-semibold uppercase">
