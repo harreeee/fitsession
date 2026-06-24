@@ -1,105 +1,270 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBusyTimes } from "../../../../lib/googleCalendar";
-import { getUserFromRequest } from "../../../../lib/supabaseServer";
+import {
+  createServiceSupabaseClient,
+  getUserFromRequest,
+  getUserRole,
+} from "../../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
 
-type BusyTime = {
-  start: string;
-  end: string;
+type CalendarConnection = {
+  id: string;
+  trainer_id: string;
+  google_email: string | null;
+  access_token: string;
+  refresh_token: string | null;
+  token_expiry: string | null;
+  calendar_id: string;
 };
 
-function overlaps(startA: number, endA: number, startB: number, endB: number) {
-  return startA < endB && startB < endA;
+type GoogleFreeBusyResponse = {
+  calendars?: Record<
+    string,
+    {
+      busy?: {
+        start: string;
+        end: string;
+      }[];
+    }
+  >;
+  error?: {
+    message?: string;
+  };
+};
+
+type AvailabilitySlot = {
+  starts_at: string;
+  ends_at: string;
+};
+
+function jsonError(message: string, status = 400) {
+  return NextResponse.json({ error: message }, { status });
 }
 
-function toTwoDigit(value: number) {
-  return String(value).padStart(2, "0");
+function requireEnv(name: string) {
+  const value = process.env[name];
+
+  if (!value) {
+    throw new Error(`Missing environment variable: ${name}`);
+  }
+
+  return value;
 }
 
-export async function POST(request: NextRequest) {
+function addMinutes(date: Date, minutes: number) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
+}
+
+function overlaps(
+  slotStart: Date,
+  slotEnd: Date,
+  busyStart: Date,
+  busyEnd: Date
+) {
+  return slotStart < busyEnd && slotEnd > busyStart;
+}
+
+function isTokenExpired(tokenExpiry: string | null) {
+  if (!tokenExpiry) return false;
+
+  const expiryTime = new Date(tokenExpiry).getTime();
+
+  if (Number.isNaN(expiryTime)) return false;
+
+  return Date.now() > expiryTime - 5 * 60 * 1000;
+}
+
+async function refreshGoogleAccessToken(connection: CalendarConnection) {
+  if (!connection.refresh_token) {
+    return connection.access_token;
+  }
+
+  if (!isTokenExpired(connection.token_expiry)) {
+    return connection.access_token;
+  }
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      client_id: requireEnv("GOOGLE_CLIENT_ID"),
+      client_secret: requireEnv("GOOGLE_CLIENT_SECRET"),
+      refresh_token: connection.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+
+  const data = (await response.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    error?: string;
+    error_description?: string;
+  };
+
+  if (!response.ok || !data.access_token) {
+    throw new Error(
+      data.error_description || data.error || "Could not refresh Google token."
+    );
+  }
+
+  const tokenExpiry = data.expires_in
+    ? new Date(Date.now() + data.expires_in * 1000).toISOString()
+    : null;
+
+  const supabase = createServiceSupabaseClient();
+
+  await supabase
+    .from("trainer_google_calendar_connections")
+    .update({
+      access_token: data.access_token,
+      token_expiry: tokenExpiry,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", connection.id);
+
+  return data.access_token;
+}
+
+function generateAvailabilitySlots(busyTimes: { start: string; end: string }[]) {
+  const slots: AvailabilitySlot[] = [];
+  const now = new Date();
+
+  const busyRanges = busyTimes.map((busy) => ({
+    start: new Date(busy.start),
+    end: new Date(busy.end),
+  }));
+
+  for (let dayOffset = 1; dayOffset <= 7; dayOffset += 1) {
+    const day = new Date();
+    day.setDate(now.getDate() + dayOffset);
+    day.setHours(8, 0, 0, 0);
+
+    const endOfDay = new Date(day);
+    endOfDay.setHours(20, 0, 0, 0);
+
+    let slotStart = new Date(day);
+
+    while (slotStart < endOfDay) {
+      const slotEnd = addMinutes(slotStart, 60);
+
+      const hasConflict = busyRanges.some((busy) =>
+        overlaps(slotStart, slotEnd, busy.start, busy.end)
+      );
+
+      if (!hasConflict) {
+        slots.push({
+          starts_at: slotStart.toISOString(),
+          ends_at: slotEnd.toISOString(),
+        });
+      }
+
+      slotStart = addMinutes(slotStart, 60);
+    }
+  }
+
+  return slots.slice(0, 30);
+}
+
+export async function GET(request: NextRequest) {
   try {
     const { user, error } = await getUserFromRequest(request);
 
-    if (!user) {
-      return NextResponse.json({ error }, { status: 401 });
+    if (error || !user) {
+      return jsonError(error || "Unauthorized.", 401);
     }
 
-    const body = (await request.json()) as {
-      trainerId?: string;
-      date?: string;
-      durationMinutes?: number;
-    };
+    const role = await getUserRole(user.id);
 
-    const trainerId = body.trainerId || "";
-    const date = body.date || "";
-    const durationMinutes = body.durationMinutes || 60;
+    if (
+      role !== "admin" &&
+      role !== "trainer" &&
+      role !== "nutrition_coach" &&
+      role !== "client"
+    ) {
+      return jsonError("You do not have permission to view availability.", 403);
+    }
 
-    if (!trainerId || !date) {
-      return NextResponse.json(
-        { error: "Missing trainerId or date." },
-        { status: 400 }
+    const url = new URL(request.url);
+    const trainerId = url.searchParams.get("trainerId");
+
+    if (!trainerId) {
+      return jsonError("Missing trainerId.");
+    }
+
+    const supabase = createServiceSupabaseClient();
+
+    const { data: connectionData, error: connectionError } = await supabase
+      .from("trainer_google_calendar_connections")
+      .select(
+        "id, trainer_id, google_email, access_token, refresh_token, token_expiry, calendar_id"
+      )
+      .eq("trainer_id", trainerId)
+      .maybeSingle();
+
+    if (connectionError) {
+      return jsonError(connectionError.message, 500);
+    }
+
+    const connection = connectionData as CalendarConnection | null;
+
+    if (!connection) {
+      return NextResponse.json({
+        availability: [],
+        error:
+          "This trainer has not connected Google Calendar yet. Please ask the trainer to connect Google Calendar first.",
+      });
+    }
+
+    const accessToken = await refreshGoogleAccessToken(connection);
+
+    const timeMin = new Date();
+    timeMin.setDate(timeMin.getDate() + 1);
+    timeMin.setHours(0, 0, 0, 0);
+
+    const timeMax = new Date(timeMin);
+    timeMax.setDate(timeMin.getDate() + 8);
+    timeMax.setHours(23, 59, 59, 999);
+
+    const calendarId = connection.calendar_id || "primary";
+
+    const freeBusyResponse = await fetch(
+      "https://www.googleapis.com/calendar/v3/freeBusy",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          timeMin: timeMin.toISOString(),
+          timeMax: timeMax.toISOString(),
+          items: [{ id: calendarId }],
+        }),
+      }
+    );
+
+    const freeBusyData =
+      (await freeBusyResponse.json()) as GoogleFreeBusyResponse;
+
+    if (!freeBusyResponse.ok) {
+      return jsonError(
+        freeBusyData.error?.message || "Could not load Google availability.",
+        500
       );
     }
 
-    const dayStart = new Date(`${date}T06:00:00`);
-    const dayEnd = new Date(`${date}T21:00:00`);
+    const busyTimes = freeBusyData.calendars?.[calendarId]?.busy || [];
+    const availability = generateAvailabilitySlots(busyTimes);
 
-    if (Number.isNaN(dayStart.getTime()) || Number.isNaN(dayEnd.getTime())) {
-      return NextResponse.json({ error: "Invalid date." }, { status: 400 });
-    }
-
-    const busyTimes = (await getBusyTimes(
-      trainerId,
-      dayStart.toISOString(),
-      dayEnd.toISOString()
-    )) as BusyTime[];
-
-    const slots: {
-      label: string;
-      startsAt: string;
-      endsAt: string;
-    }[] = [];
-
-    const now = Date.now();
-    const slotMs = durationMinutes * 60 * 1000;
-
-    for (
-      let slotStart = dayStart.getTime();
-      slotStart + slotMs <= dayEnd.getTime();
-      slotStart += 30 * 60 * 1000
-    ) {
-      const slotEnd = slotStart + slotMs;
-
-      if (slotStart < now) {
-        continue;
-      }
-
-      const isBusy = busyTimes.some((busy) => {
-        const busyStart = new Date(busy.start).getTime();
-        const busyEnd = new Date(busy.end).getTime();
-
-        return overlaps(slotStart, slotEnd, busyStart, busyEnd);
-      });
-
-      if (!isBusy) {
-        const slotDate = new Date(slotStart);
-
-        slots.push({
-          label: `${toTwoDigit(slotDate.getHours())}:${toTwoDigit(
-            slotDate.getMinutes()
-          )}`,
-          startsAt: new Date(slotStart).toISOString(),
-          endsAt: new Date(slotEnd).toISOString(),
-        });
-      }
-    }
-
-    return NextResponse.json({ slots });
+    return NextResponse.json({
+      availability,
+    });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Failed to check availability.";
+      error instanceof Error ? error.message : "Could not load availability.";
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }
