@@ -321,6 +321,14 @@ export default function ClientBookPage() {
           client_phone: clientProfile.phone,
           starts_at: selectedBookingSlot.starts_at,
           ends_at: selectedBookingSlot.ends_at,
+
+          clientId: clientProfile.id,
+          trainerId: selectedStaffId,
+          clientName: clientProfile.full_name,
+          clientEmail: clientProfile.email,
+          clientPhone: clientProfile.phone,
+          startsAt: selectedBookingSlot.starts_at,
+          endsAt: selectedBookingSlot.ends_at,
         }),
       });
 
