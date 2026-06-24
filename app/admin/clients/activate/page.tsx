@@ -102,4 +102,4 @@ export default function AdminClientActivatePage() {
       </div>
     </main>
   );
-}
+} 
