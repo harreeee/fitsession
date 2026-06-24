@@ -71,6 +71,23 @@ function buildManualSlot(dateValue: string, timeValue: string) {
   };
 }
 
+async function readJsonResponse<T>(
+  response: Response,
+  emptyMessage: string
+): Promise<T> {
+  const text = await response.text();
+
+  if (!text) {
+    return { error: emptyMessage } as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return { error: "Server returned an invalid response." } as T;
+  }
+}
+
 export default function ClientBookPage() {
   const router = useRouter();
 
@@ -105,7 +122,7 @@ export default function ClientBookPage() {
       const { user, role } = await getCurrentUserRole();
 
       if (!user) {
-        router.push("/login");
+        router.push("/client/login");
         return;
       }
 
@@ -116,14 +133,14 @@ export default function ClientBookPage() {
 
       if (role !== "client") {
         await supabase.auth.signOut();
-        router.push("/login");
+        router.push("/client/login");
         return;
       }
 
       const { data: clientData, error: clientError } = await supabase
         .from("clients")
         .select("id, full_name, email, phone")
-        .eq("user_id", user.id)
+        .eq("profile_id", user.id)
         .maybeSingle();
 
       if (clientError) {
@@ -133,7 +150,9 @@ export default function ClientBookPage() {
       }
 
       if (!clientData) {
-        setMessage("Client profile was not found.");
+        setMessage(
+          "Client profile was not found. Please check that this client row has profile_id linked to the logged-in user."
+        );
         setCheckingRole(false);
         return;
       }
@@ -158,7 +177,7 @@ export default function ClientBookPage() {
         } = await supabase.auth.getSession();
 
         if (!session?.access_token) {
-          router.push("/login");
+          router.push("/client/login");
           return;
         }
 
@@ -168,10 +187,10 @@ export default function ClientBookPage() {
           },
         });
 
-        const text = await response.text();
-        const result = text
-          ? (JSON.parse(text) as { staff?: StaffMember[]; error?: string })
-          : { error: "Empty response from staff API." };
+        const result = await readJsonResponse<{
+          staff?: StaffMember[];
+          error?: string;
+        }>(response, "Empty response from staff API.");
 
         if (!response.ok) {
           throw new Error(result.error || "Could not load staff.");
@@ -212,7 +231,7 @@ export default function ClientBookPage() {
       } = await supabase.auth.getSession();
 
       if (!session?.access_token) {
-        router.push("/login");
+        router.push("/client/login");
         return;
       }
 
@@ -227,14 +246,11 @@ export default function ClientBookPage() {
         }
       );
 
-      const text = await response.text();
-      const result = text
-        ? (JSON.parse(text) as {
-            availability?: AvailabilitySlot[];
-            slots?: AvailabilitySlot[];
-            error?: string;
-          })
-        : { error: "Empty response from availability API." };
+      const result = await readJsonResponse<{
+        availability?: AvailabilitySlot[];
+        slots?: AvailabilitySlot[];
+        error?: string;
+      }>(response, "Empty response from availability API.");
 
       if (!response.ok) {
         throw new Error(result.error || "Could not load availability.");
@@ -262,7 +278,9 @@ export default function ClientBookPage() {
 
   async function createBooking() {
     if (!clientProfile) {
-      setMessage("Client profile was not loaded.");
+      setMessage(
+        "Client profile was not loaded. Please go back to the client dashboard and open Book Session again."
+      );
       return;
     }
 
@@ -285,7 +303,7 @@ export default function ClientBookPage() {
       } = await supabase.auth.getSession();
 
       if (!session?.access_token) {
-        router.push("/login");
+        router.push("/client/login");
         return;
       }
 
@@ -306,10 +324,10 @@ export default function ClientBookPage() {
         }),
       });
 
-      const text = await response.text();
-      const result = text
-        ? (JSON.parse(text) as { error?: string })
-        : { error: "Empty response from booking API." };
+      const result = await readJsonResponse<{ error?: string }>(
+        response,
+        "Empty response from booking API."
+      );
 
       if (!response.ok) {
         throw new Error(result.error || "Could not book session.");
