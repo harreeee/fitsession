@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   createServiceSupabaseClient,
   getUserFromRequest,
-} from "../../../../../../lib/supabaseServer";
+} from "../../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
 

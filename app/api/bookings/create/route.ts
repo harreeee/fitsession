@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   createServiceSupabaseClient,
   getUserFromRequest,
-} from "../../../../../../lib/supabaseServer";
-import { createGoogleCalendarEvent } from "../../../../../../lib/googleCalendar";
+} from "../../../../lib/supabaseServer";
+import { createGoogleCalendarEvent } from "../../../../lib/googleCalendar";
 
 export const runtime = "nodejs";
 
