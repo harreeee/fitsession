@@ -22,21 +22,56 @@ type ClientData = {
   }[];
 };
 
-type SessionLog = {
+type SessionHistoryLog = {
   id: string;
   trainer_id: string | null;
   status: string;
   message: string | null;
+  trainer_note: string | null;
   remaining_after: number | null;
-  scanned_at: string;
+  created_at: string;
   trainer_name: string;
 };
+
+type UpcomingBooking = {
+  id: string;
+  trainer_id: string | null;
+  starts_at: string;
+  ends_at: string;
+  status: string;
+  notes: string | null;
+  trainer_name: string;
+};
+
+type TrainerProfile = {
+  id: string;
+  full_name: string | null;
+};
+
+function formatDateTime(value: string | null) {
+  if (!value) return "-";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("en-CA", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 export default function ClientPortalPage() {
   const router = useRouter();
 
   const [client, setClient] = useState<ClientData | null>(null);
-  const [logs, setLogs] = useState<SessionLog[]>([]);
+  const [logs, setLogs] = useState<SessionHistoryLog[]>([]);
+  const [upcomingBookings, setUpcomingBookings] = useState<UpcomingBooking[]>(
+    []
+  );
   const [qrCode, setQrCode] = useState("");
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
@@ -48,26 +83,32 @@ export default function ClientPortalPage() {
 
   async function fetchLogsWithTrainerNames(clientId: string) {
     const { data: logData, error: logError } = await supabase
-      .from("session_logs")
-      .select(`
+      .from("session_history")
+      .select(
+        `
         id,
         trainer_id,
         status,
         message,
+        trainer_note,
         remaining_after,
-        scanned_at
-      `)
+        created_at
+      `
+      )
       .eq("client_id", clientId)
-      .order("scanned_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(10);
 
     if (logError) {
-      console.log("Session log error:", logError.message);
+      console.log("Session history error:", logError.message);
       setLogs([]);
       return;
     }
 
-    const rawLogs = (logData || []) as Omit<SessionLog, "trainer_name">[];
+    const rawLogs = (logData || []) as Omit<
+      SessionHistoryLog,
+      "trainer_name"
+    >[];
 
     const trainerIds = Array.from(
       new Set(rawLogs.map((log) => log.trainer_id).filter(Boolean))
@@ -89,7 +130,7 @@ export default function ClientPortalPage() {
       .in("id", trainerIds);
 
     const trainerNameMap = new Map(
-      (trainerProfiles || []).map((profile) => [
+      ((trainerProfiles || []) as TrainerProfile[]).map((profile) => [
         profile.id,
         profile.full_name || "Unknown Trainer",
       ])
@@ -101,6 +142,64 @@ export default function ClientPortalPage() {
         trainer_name:
           log.trainer_id && trainerNameMap.get(log.trainer_id)
             ? trainerNameMap.get(log.trainer_id)!
+            : "Unknown Trainer",
+      }))
+    );
+  }
+
+  async function fetchUpcomingBookings(clientId: string) {
+    const { data: bookingData, error: bookingError } = await supabase
+      .from("bookings")
+      .select("id, trainer_id, starts_at, ends_at, status, notes")
+      .eq("client_id", clientId)
+      .eq("status", "booked")
+      .gte("starts_at", new Date().toISOString())
+      .order("starts_at", { ascending: true })
+      .limit(5);
+
+    if (bookingError) {
+      console.log("Upcoming bookings error:", bookingError.message);
+      setUpcomingBookings([]);
+      return;
+    }
+
+    const rawBookings = (bookingData || []) as Omit<
+      UpcomingBooking,
+      "trainer_name"
+    >[];
+
+    const trainerIds = Array.from(
+      new Set(rawBookings.map((booking) => booking.trainer_id).filter(Boolean))
+    ) as string[];
+
+    if (trainerIds.length === 0) {
+      setUpcomingBookings(
+        rawBookings.map((booking) => ({
+          ...booking,
+          trainer_name: "Trainer not assigned",
+        }))
+      );
+      return;
+    }
+
+    const { data: trainerProfiles } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", trainerIds);
+
+    const trainerNameMap = new Map(
+      ((trainerProfiles || []) as TrainerProfile[]).map((profile) => [
+        profile.id,
+        profile.full_name || "Unknown Trainer",
+      ])
+    );
+
+    setUpcomingBookings(
+      rawBookings.map((booking) => ({
+        ...booking,
+        trainer_name:
+          booking.trainer_id && trainerNameMap.get(booking.trainer_id)
+            ? trainerNameMap.get(booking.trainer_id)!
             : "Unknown Trainer",
       }))
     );
@@ -118,7 +217,8 @@ export default function ClientPortalPage() {
 
     const { data: clientData, error: clientError } = await supabase
       .from("clients")
-      .select(`
+      .select(
+        `
         id,
         full_name,
         email,
@@ -131,7 +231,8 @@ export default function ClientPortalPage() {
           remaining_sessions,
           status
         )
-      `)
+      `
+      )
       .eq("profile_id", userId)
       .single();
 
@@ -142,12 +243,15 @@ export default function ClientPortalPage() {
       return;
     }
 
-    setClient(clientData as ClientData);
+    const cleanClient = clientData as ClientData;
 
-    const qrImage = await QRCode.toDataURL(clientData.qr_token);
+    setClient(cleanClient);
+
+    const qrImage = await QRCode.toDataURL(cleanClient.qr_token);
     setQrCode(qrImage);
 
-    await fetchLogsWithTrainerNames(clientData.id);
+    await fetchLogsWithTrainerNames(cleanClient.id);
+    await fetchUpcomingBookings(cleanClient.id);
 
     setLoading(false);
   }
@@ -221,8 +325,9 @@ export default function ClientPortalPage() {
   }
 
   const activePackage =
-    client.session_packages?.find((packageRow) => packageRow.status === "active") ||
-    client.session_packages?.[0];
+    client.session_packages?.find(
+      (packageRow) => packageRow.status === "active"
+    ) || client.session_packages?.[0];
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -230,7 +335,7 @@ export default function ClientPortalPage() {
   const todaysSessions = logs.filter(
     (log) =>
       log.status === "success" &&
-      new Date(log.scanned_at).getTime() >= today.getTime()
+      new Date(log.created_at).getTime() >= today.getTime()
   );
 
   const todaysTrainerNames = Array.from(
@@ -355,6 +460,74 @@ export default function ClientPortalPage() {
             </div>
           </section>
 
+          <section className="mb-8 rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-6 shadow-2xl backdrop-blur">
+            <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-3xl font-black text-white">
+                  Upcoming Sessions
+                </h2>
+
+                <p className="text-gray-400">
+                  Your booked sessions will appear here.
+                </p>
+              </div>
+
+              <Link
+                href="/client/book"
+                className="rounded-xl bg-yellow-400 px-5 py-3 text-center text-sm font-black uppercase text-black transition hover:bg-yellow-300"
+              >
+                Book Session
+              </Link>
+            </div>
+
+            {upcomingBookings.length === 0 ? (
+              <div className="rounded-2xl border border-yellow-500/30 bg-black/40 p-6 text-center">
+                <h3 className="text-xl font-black text-white">
+                  No Upcoming Sessions
+                </h3>
+
+                <p className="mt-2 text-gray-300">
+                  Once you book a session, it will show here.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {upcomingBookings.map((booking) => (
+                  <div
+                    key={booking.id}
+                    className="rounded-2xl border border-yellow-500/30 bg-black/40 p-5"
+                  >
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <p className="text-xl font-black text-yellow-400">
+                          {formatDateTime(booking.starts_at)}
+                        </p>
+
+                        <p className="mt-1 text-sm font-bold text-gray-300">
+                          Ends: {formatDateTime(booking.ends_at)}
+                        </p>
+
+                        <p className="mt-1 text-sm font-bold text-gray-400">
+                          Trainer: {booking.trainer_name}
+                        </p>
+                      </div>
+
+                      <span className="inline-block rounded-full bg-yellow-400 px-3 py-1 text-xs font-black uppercase tracking-wide text-black">
+                        {booking.status}
+                      </span>
+                    </div>
+
+                    {booking.notes ? (
+                      <p className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm font-semibold leading-6 text-yellow-100">
+                        {booking.notes}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           <section className="mb-8 rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 text-center shadow-2xl backdrop-blur">
             <p className="mb-2 text-sm font-black uppercase tracking-widest text-yellow-400">
               Your QR Code
@@ -473,7 +646,7 @@ export default function ClientPortalPage() {
                         </td>
 
                         <td className="p-3 text-gray-300">
-                          {new Date(log.scanned_at).toLocaleString()}
+                          {formatDateTime(log.created_at)}
                         </td>
                       </tr>
                     ))}

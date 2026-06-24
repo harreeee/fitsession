@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
@@ -49,6 +49,28 @@ function getRoleLabel(role: string) {
   return "Staff";
 }
 
+function getDefaultManualDate() {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+
+  return date.toISOString().slice(0, 10);
+}
+
+function buildManualSlot(dateValue: string, timeValue: string) {
+  if (!dateValue || !timeValue) return null;
+
+  const startDate = new Date(`${dateValue}T${timeValue}:00`);
+
+  if (Number.isNaN(startDate.getTime())) return null;
+
+  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+
+  return {
+    starts_at: startDate.toISOString(),
+    ends_at: endDate.toISOString(),
+  };
+}
+
 export default function ClientBookPage() {
   const router = useRouter();
 
@@ -64,10 +86,19 @@ export default function ClientBookPage() {
     null
   );
 
+  const [manualDate, setManualDate] = useState(getDefaultManualDate());
+  const [manualTime, setManualTime] = useState("09:00");
+
   const [loadingStaff, setLoadingStaff] = useState(false);
   const [loadingAvailability, setLoadingAvailability] = useState(false);
   const [booking, setBooking] = useState(false);
   const [message, setMessage] = useState("");
+
+  const manualSlot = useMemo(() => {
+    return buildManualSlot(manualDate, manualTime);
+  }, [manualDate, manualTime]);
+
+  const selectedBookingSlot = selectedSlot || manualSlot;
 
   useEffect(() => {
     async function protectPage() {
@@ -137,10 +168,10 @@ export default function ClientBookPage() {
           },
         });
 
-        const result = (await response.json()) as {
-          staff?: StaffMember[];
-          error?: string;
-        };
+        const text = await response.text();
+        const result = text
+          ? (JSON.parse(text) as { staff?: StaffMember[]; error?: string })
+          : { error: "Empty response from staff API." };
 
         if (!response.ok) {
           throw new Error(result.error || "Could not load staff.");
@@ -196,11 +227,14 @@ export default function ClientBookPage() {
         }
       );
 
-      const result = (await response.json()) as {
-        availability?: AvailabilitySlot[];
-        slots?: AvailabilitySlot[];
-        error?: string;
-      };
+      const text = await response.text();
+      const result = text
+        ? (JSON.parse(text) as {
+            availability?: AvailabilitySlot[];
+            slots?: AvailabilitySlot[];
+            error?: string;
+          })
+        : { error: "Empty response from availability API." };
 
       if (!response.ok) {
         throw new Error(result.error || "Could not load availability.");
@@ -210,12 +244,17 @@ export default function ClientBookPage() {
       setAvailability(slots);
 
       if (slots.length === 0) {
-        setMessage("No available booking times were found.");
+        setMessage(
+          result.error ||
+            "No Google Calendar times were found. You can still choose a manual date and time below."
+        );
       }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Could not load availability.";
-      setMessage(errorMessage);
+      setMessage(
+        `${errorMessage} You can still choose a manual date and time below.`
+      );
     } finally {
       setLoadingAvailability(false);
     }
@@ -232,8 +271,8 @@ export default function ClientBookPage() {
       return;
     }
 
-    if (!selectedSlot) {
-      setMessage("Please choose a time.");
+    if (!selectedBookingSlot) {
+      setMessage("Please choose a date and time.");
       return;
     }
 
@@ -262,14 +301,15 @@ export default function ClientBookPage() {
           client_name: clientProfile.full_name,
           client_email: clientProfile.email,
           client_phone: clientProfile.phone,
-          starts_at: selectedSlot.starts_at,
-          ends_at: selectedSlot.ends_at,
+          starts_at: selectedBookingSlot.starts_at,
+          ends_at: selectedBookingSlot.ends_at,
         }),
       });
 
-      const result = (await response.json()) as {
-        error?: string;
-      };
+      const text = await response.text();
+      const result = text
+        ? (JSON.parse(text) as { error?: string })
+        : { error: "Empty response from booking API." };
 
       if (!response.ok) {
         throw new Error(result.error || "Could not book session.");
@@ -278,6 +318,8 @@ export default function ClientBookPage() {
       setMessage("Session booked successfully.");
       setSelectedSlot(null);
       setAvailability([]);
+      setManualDate(getDefaultManualDate());
+      setManualTime("09:00");
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Could not book session.";
@@ -313,8 +355,8 @@ export default function ClientBookPage() {
             </h1>
 
             <p className="mt-3 max-w-2xl text-sm font-medium leading-6 text-gray-400 md:text-base">
-              Choose a trainer or nutrition coach, check available times, and
-              book your next session.
+              Choose a trainer or nutrition coach, check available times, or
+              manually request a session time.
             </p>
           </header>
 
@@ -333,7 +375,7 @@ export default function ClientBookPage() {
               </p>
             ) : staffMembers.length === 0 ? (
               <p className="mt-4 font-bold text-gray-400">
-                No connected trainers or nutrition coaches were found.
+                No trainers or nutrition coaches were found.
               </p>
             ) : (
               <>
@@ -371,7 +413,8 @@ export default function ClientBookPage() {
 
             {availability.length === 0 ? (
               <p className="mt-4 text-sm font-medium text-gray-400">
-                Select staff and check times to see availability.
+                No automatic Google Calendar times are selected. Choose a manual
+                time below.
               </p>
             ) : (
               <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -407,10 +450,59 @@ export default function ClientBookPage() {
               </div>
             )}
 
+            <div className="mt-6 rounded-3xl border border-yellow-400/20 bg-black/60 p-4">
+              <h3 className="text-lg font-black text-yellow-400">
+                Manual Time
+              </h3>
+
+              <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
+                Use this if automatic availability is empty. This books a
+                1-hour session.
+              </p>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="text-xs font-black uppercase tracking-widest text-gray-400">
+                    Date
+                  </span>
+                  <input
+                    type="date"
+                    value={manualDate}
+                    onChange={(event) => {
+                      setManualDate(event.target.value);
+                      setSelectedSlot(null);
+                    }}
+                    className="mt-2 w-full rounded-2xl border border-yellow-500/30 bg-black/70 px-4 py-3 text-sm font-bold text-white outline-none focus:border-yellow-400"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs font-black uppercase tracking-widest text-gray-400">
+                    Time
+                  </span>
+                  <input
+                    type="time"
+                    value={manualTime}
+                    onChange={(event) => {
+                      setManualTime(event.target.value);
+                      setSelectedSlot(null);
+                    }}
+                    className="mt-2 w-full rounded-2xl border border-yellow-500/30 bg-black/70 px-4 py-3 text-sm font-bold text-white outline-none focus:border-yellow-400"
+                  />
+                </label>
+              </div>
+
+              {manualSlot && !selectedSlot ? (
+                <p className="mt-4 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-3 text-sm font-bold text-yellow-300">
+                  Selected manual time: {formatDateTime(manualSlot.starts_at)}
+                </p>
+              ) : null}
+            </div>
+
             <button
               type="button"
               onClick={createBooking}
-              disabled={booking || !selectedSlot}
+              disabled={booking || !selectedBookingSlot}
               className="mt-6 w-full rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {booking ? "Booking..." : "Book Selected Session"}
