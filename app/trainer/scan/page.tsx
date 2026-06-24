@@ -17,8 +17,9 @@ type TrainerHistoryLog = {
   client_id: string;
   status: string;
   message: string | null;
+  trainer_note: string | null;
   remaining_after: number | null;
-  scanned_at: string;
+  created_at: string;
 };
 
 type ClientInfo = {
@@ -48,6 +49,10 @@ type SessionPackageRow = {
   used_sessions: number;
   remaining_sessions: number;
   status: string;
+};
+
+type CreatedSessionHistoryRow = {
+  id: string;
 };
 
 function getRoleLabel(role: string) {
@@ -96,7 +101,9 @@ export default function TrainerScanPage() {
   const [lastScan, setLastScan] = useState<string | null>(null);
 
   const [historyLogs, setHistoryLogs] = useState<TrainerHistoryLog[]>([]);
-  const [clientMap, setClientMap] = useState<Map<string, ClientInfo>>(new Map());
+  const [clientMap, setClientMap] = useState<Map<string, ClientInfo>>(
+    new Map()
+  );
 
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState(
@@ -104,6 +111,14 @@ export default function TrainerScanPage() {
   );
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMessage, setProfileMessage] = useState("");
+
+  const [lastScannedHistoryId, setLastScannedHistoryId] = useState<
+    string | null
+  >(null);
+  const [trainerNote, setTrainerNote] = useState("");
+  const [showNoteBox, setShowNoteBox] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
+  const [noteMessage, setNoteMessage] = useState("");
 
   async function handleLogout() {
     await stopScanner();
@@ -139,15 +154,19 @@ export default function TrainerScanPage() {
     today.setHours(0, 0, 0, 0);
 
     const { data: todayLogs, error: todayLogsError } = await supabase
-      .from("session_logs")
-      .select("id, client_id, scanned_at, status")
+      .from("session_history")
+      .select("id, client_id, created_at, status")
       .eq("trainer_id", userId)
       .eq("status", "success")
-      .gte("scanned_at", today.toISOString())
-      .order("scanned_at", { ascending: false });
+      .gte("created_at", today.toISOString())
+      .order("created_at", { ascending: false });
 
     if (todayLogsError) {
       console.error(todayLogsError);
+      setResult({
+        type: "error",
+        message: `Could not load today's stats: ${todayLogsError.message}`,
+      });
       return;
     }
 
@@ -156,17 +175,23 @@ export default function TrainerScanPage() {
 
     setSessionsToday(logsToday.length);
     setClientsToday(uniqueClients.size);
-    setLastScan(logsToday[0]?.scanned_at || null);
+    setLastScan(logsToday[0]?.created_at || null);
 
     const { data: recentLogs, error: recentLogsError } = await supabase
-      .from("session_logs")
-      .select("id, client_id, status, message, remaining_after, scanned_at")
+      .from("session_history")
+      .select(
+        "id, client_id, status, message, trainer_note, remaining_after, created_at"
+      )
       .eq("trainer_id", userId)
-      .order("scanned_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(20);
 
     if (recentLogsError) {
       console.error(recentLogsError);
+      setResult({
+        type: "error",
+        message: `Could not load recent history: ${recentLogsError.message}`,
+      });
       return;
     }
 
@@ -254,6 +279,53 @@ export default function TrainerScanPage() {
     setSavingProfile(false);
   }
 
+  async function saveTrainerNote() {
+    if (!lastScannedHistoryId) {
+      setNoteMessage("No completed scan found for this note.");
+      return;
+    }
+
+    setSavingNote(true);
+    setNoteMessage("");
+
+    try {
+      const cleanNote = trainerNote.trim();
+
+      const { error } = await supabase
+        .from("session_history")
+        .update({
+          trainer_note: cleanNote || null,
+        })
+        .eq("id", lastScannedHistoryId);
+
+      if (error) {
+        throw error;
+      }
+
+      setNoteMessage("Note saved.");
+      setShowNoteBox(false);
+      setTrainerNote("");
+      setLastScannedHistoryId(null);
+
+      if (trainerId) {
+        await fetchTrainerStats(trainerId);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to save note.";
+      setNoteMessage(message);
+    } finally {
+      setSavingNote(false);
+    }
+  }
+
+  function skipTrainerNote() {
+    setShowNoteBox(false);
+    setTrainerNote("");
+    setLastScannedHistoryId(null);
+    setNoteMessage("");
+  }
+
   useEffect(() => {
     async function protectTrainerScanPage() {
       const { user, role } = await getCurrentUserRole();
@@ -319,6 +391,10 @@ export default function TrainerScanPage() {
     if (scannerStarted) return;
 
     setResult({ type: "", message: "" });
+    setNoteMessage("");
+    setShowNoteBox(false);
+    setTrainerNote("");
+    setLastScannedHistoryId(null);
     setScannerStarted(true);
 
     const scanner = new Html5Qrcode("qr-reader");
@@ -355,6 +431,11 @@ export default function TrainerScanPage() {
 
   async function markSession(qrToken: string) {
     const cleanQrToken = qrToken.trim();
+
+    setShowNoteBox(false);
+    setTrainerNote("");
+    setLastScannedHistoryId(null);
+    setNoteMessage("");
 
     if (!trainerId) {
       setResult({
@@ -449,11 +530,11 @@ export default function TrainerScanPage() {
     thirtyMinutesAgo.setMinutes(thirtyMinutesAgo.getMinutes() - 30);
 
     const { data: recentScan, error: recentScanError } = await supabase
-      .from("session_logs")
+      .from("session_history")
       .select("id")
       .eq("client_id", client.id)
       .eq("status", "success")
-      .gte("scanned_at", thirtyMinutesAgo.toISOString())
+      .gte("created_at", thirtyMinutesAgo.toISOString())
       .maybeSingle();
 
     if (recentScanError) {
@@ -493,28 +574,40 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const { error: logError } = await supabase.from("session_logs").insert({
-      client_id: client.id,
-      trainer_id: currentTrainerId,
-      package_id: sessionPackage.id,
-      status: "success",
-      message: `Session scanned by ${trainerName || trainerEmail || "staff"}.`,
-      remaining_after: newRemaining,
-      scanned_at: new Date().toISOString(),
-    });
+    const { data: createdHistoryData, error: historyError } = await supabase
+      .from("session_history")
+      .insert({
+        client_id: client.id,
+        trainer_id: currentTrainerId,
+        package_id: sessionPackage.id,
+        status: "success",
+        message: `Session scanned by ${trainerName || trainerEmail || "staff"}.`,
+        remaining_after: newRemaining,
+        trainer_note: null,
+      })
+      .select("id")
+      .single();
 
-    if (logError) {
+    if (historyError) {
       setResult({
         type: "error",
-        message: logError.message,
+        message: historyError.message,
       });
       return;
     }
+
+    const createdHistory =
+      createdHistoryData as CreatedSessionHistoryRow | null;
 
     setResult({
       type: "success",
       message: `Success! ${client.full_name} now has ${newRemaining} sessions remaining.`,
     });
+
+    if (createdHistory?.id) {
+      setLastScannedHistoryId(createdHistory.id);
+      setShowNoteBox(true);
+    }
 
     await fetchTrainerStats(currentTrainerId);
   }
@@ -722,7 +815,7 @@ export default function TrainerScanPage() {
                           </div>
 
                           <p className="text-sm font-black text-yellow-400">
-                            {formatDateTime(log.scanned_at)}
+                            {formatDateTime(log.created_at)}
                           </p>
                         </div>
 
@@ -736,6 +829,17 @@ export default function TrainerScanPage() {
                           </p>
                           <p>{log.message || "Session scanned"}</p>
                         </div>
+
+                        {log.trainer_note ? (
+                          <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
+                            <p className="text-xs font-black uppercase tracking-widest text-yellow-400">
+                              Trainer Note
+                            </p>
+                            <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-yellow-100">
+                              {log.trainer_note}
+                            </p>
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })
@@ -789,6 +893,53 @@ export default function TrainerScanPage() {
                 {result.message}
               </div>
             )}
+
+            {showNoteBox ? (
+              <div className="mt-5 rounded-3xl border border-yellow-400/40 bg-black/70 p-5">
+                <h3 className="text-xl font-black text-yellow-400">
+                  Add Trainer Note
+                </h3>
+
+                <p className="mt-2 text-sm font-medium leading-6 text-gray-400">
+                  Optional note for this completed session. You can write what
+                  the client trained, injuries, reminders, or next-session
+                  focus.
+                </p>
+
+                <textarea
+                  value={trainerNote}
+                  onChange={(event) => setTrainerNote(event.target.value)}
+                  placeholder="Example: Upper body strength today. Client reported mild shoulder tightness. Focus on mobility next session."
+                  className="mt-4 min-h-32 w-full rounded-2xl border border-yellow-500/30 bg-black/80 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
+
+                {noteMessage ? (
+                  <p className="mt-3 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-3 text-sm font-bold text-yellow-300">
+                    {noteMessage}
+                  </p>
+                ) : null}
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={saveTrainerNote}
+                    disabled={savingNote}
+                    className="rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {savingNote ? "Saving Note..." : "Save Note"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={skipTrainerNote}
+                    disabled={savingNote}
+                    className="rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Skip Note
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
         </div>
       </div>
