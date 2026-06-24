@@ -47,39 +47,35 @@ type PurchaseRow = {
 type ClientTableRow = {
   id: string;
   clientCode: string;
-  name: string;
   purchaseDate: string | null;
-  startDate: string | null;
   expireDate: string | null;
+  name: string;
   totalSessions: number;
   usedSessions: number;
   remainingSessions: number;
+  status: string;
   packageType: string;
   packageValue: number | null;
   amountPaid: number | null;
   balanceDue: number | null;
-  debtDeadline: string | null;
   purchaseType: string;
-  status: string;
   source: string;
 };
 
 type SortKey =
   | "clientCode"
-  | "name"
   | "purchaseDate"
-  | "startDate"
   | "expireDate"
+  | "name"
   | "totalSessions"
   | "usedSessions"
   | "remainingSessions"
+  | "status"
   | "packageType"
   | "packageValue"
   | "amountPaid"
   | "balanceDue"
-  | "debtDeadline"
   | "purchaseType"
-  | "status"
   | "source";
 
 type SortDirection = "asc" | "desc";
@@ -101,24 +97,62 @@ const CLIENT_SOURCE_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+const PURCHASE_TYPE_LABELS: Record<string, string> = {
+  new: "New",
+  renew: "Renew",
+  renewal: "Renew",
+};
+
 const columns: Column[] = [
-  { key: "clientCode", label: "Code", width: "w-[90px]" },
-  { key: "name", label: "Client", width: "w-[230px]" },
-  { key: "purchaseDate", label: "Purchase", width: "w-[115px]" },
-  { key: "startDate", label: "Start", width: "w-[115px]" },
-  { key: "expireDate", label: "Expire", width: "w-[115px]" },
-  { key: "totalSessions", label: "Total", width: "w-[85px]", align: "right" },
-  { key: "usedSessions", label: "Used", width: "w-[85px]", align: "right" },
-  { key: "remainingSessions", label: "Left", width: "w-[85px]", align: "right" },
-  { key: "packageType", label: "Package", width: "w-[240px]" },
-  { key: "packageValue", label: "Value", width: "w-[110px]", align: "right" },
-  { key: "amountPaid", label: "Paid", width: "w-[110px]", align: "right" },
-  { key: "balanceDue", label: "Debt", width: "w-[110px]", align: "right" },
-  { key: "debtDeadline", label: "Due Date", width: "w-[120px]" },
-  { key: "purchaseType", label: "Type", width: "w-[100px]" },
-  { key: "status", label: "Status", width: "w-[120px]" },
-  { key: "source", label: "Source", width: "w-[150px]" },
+  { key: "clientCode", label: "Mã khách hàng", width: "w-[115px]" },
+  { key: "purchaseDate", label: "Ngày mua", width: "w-[115px]" },
+  { key: "expireDate", label: "Ngày hết hạn", width: "w-[125px]" },
+  { key: "name", label: "Tên khách hàng", width: "w-[210px]" },
+  {
+    key: "totalSessions",
+    label: "Số buổi",
+    width: "w-[95px]",
+    align: "right",
+  },
+  {
+    key: "remainingSessions",
+    label: "Buổi còn lại",
+    width: "w-[115px]",
+    align: "right",
+  },
+  { key: "status", label: "Trạng thái", width: "w-[120px]" },
+  { key: "packageType", label: "Loại gói", width: "w-[260px]" },
+  {
+    key: "packageValue",
+    label: "Giá trị HĐ",
+    width: "w-[120px]",
+    align: "right",
+  },
+  {
+    key: "amountPaid",
+    label: "Đã thanh toán",
+    width: "w-[125px]",
+    align: "right",
+  },
+  {
+    key: "balanceDue",
+    label: "Công nợ còn lại",
+    width: "w-[135px]",
+    align: "right",
+  },
+  { key: "purchaseType", label: "Gói tập", width: "w-[120px]" },
+  { key: "source", label: "Nguồn khách", width: "w-[180px]" },
 ];
+
+function toNumber(value: number | string | null | undefined) {
+  if (value === null || value === undefined || value === "") return null;
+
+  const numericValue = Number(value);
+
+  if (Number.isNaN(numericValue)) return null;
+
+  return numericValue;
+}
 
 function formatDate(value: string | null) {
   if (!value) return "-";
@@ -181,12 +215,37 @@ function getClientSourceLabel(
   return CLIENT_SOURCE_LABELS[source] || source;
 }
 
+function getPurchaseTypeLabel(value: string | null) {
+  if (!value) return "-";
+
+  const cleanValue = value.toLowerCase();
+
+  return PURCHASE_TYPE_LABELS[cleanValue] || value;
+}
+
+function getStatusLabel(status: string | null, remainingSessions: number) {
+  if (status && status !== "-") return status;
+
+  return remainingSessions > 0 ? "active" : "inactive";
+}
+
 function getStatusClass(status: string) {
-  if (status === "active") {
+  const cleanStatus = status.toLowerCase();
+
+  if (
+    cleanStatus === "active" ||
+    cleanStatus === "đang tập" ||
+    cleanStatus === "dang tap"
+  ) {
     return "border-green-400/40 bg-green-400/10 text-green-300";
   }
 
-  if (status === "inactive") {
+  if (
+    cleanStatus === "inactive" ||
+    cleanStatus === "hết hạn" ||
+    cleanStatus === "het han" ||
+    cleanStatus === "expired"
+  ) {
     return "border-red-400/40 bg-red-400/10 text-red-300";
   }
 
@@ -201,50 +260,90 @@ function getRemainingTextClass(value: number) {
 
 function getDebtTextClass(value: number | null) {
   if (!value || value <= 0) return "text-gray-300";
-  return "text-orange-300";
-}
-
-function getDaysUntil(value: string | null) {
-  if (!value) return null;
-
-  const today = new Date();
-  const deadline = new Date(`${value.slice(0, 10)}T00:00:00`);
-
-  if (Number.isNaN(deadline.getTime())) return null;
-
-  today.setHours(0, 0, 0, 0);
-
-  return Math.ceil((deadline.getTime() - today.getTime()) / 86400000);
-}
-
-function getDebtDeadlineClass(balanceDue: number | null, deadline: string | null) {
-  if (!balanceDue || balanceDue <= 0 || !deadline) return "text-gray-300";
-
-  const daysLeft = getDaysUntil(deadline);
-
-  if (daysLeft === null) return "text-gray-300";
-  if (daysLeft < 0) return "text-red-300";
-  if (daysLeft <= 7) return "text-orange-300";
-
-  return "text-yellow-300";
-}
-
-function getDebtDeadlineLabel(balanceDue: number | null, deadline: string | null) {
-  if (!balanceDue || balanceDue <= 0) return "-";
-
-  const formattedDate = formatDate(deadline);
-  const daysLeft = getDaysUntil(deadline);
-
-  if (!deadline || daysLeft === null) return "No deadline";
-  if (daysLeft < 0) return `${formattedDate} overdue`;
-  if (daysLeft === 0) return `${formattedDate} today`;
-  if (daysLeft <= 7) return `${formattedDate} soon`;
-
-  return formattedDate;
+  return "text-red-300";
 }
 
 function getSortValue(row: ClientTableRow, key: SortKey) {
   return row[key];
+}
+
+function renderCell(row: ClientTableRow, key: SortKey) {
+  if (key === "purchaseDate") return formatDate(row.purchaseDate);
+  if (key === "expireDate") return formatDate(row.expireDate);
+  if (key === "packageValue") return formatMoney(row.packageValue);
+  if (key === "amountPaid") return formatMoney(row.amountPaid);
+  if (key === "balanceDue") return formatMoney(row.balanceDue);
+
+  return String(row[key] ?? "-");
+}
+
+function calculateTotalSessions(
+  latestPackage: SessionPackageRow | null,
+  latestPurchase: PurchaseRow | null
+) {
+  return (
+    toNumber(latestPackage?.total_sessions) ??
+    toNumber(latestPurchase?.session_count) ??
+    0
+  );
+}
+
+function calculateRemainingSessions(
+  latestPackage: SessionPackageRow | null,
+  totalSessions: number
+) {
+  const savedRemaining = toNumber(latestPackage?.remaining_sessions);
+
+  if (savedRemaining !== null) {
+    return savedRemaining;
+  }
+
+  const usedSessions = toNumber(latestPackage?.used_sessions) ?? 0;
+
+  return Math.max(totalSessions - usedSessions, 0);
+}
+
+function calculateUsedSessions(
+  latestPackage: SessionPackageRow | null,
+  totalSessions: number,
+  remainingSessions: number
+) {
+  const savedUsed = toNumber(latestPackage?.used_sessions);
+
+  if (savedUsed !== null) {
+    return savedUsed;
+  }
+
+  return Math.max(totalSessions - remainingSessions, 0);
+}
+
+function calculatePackageValue(
+  latestPackage: SessionPackageRow | null,
+  latestPurchase: PurchaseRow | null
+) {
+  return toNumber(latestPackage?.package_value) ?? toNumber(latestPurchase?.price);
+}
+
+function calculateAmountPaid(latestPurchase: PurchaseRow | null) {
+  return toNumber(latestPurchase?.amount_paid);
+}
+
+function calculateBalanceDue(
+  latestPurchase: PurchaseRow | null,
+  packageValue: number | null,
+  amountPaid: number | null
+) {
+  const savedDebt = toNumber(latestPurchase?.balance_due);
+
+  if (savedDebt !== null) {
+    return savedDebt;
+  }
+
+  if (packageValue !== null && amountPaid !== null) {
+    return Math.max(packageValue - amountPaid, 0);
+  }
+
+  return null;
 }
 
 export default function AdminClientsPage() {
@@ -255,12 +354,13 @@ export default function AdminClientsPage() {
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
 
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("debtDeadline");
+  const [sortKey, setSortKey] = useState<SortKey>("clientCode");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState("Checking access...");
+  const [deletingClientId, setDeletingClientId] = useState<string | null>(null);
 
   async function fetchClientsPageData() {
     setLoading(true);
@@ -271,7 +371,7 @@ export default function AdminClientsPage() {
         .select(
           "id, client_code, full_name, status, client_source, client_source_other, created_at"
         )
-        .order("created_at", { ascending: false }),
+        .order("client_code", { ascending: true }),
 
       supabase
         .from("session_packages")
@@ -312,6 +412,81 @@ export default function AdminClientsPage() {
     setLoading(false);
   }
 
+  async function deleteClient(clientId: string, clientName: string) {
+    const confirmed = window.confirm(
+      `Delete ${clientName}? This will permanently remove the client and related records.`
+    );
+
+    if (!confirmed) return;
+
+    const doubleConfirmed = window.confirm(
+      "This cannot be undone. Are you sure you want to delete this client?"
+    );
+
+    if (!doubleConfirmed) return;
+
+    setDeletingClientId(clientId);
+
+    const deleteSteps = [
+      {
+        table: "session_history",
+        action: supabase.from("session_history").delete().eq("client_id", clientId),
+      },
+      {
+        table: "bookings",
+        action: supabase.from("bookings").delete().eq("client_id", clientId),
+      },
+      {
+        table: "client_debts",
+        action: supabase.from("client_debts").delete().eq("client_id", clientId),
+      },
+      {
+        table: "client_purchases",
+        action: supabase.from("client_purchases").delete().eq("client_id", clientId),
+      },
+      {
+        table: "session_packages",
+        action: supabase.from("session_packages").delete().eq("client_id", clientId),
+      },
+    ];
+
+    for (const step of deleteSteps) {
+      const { error } = await step.action;
+
+      if (error) {
+        alert(`${step.table}: ${error.message}`);
+        setDeletingClientId(null);
+        return;
+      }
+    }
+
+    const { error: clientDeleteError } = await supabase
+      .from("clients")
+      .delete()
+      .eq("id", clientId);
+
+    if (clientDeleteError) {
+      alert(clientDeleteError.message);
+      setDeletingClientId(null);
+      return;
+    }
+
+    setClients((currentClients) =>
+      currentClients.filter((client) => client.id !== clientId)
+    );
+
+    setPackages((currentPackages) =>
+      currentPackages.filter((packageRow) => packageRow.client_id !== clientId)
+    );
+
+    setPurchases((currentPurchases) =>
+      currentPurchases.filter((purchase) => purchase.client_id !== clientId)
+    );
+
+    setDeletingClientId(null);
+    alert("Client deleted.");
+  }
+
   function handleSort(nextKey: SortKey) {
     if (sortKey === nextKey) {
       setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
@@ -320,20 +495,6 @@ export default function AdminClientsPage() {
 
     setSortKey(nextKey);
     setSortDirection("asc");
-  }
-
-  function renderCell(row: ClientTableRow, key: SortKey) {
-    if (key === "purchaseDate") return formatDate(row.purchaseDate);
-    if (key === "startDate") return formatDate(row.startDate);
-    if (key === "expireDate") return formatDate(row.expireDate);
-    if (key === "packageValue") return formatMoney(row.packageValue);
-    if (key === "amountPaid") return formatMoney(row.amountPaid);
-    if (key === "balanceDue") return formatMoney(row.balanceDue);
-    if (key === "debtDeadline") {
-      return getDebtDeadlineLabel(row.balanceDue, row.debtDeadline);
-    }
-
-    return String(row[key] ?? "-");
   }
 
   const tableRows = useMemo<ClientTableRow[]>(() => {
@@ -352,48 +513,54 @@ export default function AdminClientsPage() {
         (purchase) => Number(purchase.balance_due || 0) > 0
       );
 
-      const paidPurchases = clientPurchases.filter(
-        (purchase) => purchase.status === "paid" || purchase.status === "confirmed"
+      const latestPurchase =
+        purchaseWithDebt || getLatestByDate(clientPurchases);
+
+      const totalSessions = calculateTotalSessions(
+        latestPackage,
+        latestPurchase
       );
 
-      const latestPurchase =
-        purchaseWithDebt ||
-        getLatestByDate(paidPurchases) ||
-        getLatestByDate(clientPurchases);
+      const remainingSessions = calculateRemainingSessions(
+        latestPackage,
+        totalSessions
+      );
+
+      const usedSessions = calculateUsedSessions(
+        latestPackage,
+        totalSessions,
+        remainingSessions
+      );
+
+      const packageValue = calculatePackageValue(latestPackage, latestPurchase);
+
+      const amountPaid = calculateAmountPaid(latestPurchase);
+
+      const balanceDue = calculateBalanceDue(
+        latestPurchase,
+        packageValue,
+        amountPaid
+      );
+
+      const status = getStatusLabel(client.status, remainingSessions);
 
       return {
         id: client.id,
         clientCode: client.client_code || "-",
-        name: client.full_name || "-",
         purchaseDate:
           latestPurchase?.created_at || latestPackage?.created_at || null,
-        startDate: latestPackage?.starts_at || latestPackage?.created_at || null,
         expireDate: latestPackage?.expires_at || null,
-        totalSessions:
-          latestPackage?.total_sessions ?? latestPurchase?.session_count ?? 0,
-        usedSessions: latestPackage?.used_sessions ?? 0,
-        remainingSessions: latestPackage?.remaining_sessions ?? 0,
+        name: client.full_name || "-",
+        totalSessions,
+        usedSessions,
+        remainingSessions,
+        status,
         packageType:
           latestPackage?.package_name || latestPurchase?.plan_name || "-",
-        packageValue:
-          typeof latestPackage?.package_value === "number"
-            ? latestPackage.package_value
-            : typeof latestPurchase?.price === "number"
-            ? latestPurchase.price
-            : null,
-        amountPaid:
-          typeof latestPurchase?.amount_paid === "number"
-            ? latestPurchase.amount_paid
-            : typeof latestPurchase?.price === "number"
-            ? latestPurchase.price
-            : null,
-        balanceDue:
-          typeof latestPurchase?.balance_due === "number"
-            ? latestPurchase.balance_due
-            : null,
-        debtDeadline: latestPurchase?.debt_deadline || null,
-        purchaseType: latestPurchase?.purchase_type || "-",
-        status: client.status || "-",
+        packageValue,
+        amountPaid,
+        balanceDue,
+        purchaseType: getPurchaseTypeLabel(latestPurchase?.purchase_type || null),
         source: getClientSourceLabel(
           client.client_source,
           client.client_source_other
@@ -410,21 +577,19 @@ export default function AdminClientsPage() {
 
       return [
         row.clientCode,
-        row.name,
-        row.status,
-        row.packageType,
-        row.source,
-        row.purchaseType,
         formatDate(row.purchaseDate),
-        formatDate(row.startDate),
         formatDate(row.expireDate),
+        row.name,
         String(row.totalSessions),
         String(row.usedSessions),
         String(row.remainingSessions),
+        row.status,
+        row.packageType,
         formatMoney(row.packageValue),
         formatMoney(row.amountPaid),
         formatMoney(row.balanceDue),
-        getDebtDeadlineLabel(row.balanceDue, row.debtDeadline),
+        row.purchaseType,
+        row.source,
       ]
         .join(" ")
         .toLowerCase()
@@ -437,13 +602,9 @@ export default function AdminClientsPage() {
 
       let result = 0;
 
-      if (
-        sortKey === "purchaseDate" ||
-        sortKey === "startDate" ||
-        sortKey === "expireDate" ||
-        sortKey === "debtDeadline"
-      ) {
-        result = getTime(aValue as string | null) - getTime(bValue as string | null);
+      if (sortKey === "purchaseDate" || sortKey === "expireDate") {
+        result =
+          getTime(aValue as string | null) - getTime(bValue as string | null);
       } else if (
         sortKey === "totalSessions" ||
         sortKey === "usedSessions" ||
@@ -464,37 +625,24 @@ export default function AdminClientsPage() {
     });
   }, [tableRows, search, sortKey, sortDirection]);
 
-  const activeClients = tableRows.filter((row) => row.status === "active").length;
+  const activeClients = tableRows.filter(
+    (row) => row.status.toLowerCase() === "active"
+  ).length;
+
+  const totalSessions = tableRows.reduce(
+    (sum, row) => sum + row.totalSessions,
+    0
+  );
 
   const totalRemainingSessions = tableRows.reduce(
     (sum, row) => sum + row.remainingSessions,
     0
   );
 
-  const lowSessionClients = tableRows.filter(
-    (row) => row.remainingSessions > 0 && row.remainingSessions <= 10
-  ).length;
-
   const totalBalanceDue = tableRows.reduce(
     (sum, row) => sum + (row.balanceDue || 0),
     0
   );
-
-  const debtDueSoonClients = tableRows.filter((row) => {
-    if (!row.balanceDue || row.balanceDue <= 0) return false;
-
-    const daysLeft = getDaysUntil(row.debtDeadline);
-
-    return daysLeft !== null && daysLeft >= 0 && daysLeft <= 7;
-  }).length;
-
-  const overdueDebtClients = tableRows.filter((row) => {
-    if (!row.balanceDue || row.balanceDue <= 0) return false;
-
-    const daysLeft = getDaysUntil(row.debtDeadline);
-
-    return daysLeft !== null && daysLeft < 0;
-  }).length;
 
   useEffect(() => {
     async function protectClientsPage() {
@@ -542,7 +690,40 @@ export default function AdminClientsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-black p-3 text-white md:p-5">
+    <main className="fxa-scrollbar min-h-screen overflow-y-auto bg-black p-3 text-white md:p-5">
+      <style jsx global>{`
+        html,
+        body {
+          scrollbar-width: thin;
+          scrollbar-color: #facc15 #111111;
+        }
+
+        ::-webkit-scrollbar {
+          width: 12px;
+          height: 12px;
+        }
+
+        ::-webkit-scrollbar-track {
+          background: #111111;
+          border-radius: 999px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #facc15, #ca8a04);
+          border: 3px solid #111111;
+          border-radius: 999px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, #fde047, #facc15);
+        }
+
+        .fxa-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: #facc15 #111111;
+        }
+      `}</style>
+
       <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_30%),linear-gradient(135deg,_#050505,_#101010_45%,_#050505)] p-4">
         <div className="mx-auto max-w-[118rem]">
           <header className="mb-4 rounded-3xl border border-yellow-500/25 bg-black/50 p-5 shadow-2xl">
@@ -557,7 +738,7 @@ export default function AdminClientsPage() {
                 </h1>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Admin financial view with debt, due dates, and upcoming payment notices.
+                  Shows Số buổi, Buổi còn lại, Công nợ còn lại, and admin actions.
                 </p>
               </div>
 
@@ -579,16 +760,20 @@ export default function AdminClientsPage() {
             </div>
           </header>
 
-          <section className="mb-4 grid gap-3 md:grid-cols-7">
+          <section className="mb-4 grid gap-3 md:grid-cols-5">
             <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
-              <p className="text-xs font-normal uppercase text-gray-400">Total</p>
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Tổng khách
+              </p>
               <p className="mt-1 text-3xl font-semibold text-yellow-400">
                 {tableRows.length}
               </p>
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
-              <p className="text-xs font-normal uppercase text-gray-400">Active</p>
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Active
+              </p>
               <p className="mt-1 text-3xl font-semibold text-green-300">
                 {activeClients}
               </p>
@@ -596,7 +781,16 @@ export default function AdminClientsPage() {
 
             <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
               <p className="text-xs font-normal uppercase text-gray-400">
-                Sessions Left
+                Tổng số buổi
+              </p>
+              <p className="mt-1 text-3xl font-semibold text-cyan-300">
+                {totalSessions}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Buổi còn lại
               </p>
               <p className="mt-1 text-3xl font-semibold text-yellow-300">
                 {totalRemainingSessions}
@@ -605,35 +799,10 @@ export default function AdminClientsPage() {
 
             <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
               <p className="text-xs font-normal uppercase text-gray-400">
-                Low Sessions
+                Công nợ còn lại
               </p>
-              <p className="mt-1 text-3xl font-semibold text-orange-300">
-                {lowSessionClients}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
-              <p className="text-xs font-normal uppercase text-gray-400">Debt</p>
               <p className="mt-1 text-3xl font-semibold text-red-300">
                 {formatMoney(totalBalanceDue)}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
-              <p className="text-xs font-normal uppercase text-gray-400">
-                Due Soon
-              </p>
-              <p className="mt-1 text-3xl font-semibold text-orange-300">
-                {debtDueSoonClients}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
-              <p className="text-xs font-normal uppercase text-gray-400">
-                Overdue
-              </p>
-              <p className="mt-1 text-3xl font-semibold text-red-300">
-                {overdueDebtClients}
               </p>
             </div>
           </section>
@@ -648,7 +817,7 @@ export default function AdminClientsPage() {
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search code, client, package, debt, due date, source, status..."
+                  placeholder="Search mã khách hàng, tên khách, số buổi, công nợ, nguồn khách..."
                   className="w-full rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
                 />
               </div>
@@ -661,7 +830,9 @@ export default function AdminClientsPage() {
                 <div className="grid grid-cols-[1fr_74px] gap-2">
                   <select
                     value={sortKey}
-                    onChange={(event) => setSortKey(event.target.value as SortKey)}
+                    onChange={(event) =>
+                      setSortKey(event.target.value as SortKey)
+                    }
                     className="w-full rounded-xl border border-white/15 bg-black/70 px-3 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
                   >
                     {columns.map((column) => (
@@ -689,11 +860,15 @@ export default function AdminClientsPage() {
 
           {loading ? (
             <section className="rounded-2xl border border-white/10 bg-white/[0.06] p-8 text-center">
-              <p className="text-sm font-normal text-yellow-400">Loading clients...</p>
+              <p className="text-sm font-normal text-yellow-400">
+                Loading clients...
+              </p>
             </section>
           ) : filteredAndSortedRows.length === 0 ? (
             <section className="rounded-2xl border border-white/10 bg-white/[0.06] p-8 text-center">
-              <p className="text-sm font-normal text-yellow-400">No clients found.</p>
+              <p className="text-sm font-normal text-yellow-400">
+                No clients found.
+              </p>
             </section>
           ) : (
             <section className="overflow-hidden rounded-2xl border border-yellow-500/30 bg-black/65 shadow-2xl">
@@ -703,8 +878,8 @@ export default function AdminClientsPage() {
                 </p>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[1880px] table-fixed border-collapse text-left text-xs">
+              <div className="fxa-scrollbar overflow-x-auto">
+                <table className="w-full min-w-[1840px] table-fixed border-collapse text-left text-xs">
                   <thead>
                     <tr className="bg-yellow-400 text-black">
                       {columns.map((column) => (
@@ -741,7 +916,7 @@ export default function AdminClientsPage() {
                         </th>
                       ))}
 
-                      <th className="w-[90px] px-3 py-3 text-right text-xs font-semibold uppercase">
+                      <th className="w-[150px] px-3 py-3 text-right text-xs font-semibold uppercase">
                         Action
                       </th>
                     </tr>
@@ -768,23 +943,29 @@ export default function AdminClientsPage() {
                             extraClass = "text-white";
                           }
 
-                          if (column.key === "remainingSessions") {
-                            extraClass = getRemainingTextClass(row.remainingSessions);
+                          if (column.key === "totalSessions") {
+                            extraClass = "text-cyan-300";
                           }
 
-                          if (column.key === "packageValue" || column.key === "amountPaid") {
+                          if (column.key === "usedSessions") {
+                            extraClass = "text-blue-300";
+                          }
+
+                          if (column.key === "remainingSessions") {
+                            extraClass = getRemainingTextClass(
+                              row.remainingSessions
+                            );
+                          }
+
+                          if (
+                            column.key === "packageValue" ||
+                            column.key === "amountPaid"
+                          ) {
                             extraClass = "text-green-300";
                           }
 
                           if (column.key === "balanceDue") {
                             extraClass = getDebtTextClass(row.balanceDue);
-                          }
-
-                          if (column.key === "debtDeadline") {
-                            extraClass = getDebtDeadlineClass(
-                              row.balanceDue,
-                              row.debtDeadline
-                            );
                           }
 
                           return (
@@ -814,12 +995,23 @@ export default function AdminClientsPage() {
                         })}
 
                         <td className="px-3 py-3 text-right">
-                          <Link
-                            href={`/admin/clients/${row.id}`}
-                            className="rounded-md bg-yellow-400 px-3 py-1.5 text-xs font-semibold uppercase text-black transition hover:bg-yellow-300"
-                          >
-                            View
-                          </Link>
+                          <div className="flex justify-end gap-2">
+                            <Link
+                              href={`/admin/clients/${row.id}`}
+                              className="rounded-md bg-yellow-400 px-3 py-1.5 text-xs font-semibold uppercase text-black transition hover:bg-yellow-300"
+                            >
+                              View
+                            </Link>
+
+                            <button
+                              type="button"
+                              onClick={() => deleteClient(row.id, row.name)}
+                              disabled={deletingClientId === row.id}
+                              className="rounded-md border border-red-400 px-3 py-1.5 text-xs font-semibold uppercase text-red-300 transition hover:bg-red-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deletingClientId === row.id ? "..." : "Delete"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

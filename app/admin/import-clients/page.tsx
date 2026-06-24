@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../../../lib/supabaseClient";
 import { useRouter } from "next/navigation";
@@ -16,13 +16,21 @@ type PreviewRow = {
   fullName: string;
   purchaseDate: string | null;
   expireDate: string | null;
+  totalSessions: number;
   remainingSessions: number;
+  usedSessions: number;
   packageName: string;
   packageValue: number | null;
+  amountPaid: number | null;
+  balanceDue: number | null;
+  purchaseType: string | null;
   status: "active" | "inactive";
   email: string;
   phone: string;
   gender: string;
+  dateOfBirth: string | null;
+  clientSource: string | null;
+  clientSourceOther: string | null;
 };
 
 type ExistingClientRow = {
@@ -89,6 +97,19 @@ function cleanNumber(value: unknown, fallback = 0) {
   return Number.isNaN(numberValue) ? fallback : numberValue;
 }
 
+function cleanNullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (typeof value === "string") {
+    const cleaned = value.replace(/[$,\s]/g, "");
+    const numberValue = Number(cleaned);
+    return Number.isNaN(numberValue) ? null : numberValue;
+  }
+
+  const numberValue = Number(value);
+  return Number.isNaN(numberValue) ? null : numberValue;
+}
+
 function cleanDate(value: unknown) {
   if (!value) return null;
 
@@ -129,12 +150,13 @@ function cleanDate(value: unknown) {
   const slashParts = textValue.split("/");
 
   if (slashParts.length === 3) {
-    const day = Number(slashParts[0]);
-    const month = Number(slashParts[1]);
-    const year = Number(slashParts[2]);
+    const first = Number(slashParts[0]);
+    const second = Number(slashParts[1]);
+    const third = Number(slashParts[2]);
 
-    if (!Number.isNaN(day) && !Number.isNaN(month) && !Number.isNaN(year)) {
-      const date = new Date(year, month - 1, day, 12, 0, 0);
+    if (!Number.isNaN(first) && !Number.isNaN(second) && !Number.isNaN(third)) {
+      const year = third < 100 ? 2000 + third : third;
+      const date = new Date(year, second - 1, first, 12, 0, 0);
       return date.toISOString();
     }
   }
@@ -152,7 +174,8 @@ function cleanDate(value: unknown) {
         return date.toISOString();
       }
 
-      const date = new Date(third, second - 1, first, 12, 0, 0);
+      const year = third < 100 ? 2000 + third : third;
+      const date = new Date(year, second - 1, first, 12, 0, 0);
       return date.toISOString();
     }
   }
@@ -176,6 +199,15 @@ function formatDate(value: string | null) {
     month: "short",
     day: "numeric",
   });
+}
+
+function formatMoney(value: number | null) {
+  if (value === null || Number.isNaN(Number(value))) return "-";
+
+  return `$${Number(value).toLocaleString("en-CA", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function normalizeStatus(value: string): "active" | "inactive" {
@@ -220,6 +252,81 @@ function normalizePackageName(value: string) {
   if (!packageName) return "";
 
   return packageName;
+}
+
+function normalizePurchaseType(value: string) {
+  const cleanValue = value.trim().toLowerCase();
+
+  if (!cleanValue) return null;
+  if (cleanValue.includes("renew")) return "renew";
+  if (cleanValue.includes("new")) return "new";
+
+  return cleanValue;
+}
+
+function normalizeClientSource(value: string) {
+  const source = value.trim();
+
+  if (!source) {
+    return {
+      clientSource: null,
+      clientSourceOther: null,
+    };
+  }
+
+  const lowerSource = source.toLowerCase();
+
+  if (lowerSource.includes("google")) {
+    return {
+      clientSource: "google",
+      clientSourceOther: null,
+    };
+  }
+
+  if (lowerSource.includes("facebook")) {
+    return {
+      clientSource: "facebook",
+      clientSourceOther: null,
+    };
+  }
+
+  if (lowerSource.includes("instagram")) {
+    return {
+      clientSource: "instagram",
+      clientSourceOther: null,
+    };
+  }
+
+  if (lowerSource.includes("walk")) {
+    return {
+      clientSource: "direct_lead_walk_in",
+      clientSourceOther: null,
+    };
+  }
+
+  if (
+    lowerSource.includes("refer") ||
+    lowerSource.includes("referral") ||
+    lowerSource.includes("giới thiệu") ||
+    lowerSource.includes("gioi thieu")
+  ) {
+    return {
+      clientSource: "referral_lead",
+      clientSourceOther: source,
+    };
+  }
+
+  if (lowerSource.includes("coach")) {
+    return {
+      clientSource: "coach",
+      clientSourceOther: source,
+    };
+  }
+
+  return {
+    clientSource: "other",
+    clientSourceOther: source,
+  };
 }
 
 function getErrorMessage(error: unknown) {
@@ -283,28 +390,75 @@ function mapExcelRow(row: ExcelClientRow): PreviewRow {
     ])
   );
 
-  const remainingSessions = cleanNumber(
-    getCell(row, ["Số buổi", "So buoi", "remaining_sessions"]),
+  const totalSessions = cleanNumber(
+    getCell(row, ["Số buổi", "So buoi", "total_sessions"]),
     0
   );
+
+  const remainingSessions = cleanNumber(
+    getCell(row, [
+      "Buổi còn lại",
+      "Buoi con lai",
+      "Số buổi còn lại",
+      "So buoi con lai",
+      "remaining_sessions",
+    ]),
+    totalSessions
+  );
+
+  const usedSessions = Math.max(totalSessions - remainingSessions, 0);
 
   const packageName = normalizePackageName(
     cleanText(getCell(row, ["Loại gói", "Loai goi", "package_name"]))
   );
 
-  const packageValueRaw = getCell(row, [
-    "Giá trị hợp đồng",
-    "Gia tri hop dong",
-    "Giá trị hợ đồng",
-    "package_value",
-  ]);
+  const packageValue = cleanNullableNumber(
+    getCell(row, [
+      "Giá trị hợp đồng",
+      "Gia tri hop dong",
+      "Giá trị hợ đồng",
+      "package_value",
+    ])
+  );
 
-  const packageValue =
-    packageValueRaw === "" ||
-    packageValueRaw === null ||
-    packageValueRaw === undefined
-      ? null
-      : cleanNumber(packageValueRaw, 0);
+  const amountPaid = cleanNullableNumber(
+    getCell(row, [
+      "Đã thanh toán",
+      "Da thanh toán",
+      "Da thanh toan",
+      "amount_paid",
+    ])
+  );
+
+  const explicitBalanceDue = cleanNullableNumber(
+    getCell(row, [
+      "Công nợ còn lại",
+      "Cong no con lai",
+      "Công nợ",
+      "Cong no",
+      "balance_due",
+    ])
+  );
+
+  const balanceDue =
+    explicitBalanceDue !== null
+      ? explicitBalanceDue
+      : packageValue !== null && amountPaid !== null
+      ? Math.max(packageValue - amountPaid, 0)
+      : null;
+
+  const purchaseType = normalizePurchaseType(
+    cleanText(
+      getCell(row, [
+        "Gói tập (New/renew)",
+        "Gói tập",
+        "Goi tap",
+        "New/renew",
+        "New renew",
+        "purchase_type",
+      ])
+    )
+  );
 
   const status = normalizeStatus(
     cleanText(getCell(row, ["Trạng thái", "Trang thai", "status"]))
@@ -320,18 +474,48 @@ function mapExcelRow(row: ExcelClientRow): PreviewRow {
     cleanText(getCell(row, ["Giới tính", "Gioi tinh", "Gender", "gender"]))
   );
 
+  const dateOfBirth = cleanDate(
+    getCell(row, [
+      "Ngày tháng năm sinh",
+      "Ngay thang nam sinh",
+      "Năm tháng năm sinh",
+      "Nam thang nam sinh",
+      "date_of_birth",
+    ])
+  );
+
+  const sourceResult = normalizeClientSource(
+    cleanText(
+      getCell(row, [
+        "Nguồn khách",
+        "Nguon khach",
+        "Nguồn",
+        "Nguon",
+        "client_source",
+      ])
+    )
+  );
+
   return {
     clientCode,
     fullName,
     purchaseDate,
     expireDate,
+    totalSessions,
     remainingSessions,
+    usedSessions,
     packageName,
     packageValue,
+    amountPaid,
+    balanceDue,
+    purchaseType,
     status,
     email,
     phone,
     gender,
+    dateOfBirth,
+    clientSource: sourceResult.clientSource,
+    clientSourceOther: sourceResult.clientSourceOther,
   };
 }
 
@@ -343,6 +527,23 @@ export default function ImportClientsPage() {
   const [importing, setImporting] = useState(false);
   const [resultMessage, setResultMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+
+  const importSummary = useMemo(() => {
+    const totalClients = rows.length;
+    const totalSessions = rows.reduce((sum, row) => sum + row.totalSessions, 0);
+    const remainingSessions = rows.reduce(
+      (sum, row) => sum + row.remainingSessions,
+      0
+    );
+    const totalDebt = rows.reduce((sum, row) => sum + (row.balanceDue || 0), 0);
+
+    return {
+      totalClients,
+      totalSessions,
+      remainingSessions,
+      totalDebt,
+    };
+  }, [rows]);
 
   useEffect(() => {
     async function protectPage() {
@@ -407,6 +608,7 @@ export default function ImportClientsPage() {
           row.fullName ||
           row.email ||
           row.phone ||
+          row.totalSessions > 0 ||
           row.remainingSessions > 0 ||
           row.packageName
         );
@@ -483,14 +685,17 @@ export default function ImportClientsPage() {
       throw packageSearchError;
     }
 
-    const packageStatus = row.status === "active" ? "active" : "completed";
+    const packageStatus =
+      row.status === "active" && row.remainingSessions > 0
+        ? "active"
+        : "completed";
 
     const packagePayload = {
       client_id: clientId,
       package_name: row.packageName || null,
       package_value: row.packageValue,
-      total_sessions: null,
-      used_sessions: 0,
+      total_sessions: row.totalSessions,
+      used_sessions: row.usedSessions,
       remaining_sessions: row.remainingSessions,
       starts_at: row.purchaseDate,
       expires_at: row.expireDate,
@@ -534,14 +739,18 @@ export default function ImportClientsPage() {
       throw purchaseSearchError;
     }
 
-   const purchasePayload = {
-  client_id: clientId,
-  plan_name: row.packageName || null,
-  session_count: row.remainingSessions,
-  price: row.packageValue,
-  status: "paid",
-  created_at: row.purchaseDate,
-};
+    const purchasePayload = {
+      client_id: clientId,
+      plan_name: row.packageName || null,
+      session_count: row.totalSessions,
+      price: row.packageValue,
+      amount_paid: row.amountPaid,
+      balance_due: row.balanceDue,
+      debt_deadline: row.balanceDue && row.balanceDue > 0 ? row.expireDate : null,
+      purchase_type: row.purchaseType,
+      status: "paid",
+      created_at: row.purchaseDate || new Date().toISOString(),
+    };
 
     if (latestPurchase) {
       const purchaseRow = latestPurchase as ExistingPurchaseRow;
@@ -606,7 +815,10 @@ export default function ImportClientsPage() {
           email: row.email || null,
           phone: row.phone || null,
           gender: row.gender || null,
+          date_of_birth: row.dateOfBirth,
           status: row.status === "active" ? "active" : "inactive",
+          client_source: row.clientSource,
+          client_source_other: row.clientSourceOther,
         };
 
         if (existingClient) {
@@ -677,55 +889,127 @@ export default function ImportClientsPage() {
   if (checkingRole) {
     return (
       <main className="min-h-screen bg-black p-6 text-white">
-        <p className="font-black text-yellow-400">Checking admin access...</p>
+        <p className="text-sm font-semibold text-yellow-400">
+          Checking admin access...
+        </p>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-black p-6 text-white">
-      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+    <main className="fxa-scrollbar min-h-screen overflow-y-auto bg-black p-3 text-white md:p-5">
+      <style jsx global>{`
+        html,
+        body {
+          scrollbar-width: thin;
+          scrollbar-color: #facc15 #111111;
+        }
+
+        ::-webkit-scrollbar {
+          width: 12px;
+          height: 12px;
+        }
+
+        ::-webkit-scrollbar-track {
+          background: #111111;
+          border-radius: 999px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #facc15, #ca8a04);
+          border: 3px solid #111111;
+          border-radius: 999px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, #fde047, #facc15);
+        }
+
+        .fxa-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: #facc15 #111111;
+        }
+      `}</style>
+
+      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_30%),linear-gradient(135deg,_#050505,_#101010_45%,_#050505)] p-4 md:p-6">
         <div className="mx-auto max-w-7xl">
-          <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-sm font-black uppercase tracking-[0.35em] text-yellow-400">
-                FXA FITNESS
+          <header className="mb-5 rounded-3xl border border-yellow-500/25 bg-black/50 p-5 shadow-2xl">
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-[0.28em] text-yellow-400">
+                  FXA FITNESS
+                </p>
+
+                <h1 className="text-3xl font-semibold md:text-5xl">
+                  Import Excel
+                </h1>
+
+                <p className="mt-2 max-w-3xl text-sm font-normal leading-6 text-gray-400">
+                  Import client sessions, remaining sessions, package value, paid
+                  amount, and remaining debt from your Google Sheet export.
+                </p>
+              </div>
+
+              <Link
+                href="/admin/clients"
+                className="rounded-xl bg-yellow-400 px-4 py-2 text-center text-xs font-semibold uppercase text-black transition hover:bg-yellow-300"
+              >
+                Back To Clients
+              </Link>
+            </div>
+          </header>
+
+          <section className="mb-5 grid gap-3 md:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Rows Ready
               </p>
-
-              <h1 className="mt-2 text-4xl font-black text-white md:text-6xl">
-                Import Excel
-              </h1>
-
-              <p className="mt-3 text-gray-400">
-                Import Mã khách hàng, Ngày mua, Ngày hết hạn, Tên khách hàng,
-                Số buổi còn lại, Loại gói, Giá trị hợp đồng, Email, Số điện
-                thoại, and Giới tính.
+              <p className="mt-1 text-3xl font-semibold text-yellow-400">
+                {importSummary.totalClients}
               </p>
             </div>
 
-            <Link
-              href="/admin/clients"
-              className="rounded-xl bg-yellow-400 px-5 py-3 text-center font-black uppercase text-black transition hover:bg-yellow-300"
-            >
-              Back To Clients
-            </Link>
-          </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Total Sessions
+              </p>
+              <p className="mt-1 text-3xl font-semibold text-cyan-300">
+                {importSummary.totalSessions}
+              </p>
+            </div>
 
-          <section className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-6 shadow-2xl backdrop-blur">
-            <div className="mb-6">
-              <h2 className="text-2xl font-black text-white">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Remaining Sessions
+              </p>
+              <p className="mt-1 text-3xl font-semibold text-yellow-300">
+                {importSummary.remainingSessions}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Debt
+              </p>
+              <p className="mt-1 text-3xl font-semibold text-red-300">
+                {formatMoney(importSummary.totalDebt)}
+              </p>
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl backdrop-blur">
+            <div className="mb-5">
+              <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                Upload File
+              </p>
+
+              <h2 className="mt-1 text-2xl font-semibold text-white">
                 Upload Excel File
               </h2>
 
-              <p className="mt-2 text-sm text-gray-400">
-                This importer reads: Mã khách hàng, Ngày mua, Ngày hết hạn, Tên
-                khách hàng, Số buổi, Loại gói, Giá trị hợp đồng, Email, Số điện
-                thoại, Giới tính, and Trạng thái.
-              </p>
-
-              <p className="mt-2 text-sm font-bold text-yellow-300">
-                Important: Số buổi is saved as remaining sessions. Total
-                sessions is saved blank.
+              <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
+                Correct mapping: Số buổi → total sessions, Buổi còn lại →
+                remaining sessions, Công nợ còn lại → balance due.
               </p>
             </div>
 
@@ -733,53 +1017,79 @@ export default function ImportClientsPage() {
               type="file"
               accept=".xlsx,.xls,.csv"
               onChange={handleFileUpload}
-              className="w-full rounded-xl border border-white/20 bg-black/50 p-3 font-bold text-white file:mr-4 file:rounded-xl file:border-0 file:bg-yellow-400 file:px-4 file:py-2 file:font-black file:text-black hover:file:bg-yellow-300"
+              className="w-full rounded-xl border border-white/20 bg-black/50 p-3 text-sm font-semibold text-white file:mr-4 file:rounded-xl file:border-0 file:bg-yellow-400 file:px-4 file:py-2 file:font-semibold file:text-black hover:file:bg-yellow-300"
             />
 
             <button
               type="button"
               onClick={importRows}
               disabled={importing || rows.length === 0}
-              className="mt-5 w-full rounded-xl bg-yellow-400 p-3 font-black uppercase text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-5 w-full rounded-xl bg-yellow-400 p-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {importing ? "Importing..." : `Import ${rows.length} Rows`}
             </button>
 
             {resultMessage ? (
-              <p className="mt-5 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-4 font-bold text-yellow-300">
+              <p className="mt-5 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-4 text-sm font-normal text-yellow-100">
                 {resultMessage}
               </p>
             ) : null}
 
             {errorMessage ? (
-              <pre className="mt-5 whitespace-pre-wrap rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm font-bold text-red-200">
+              <pre className="mt-5 whitespace-pre-wrap rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm font-normal text-red-200">
                 {errorMessage}
               </pre>
             ) : null}
           </section>
 
           {rows.length > 0 ? (
-            <section className="mt-8 rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-6 shadow-2xl backdrop-blur">
-              <h2 className="mb-5 text-2xl font-black text-white">
-                Preview First 20 Rows
-              </h2>
+            <section className="mt-5 rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl backdrop-blur">
+              <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                    Preview
+                  </p>
 
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[1300px] border-collapse">
+                  <h2 className="mt-1 text-2xl font-semibold text-white">
+                    Preview First 20 Rows
+                  </h2>
+                </div>
+
+                <p className="text-sm font-normal text-gray-400">
+                  Showing {Math.min(rows.length, 20)} of {rows.length} rows.
+                </p>
+              </div>
+
+              <div className="fxa-scrollbar overflow-x-auto rounded-2xl border border-white/10">
+                <table className="w-full min-w-[1650px] border-collapse text-left text-xs">
                   <thead>
-                    <tr className="border-b border-yellow-500/30 text-left text-sm uppercase tracking-wide text-yellow-400">
-                      <th className="p-3">Mã khách hàng</th>
-                      <th className="p-3">Date of Purchase</th>
-                      <th className="p-3">Date Expire</th>
-                      <th className="p-3">Name</th>
-                      <th className="p-3">Remaining Sessions</th>
-                      <th className="p-3">Total Sessions</th>
-                      <th className="p-3">Package Type</th>
-                      <th className="p-3">Package Value</th>
-                      <th className="p-3">Email</th>
-                      <th className="p-3">Phone</th>
-                      <th className="p-3">Gender</th>
-                      <th className="p-3">Status</th>
+                    <tr className="bg-yellow-400 text-black">
+                      <th className="p-3 font-semibold uppercase">Mã KH</th>
+                      <th className="p-3 font-semibold uppercase">Ngày mua</th>
+                      <th className="p-3 font-semibold uppercase">Ngày hết hạn</th>
+                      <th className="p-3 font-semibold uppercase">Tên khách</th>
+                      <th className="p-3 text-right font-semibold uppercase">
+                        Số buổi
+                      </th>
+                      <th className="p-3 text-right font-semibold uppercase">
+                        Buổi còn lại
+                      </th>
+                      <th className="p-3 text-right font-semibold uppercase">
+                        Đã dùng
+                      </th>
+                      <th className="p-3 font-semibold uppercase">Trạng thái</th>
+                      <th className="p-3 font-semibold uppercase">Loại gói</th>
+                      <th className="p-3 text-right font-semibold uppercase">
+                        Giá trị HĐ
+                      </th>
+                      <th className="p-3 text-right font-semibold uppercase">
+                        Đã thanh toán
+                      </th>
+                      <th className="p-3 text-right font-semibold uppercase">
+                        Công nợ
+                      </th>
+                      <th className="p-3 font-semibold uppercase">Gói tập</th>
+                      <th className="p-3 font-semibold uppercase">Nguồn</th>
                     </tr>
                   </thead>
 
@@ -787,9 +1097,11 @@ export default function ImportClientsPage() {
                     {rows.slice(0, 20).map((row, index) => (
                       <tr
                         key={`${row.clientCode}-${row.fullName}-${index}`}
-                        className="border-b border-white/10"
+                        className={`border-b border-white/10 ${
+                          index % 2 === 0 ? "bg-[#101010]" : "bg-[#171717]"
+                        }`}
                       >
-                        <td className="p-3 text-gray-300">
+                        <td className="p-3 text-yellow-300">
                           {row.clientCode || "-"}
                         </td>
 
@@ -801,48 +1113,56 @@ export default function ImportClientsPage() {
                           {formatDate(row.expireDate)}
                         </td>
 
-                        <td className="p-3 font-bold text-white">
+                        <td className="p-3 font-semibold text-white">
                           {row.fullName || "-"}
                         </td>
 
-                        <td className="p-3 font-black text-yellow-400">
+                        <td className="p-3 text-right font-semibold text-cyan-300">
+                          {row.totalSessions}
+                        </td>
+
+                        <td className="p-3 text-right font-semibold text-yellow-300">
                           {row.remainingSessions}
                         </td>
 
-                        <td className="p-3 text-gray-300">-</td>
+                        <td className="p-3 text-right font-semibold text-blue-300">
+                          {row.usedSessions}
+                        </td>
+
+                        <td className="p-3">
+                          <span
+                            className={`rounded-md border px-2 py-1 text-xs font-normal uppercase ${
+                              row.status === "active"
+                                ? "border-green-400/40 bg-green-400/10 text-green-300"
+                                : "border-red-400/40 bg-red-400/10 text-red-300"
+                            }`}
+                          >
+                            {row.status}
+                          </span>
+                        </td>
 
                         <td className="p-3 text-gray-300">
                           {row.packageName || "-"}
                         </td>
 
-                        <td className="p-3 text-gray-300">
-                          {row.packageValue === null
-                            ? "-"
-                            : `$${Number(row.packageValue).toFixed(2)}`}
+                        <td className="p-3 text-right text-green-300">
+                          {formatMoney(row.packageValue)}
+                        </td>
+
+                        <td className="p-3 text-right text-green-300">
+                          {formatMoney(row.amountPaid)}
+                        </td>
+
+                        <td className="p-3 text-right text-red-300">
+                          {formatMoney(row.balanceDue)}
                         </td>
 
                         <td className="p-3 text-gray-300">
-                          {row.email || "-"}
+                          {row.purchaseType || "-"}
                         </td>
 
                         <td className="p-3 text-gray-300">
-                          {row.phone || "-"}
-                        </td>
-
-                        <td className="p-3 text-gray-300">
-                          {row.gender || "-"}
-                        </td>
-
-                        <td className="p-3">
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-black uppercase ${
-                              row.status === "active"
-                                ? "bg-green-200 text-green-900"
-                                : "bg-red-200 text-red-900"
-                            }`}
-                          >
-                            {row.status}
-                          </span>
+                          {row.clientSourceOther || row.clientSource || "-"}
                         </td>
                       </tr>
                     ))}
