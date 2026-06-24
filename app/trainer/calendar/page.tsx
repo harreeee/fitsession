@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
@@ -12,7 +12,17 @@ type CalendarConnection = {
   updated_at: string | null;
 };
 
-export default function TrainerCalendarPage() {
+function CalendarLoadingFallback() {
+  return (
+    <main className="min-h-screen bg-black p-6 text-white">
+      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+        <p className="font-black text-yellow-400">Loading calendar...</p>
+      </div>
+    </main>
+  );
+}
+
+function TrainerCalendarContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -187,5 +197,13 @@ export default function TrainerCalendarPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function TrainerCalendarPage() {
+  return (
+    <Suspense fallback={<CalendarLoadingFallback />}>
+      <TrainerCalendarContent />
+    </Suspense>
   );
 }
