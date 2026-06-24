@@ -1,157 +1,206 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
 
-type TrainerSessionHistory = {
+type StaffRole = "trainer" | "nutrition_coach";
+
+type StaffRow = {
   id: string;
-  client_id: string;
-  client_name: string;
-  client_email: string | null;
-  status: string;
-  message: string | null;
-  remaining_after: number | null;
-  scanned_at: string;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+  role: string | null;
+  created_at: string | null;
 };
 
-type StaffMember = {
+type SessionHistoryRow = {
   id: string;
-  email: string | null;
-  full_name: string | null;
-  phone: string | null;
-  role: string;
-  created_at: string;
-  total_sessions_this_month: number;
-  recent_session_history: TrainerSessionHistory[];
+  trainer_id: string | null;
+  created_at: string | null;
 };
+
+type StaffTableRow = {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: StaffRole;
+  totalSessions: number;
+  monthlySessions: number;
+  joinedDate: string | null;
+};
+
+type Column = {
+  key:
+    | "name"
+    | "email"
+    | "phone"
+    | "role"
+    | "totalSessions"
+    | "monthlySessions"
+    | "joinedDate";
+  label: string;
+  width: string;
+  align?: "left" | "right" | "center";
+};
+
+const columns: Column[] = [
+  { key: "name", label: "Name", width: "w-[220px]" },
+  { key: "email", label: "Email", width: "w-[260px]" },
+  { key: "phone", label: "Phone", width: "w-[150px]" },
+  { key: "role", label: "Role", width: "w-[170px]" },
+  { key: "totalSessions", label: "Total", width: "w-[110px]", align: "right" },
+  {
+    key: "monthlySessions",
+    label: "This Month",
+    width: "w-[130px]",
+    align: "right",
+  },
+  { key: "joinedDate", label: "Joined", width: "w-[130px]" },
+];
+
+function formatDate(value: string | null) {
+  if (!value) return "-";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleDateString("en-CA", {
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
+function getTime(value: string | null) {
+  if (!value) return 0;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return 0;
+
+  return date.getTime();
+}
+
+function getCurrentMonthStartIso() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+}
 
 function getRoleLabel(role: string | null) {
-  if (role === "admin") return "Admin";
   if (role === "trainer") return "Trainer";
   if (role === "nutrition_coach") return "Nutrition Coach";
-  if (role === "client") return "Client";
-  return "Unknown";
+  return "-";
 }
 
 function getRoleBadgeClass(role: string | null) {
-  if (role === "nutrition_coach") {
-    return "bg-green-400 text-black";
-  }
-
   if (role === "trainer") {
-    return "bg-yellow-400 text-black";
+    return "border-yellow-400/40 bg-yellow-400/10 text-yellow-300";
   }
 
-  return "bg-gray-400 text-black";
+  if (role === "nutrition_coach") {
+    return "border-green-400/40 bg-green-400/10 text-green-300";
+  }
+
+  return "border-gray-400/40 bg-gray-400/10 text-gray-300";
 }
 
 export default function AdminTrainersPage() {
   const router = useRouter();
 
-  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
-  const [expandedStaffId, setExpandedStaffId] = useState<string | null>(null);
+  const [staff, setStaff] = useState<StaffRow[]>([]);
+  const [sessions, setSessions] = useState<SessionHistoryRow[]>([]);
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
-  const [newStaffRole, setNewStaffRole] = useState("trainer");
+  const [role, setRole] = useState<StaffRole>("trainer");
 
   const [checkingRole, setCheckingRole] = useState(true);
+  const [checkingMessage, setCheckingMessage] = useState(
+    "Checking admin access..."
+  );
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
+  const [addingStaff, setAddingStaff] = useState(false);
 
-  async function getAccessToken() {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    return session?.access_token || null;
-  }
-
-  async function fetchStaffMembers() {
+  async function fetchStaffPageData() {
     setLoading(true);
-    setMessage("");
 
-    const token = await getAccessToken();
+    const [staffResult, sessionResult] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, full_name, email, phone, role, created_at")
+        .in("role", ["trainer", "nutrition_coach"])
+        .order("created_at", { ascending: false }),
 
-    if (!token) {
-      router.push("/login");
-      return;
-    }
+      supabase
+        .from("session_history")
+        .select("id, trainer_id, created_at")
+        .order("created_at", { ascending: false }),
+    ]);
 
-    const response = await fetch("/api/admin/trainers", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const result: { trainers?: StaffMember[]; error?: string } =
-      await response.json();
-
-    if (!response.ok) {
-      setMessage(result.error || "Could not load staff members.");
+    if (staffResult.error) {
+      alert(staffResult.error.message);
       setLoading(false);
       return;
     }
 
-    setStaffMembers(result.trainers || []);
+    if (sessionResult.error) {
+      console.error(sessionResult.error.message);
+      setSessions([]);
+    } else {
+      setSessions((sessionResult.data || []) as SessionHistoryRow[]);
+    }
+
+    setStaff((staffResult.data || []) as StaffRow[]);
     setLoading(false);
   }
 
-  async function handleAddStaff(event: FormEvent<HTMLFormElement>) {
+  async function addStaffMember(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!fullName.trim()) {
-      setMessage("Full name is required.");
+      alert("Full name is required.");
       return;
     }
 
     if (!email.trim()) {
-      setMessage("Email is required.");
+      alert("Email is required.");
       return;
     }
 
-    if (!password || password.length < 6) {
-      setMessage("Temporary password must be at least 6 characters.");
+    if (!password.trim()) {
+      alert("Temporary password is required.");
       return;
     }
 
-    setSaving(true);
-    setMessage("");
+    setAddingStaff(true);
 
-    const token = await getAccessToken();
-
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-
-    const response = await fetch("/api/admin/trainers", {
+    const response = await fetch("/api/admin/create-staff", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         full_name: fullName.trim(),
-        email: email.trim().toLowerCase(),
-        phone: phone.trim(),
-        password,
-        role: newStaffRole,
+        email: email.trim(),
+        phone: phone.trim() || null,
+        password: password.trim(),
+        role,
       }),
     });
 
-    const result: { error?: string } = await response.json();
-    console.log("Create staff response:", response.status, result);
+    const result = await response.json().catch(() => null);
 
     if (!response.ok) {
-      setMessage(result.error || "Could not add staff member.");
-      setSaving(false);
+      alert(result?.error || "Could not add staff member.");
+      setAddingStaff(false);
       return;
     }
 
@@ -159,77 +208,109 @@ export default function AdminTrainersPage() {
     setEmail("");
     setPhone("");
     setPassword("");
-    setNewStaffRole("trainer");
+    setRole("trainer");
 
-    setMessage(`${getRoleLabel(newStaffRole)} added successfully.`);
-    setSaving(false);
-    await fetchStaffMembers();
+    alert("Staff member added.");
+    await fetchStaffPageData();
+    setAddingStaff(false);
   }
 
-  async function handleRemoveStaff(staffId: string, staffName: string) {
+  async function updateStaffRole(staffId: string, nextRole: StaffRole) {
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        role: nextRole,
+      })
+      .eq("id", staffId);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await fetchStaffPageData();
+  }
+
+  async function deleteStaff(staffId: string) {
     const confirmed = window.confirm(
-      `Remove staff access for ${staffName}? Old session history will stay saved.`
+      "Remove this staff profile? This removes the profile row only."
     );
 
     if (!confirmed) return;
 
-    setMessage("");
+    const { error } = await supabase.from("profiles").delete().eq("id", staffId);
 
-    const token = await getAccessToken();
-
-    if (!token) {
-      router.push("/login");
+    if (error) {
+      alert(error.message);
       return;
     }
 
-    const response = await fetch(`/api/admin/trainers?id=${staffId}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const result: { error?: string } = await response.json();
-
-    if (!response.ok) {
-      setMessage(result.error || "Could not remove staff access.");
-      return;
-    }
-
-    setMessage("Staff access removed.");
-    await fetchStaffMembers();
+    await fetchStaffPageData();
   }
 
-  function formatDateTime(value: string) {
-    const date = new Date(value);
+  const tableRows = useMemo((): StaffTableRow[] => {
+  const monthStart = getCurrentMonthStartIso();
 
-    if (Number.isNaN(date.getTime())) return "-";
+  const rows: StaffTableRow[] = staff.map((staffMember) => {
+    const staffSessions = sessions.filter(
+      (session) => session.trainer_id === staffMember.id
+    );
 
-    return date.toLocaleString("en-CA", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
+    const monthlySessions = staffSessions.filter(
+      (session) => getTime(session.created_at) >= getTime(monthStart)
+    );
+
+    return {
+      id: staffMember.id,
+      name: staffMember.full_name || "-",
+      email: staffMember.email || "-",
+      phone: staffMember.phone || "-",
+      role:
+        staffMember.role === "nutrition_coach"
+          ? "nutrition_coach"
+          : "trainer",
+      totalSessions: staffSessions.length,
+      monthlySessions: monthlySessions.length,
+      joinedDate: staffMember.created_at,
+    };
+  });
+
+  return rows.sort((a, b) => a.name.localeCompare(b.name));
+}, [staff, sessions]);
+
+  const trainerCount = tableRows.filter((row) => row.role === "trainer").length;
+
+  const nutritionCoachCount = tableRows.filter(
+    (row) => row.role === "nutrition_coach"
+  ).length;
+
+  const totalSessions = tableRows.reduce(
+    (sum, row) => sum + row.totalSessions,
+    0
+  );
+
+  const totalMonthlySessions = tableRows.reduce(
+    (sum, row) => sum + row.monthlySessions,
+    0
+  );
 
   useEffect(() => {
     async function protectPage() {
-      const { user, role } = await getCurrentUserRole();
+      const { user, role: currentRole } = await getCurrentUserRole();
 
       if (!user) {
+        setCheckingMessage("Redirecting to login...");
         router.push("/login");
         return;
       }
 
-      if (role !== "admin") {
-        if (role === "trainer" || role === "nutrition_coach") {
+      if (currentRole !== "admin") {
+        if (currentRole === "trainer" || currentRole === "nutrition_coach") {
           router.push("/trainer/scan");
           return;
         }
 
-        if (role === "client") {
+        if (currentRole === "client") {
           router.push("/client");
           return;
         }
@@ -240,299 +321,289 @@ export default function AdminTrainersPage() {
       }
 
       setCheckingRole(false);
-      await fetchStaffMembers();
+      await fetchStaffPageData();
     }
 
     protectPage();
   }, [router]);
 
-  const trainerCount = staffMembers.filter(
-    (staff) => staff.role === "trainer"
-  ).length;
-
-  const nutritionCoachCount = staffMembers.filter(
-    (staff) => staff.role === "nutrition_coach"
-  ).length;
-
   if (checkingRole) {
     return (
       <main className="min-h-screen bg-black p-6 text-white">
-        <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-          <p className="font-black text-yellow-400">Checking admin access...</p>
+        <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+          <p className="text-sm font-semibold text-yellow-400">
+            {checkingMessage}
+          </p>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-black p-4 text-white md:p-6">
-      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
-        <div className="mx-auto max-w-6xl">
-          <header className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="mb-2 text-xs font-black uppercase tracking-[0.45em] text-yellow-400">
-                FXA FITNESS
-              </p>
+    <main className="min-h-screen bg-black p-3 text-white md:p-5">
+      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_30%),linear-gradient(135deg,_#050505,_#101010_45%,_#050505)] p-4">
+        <div className="mx-auto max-w-[108rem]">
+          <header className="mb-4 rounded-3xl border border-yellow-500/25 bg-black/50 p-5 shadow-2xl">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-[0.28em] text-yellow-400">
+                  FXA FITNESS
+                </p>
 
-              <h1 className="text-4xl font-black tracking-tight md:text-6xl">
-                Staff Management
-              </h1>
+                <h1 className="text-3xl font-semibold md:text-5xl">
+                  Staff Management
+                </h1>
 
-              <p className="mt-3 text-sm font-medium text-gray-400 md:text-base">
-                Add trainers and nutrition coaches, view contact info, monthly
-                sessions, and recent session history.
-              </p>
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Add trainers and nutrition coaches, view contact info, and
+                  track session activity.
+                </p>
+              </div>
+
+              <Link
+                href="/admin"
+                className="rounded-xl bg-yellow-400 px-4 py-2 text-center text-xs font-semibold uppercase text-black transition hover:bg-yellow-300"
+              >
+                Back to Admin
+              </Link>
             </div>
-
-            <Link
-              href="/admin"
-              className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
-            >
-              Back to Admin
-            </Link>
           </header>
 
-          <section className="mb-8 grid gap-4 md:grid-cols-3">
-            <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-xl backdrop-blur">
-              <p className="text-xs font-black uppercase tracking-widest text-gray-400">
+          <section className="mb-4 grid gap-3 md:grid-cols-5">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
                 Total Staff
               </p>
-
-              <p className="mt-3 text-5xl font-black text-yellow-400">
-                {staffMembers.length}
+              <p className="mt-1 text-3xl font-semibold text-yellow-400">
+                {tableRows.length}
               </p>
             </div>
 
-            <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-xl backdrop-blur">
-              <p className="text-xs font-black uppercase tracking-widest text-gray-400">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
                 Trainers
               </p>
-
-              <p className="mt-3 text-5xl font-black text-yellow-400">
+              <p className="mt-1 text-3xl font-semibold text-yellow-300">
                 {trainerCount}
               </p>
             </div>
 
-            <div className="rounded-3xl border border-green-500/30 bg-white/[0.07] p-5 text-center shadow-xl backdrop-blur">
-              <p className="text-xs font-black uppercase tracking-widest text-gray-400">
-                Nutrition Coaches
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Nutrition
               </p>
-
-              <p className="mt-3 text-5xl font-black text-green-300">
+              <p className="mt-1 text-3xl font-semibold text-green-300">
                 {nutritionCoachCount}
               </p>
             </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
+                Sessions
+              </p>
+              <p className="mt-1 text-3xl font-semibold text-yellow-300">
+                {totalSessions}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+              <p className="text-xs font-normal uppercase text-gray-400">
+                This Month
+              </p>
+              <p className="mt-1 text-3xl font-semibold text-orange-300">
+                {totalMonthlySessions}
+              </p>
+            </div>
           </section>
 
-          {message ? (
-            <div className="mb-6 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-4 text-sm font-bold text-yellow-300">
-              {message}
-            </div>
-          ) : null}
+          <section className="mb-4 rounded-2xl border border-white/10 bg-white/[0.06] p-5">
+            <h2 className="text-2xl font-semibold text-yellow-400">
+              Add Staff Member
+            </h2>
 
-          <section className="mb-8 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-7">
-            <h2 className="text-2xl font-black">Add Staff Member</h2>
-
-            <p className="mt-2 text-sm font-medium text-gray-400">
-              Choose whether this account is a Trainer or Nutrition Coach.
-              Nutrition coaches can use the scanner and access client info after
-              you update route permissions.
+            <p className="mt-1 text-sm font-normal text-gray-400">
+              Create trainer or nutrition coach access.
             </p>
 
-            <form
-              onSubmit={handleAddStaff}
-              className="mt-5 grid gap-4 md:grid-cols-6"
-            >
-              <input
-                value={fullName}
-                onChange={(event) => setFullName(event.target.value)}
-                required
-                placeholder="Full name"
-                className="rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400 md:col-span-2"
-              />
+            <form onSubmit={addStaffMember} className="mt-4">
+              <div className="grid gap-3 lg:grid-cols-[1.2fr_1.2fr_0.8fr_0.75fr]">
+                <input
+                  value={fullName}
+                  onChange={(event) => setFullName(event.target.value)}
+                  placeholder="Full name"
+                  className="w-full rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
 
-              <input
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                required
-                type="email"
-                placeholder="Email"
-                className="rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400 md:col-span-2"
-              />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="Email"
+                  className="w-full rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
 
-              <input
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                placeholder="Phone"
-                className="rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
-              />
+                <input
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="Phone"
+                  className="w-full rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
 
-              <select
-                value={newStaffRole}
-                onChange={(event) => setNewStaffRole(event.target.value)}
-                className="rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none focus:border-yellow-400"
-              >
-                <option value="trainer">Trainer</option>
-                <option value="nutrition_coach">Nutrition Coach</option>
-              </select>
+                <select
+                  value={role}
+                  onChange={(event) => setRole(event.target.value as StaffRole)}
+                  className="w-full rounded-xl border border-white/15 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-400"
+                >
+                  <option value="trainer" className="bg-white text-black">
+                    Trainer
+                  </option>
+                  <option value="nutrition_coach" className="bg-white text-black">
+                    Nutrition Coach
+                  </option>
+                </select>
+              </div>
 
-              <input
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-                minLength={6}
-                type="password"
-                placeholder="Temporary password"
-                className="rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-bold text-white outline-none placeholder:text-gray-500 focus:border-yellow-400 md:col-span-4"
-              />
+              <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_260px]">
+                <input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Temporary password"
+                  className="w-full rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
 
-              <button
-                disabled={saving}
-                className="rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-2"
-              >
-                {saving ? "Adding..." : `Add ${getRoleLabel(newStaffRole)}`}
-              </button>
+                <button
+                  type="submit"
+                  disabled={addingStaff}
+                  className="rounded-xl bg-yellow-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                >
+                  {addingStaff
+                    ? "Adding..."
+                    : role === "nutrition_coach"
+                    ? "Add Nutrition Coach"
+                    : "Add Trainer"}
+                </button>
+              </div>
             </form>
           </section>
 
-          <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-7">
-            <div className="mb-5 flex items-center justify-between gap-4">
-              <h2 className="text-2xl font-black">Current Staff</h2>
-
-              <p className="rounded-full border border-yellow-500/30 px-4 py-2 text-sm font-black text-yellow-400">
-                {staffMembers.length} total
+          {loading ? (
+            <section className="rounded-2xl border border-white/10 bg-white/[0.06] p-8 text-center">
+              <p className="text-sm font-normal text-yellow-400">
+                Loading staff...
               </p>
-            </div>
-
-            {loading ? (
-              <p className="font-black text-yellow-400">Loading staff...</p>
-            ) : staffMembers.length === 0 ? (
-              <p className="text-sm font-medium text-gray-400">
-                No staff members found yet.
+            </section>
+          ) : tableRows.length === 0 ? (
+            <section className="rounded-2xl border border-white/10 bg-white/[0.06] p-8 text-center">
+              <p className="text-sm font-normal text-yellow-400">
+                No staff found.
               </p>
-            ) : (
-              <div className="space-y-4">
-                {staffMembers.map((staff) => {
-                  const isExpanded = expandedStaffId === staff.id;
+            </section>
+          ) : (
+            <section className="overflow-hidden rounded-2xl border border-yellow-500/30 bg-black/65 shadow-2xl">
+              <div className="border-b border-yellow-500/30 bg-black px-4 py-3">
+                <p className="text-xs font-normal uppercase tracking-widest text-yellow-400">
+                  Showing {tableRows.length} staff
+                </p>
+              </div>
 
-                  return (
-                    <div
-                      key={staff.id}
-                      className="rounded-[2rem] border border-yellow-500/20 bg-black/40 p-4"
-                    >
-                      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-3">
-                            <p className="text-xl font-black">
-                              {staff.full_name || "Unnamed Staff"}
-                            </p>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1160px] table-fixed border-collapse text-left text-xs">
+                  <thead>
+                    <tr className="bg-yellow-400 text-black">
+                      {columns.map((column) => (
+                        <th
+                          key={column.key}
+                          className={`${column.width} border-r border-black/35 px-3 py-3 text-xs font-semibold uppercase last:border-r-0 ${
+                            column.align === "right"
+                              ? "text-right"
+                              : column.align === "center"
+                              ? "text-center"
+                              : "text-left"
+                          }`}
+                        >
+                          {column.label}
+                        </th>
+                      ))}
 
-                            <span
-                              className={`rounded-full px-3 py-1 text-xs font-black uppercase tracking-wide ${getRoleBadgeClass(
-                                staff.role
-                              )}`}
-                            >
-                              {getRoleLabel(staff.role)}
-                            </span>
-                          </div>
+                      <th className="w-[170px] px-3 py-3 text-right text-xs font-semibold uppercase">
+                        Action
+                      </th>
+                    </tr>
+                  </thead>
 
-                          <div className="mt-3 grid gap-2 text-sm font-bold text-gray-400 md:grid-cols-2">
-                            <p>Email: {staff.email || "No email saved"}</p>
-                            <p>Phone: {staff.phone || "No phone saved"}</p>
-                            <p>
-                              Added:{" "}
-                              {staff.created_at
-                                ? new Date(staff.created_at).toLocaleDateString()
-                                : "Unknown"}
-                            </p>
-                            <p className="text-yellow-400">
-                              This Month:{" "}
-                              {staff.total_sessions_this_month} sessions
-                            </p>
-                          </div>
-                        </div>
+                  <tbody>
+                    {tableRows.map((row, index) => (
+                      <tr
+                        key={row.id}
+                        className={`border-b border-white/10 ${
+                          index % 2 === 0 ? "bg-[#101010]" : "bg-[#171717]"
+                        } hover:bg-yellow-400/10`}
+                      >
+                        <td className="border-r border-white/15 px-3 py-3 text-xs font-normal text-white">
+                          <span className="block truncate">{row.name}</span>
+                        </td>
 
-                        <div className="flex flex-col gap-2 md:min-w-44">
-                          <button
-                            onClick={() =>
-                              setExpandedStaffId(isExpanded ? null : staff.id)
-                            }
-                            className="rounded-2xl bg-yellow-400 px-4 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300"
-                          >
-                            {isExpanded ? "Hide History" : "View History"}
-                          </button>
+                        <td className="border-r border-white/15 px-3 py-3 text-xs font-normal text-gray-200">
+                          <span className="block truncate">{row.email}</span>
+                        </td>
 
-                          <button
-                            onClick={() =>
-                              handleRemoveStaff(
-                                staff.id,
-                                staff.full_name ||
-                                  staff.email ||
-                                  getRoleLabel(staff.role)
+                        <td className="border-r border-white/15 px-3 py-3 text-xs font-normal text-gray-200">
+                          <span className="block truncate">{row.phone}</span>
+                        </td>
+
+                        <td className="border-r border-white/15 px-3 py-3">
+                          <select
+                            value={row.role}
+                            onChange={(event) =>
+                              updateStaffRole(
+                                row.id,
+                                event.target.value as StaffRole
                               )
                             }
-                            className="rounded-2xl border border-red-400 px-4 py-3 text-sm font-black uppercase tracking-wide text-red-300 transition hover:bg-red-400 hover:text-black"
+                            className={`w-full rounded-md border px-2 py-1 text-xs font-normal outline-none ${getRoleBadgeClass(
+                              row.role
+                            )}`}
                           >
-                            Remove Access
+                            <option value="trainer" className="bg-white text-black">
+                              Trainer
+                            </option>
+                            <option
+                              value="nutrition_coach"
+                              className="bg-white text-black"
+                            >
+                              Nutrition Coach
+                            </option>
+                          </select>
+                        </td>
+
+                        <td className="border-r border-white/15 px-3 py-3 text-right text-xs font-normal text-yellow-300">
+                          {row.totalSessions}
+                        </td>
+
+                        <td className="border-r border-white/15 px-3 py-3 text-right text-xs font-normal text-orange-300">
+                          {row.monthlySessions}
+                        </td>
+
+                        <td className="border-r border-white/15 px-3 py-3 text-xs font-normal text-gray-200">
+                          {formatDate(row.joinedDate)}
+                        </td>
+
+                        <td className="px-3 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => deleteStaff(row.id)}
+                            className="rounded-md border border-red-400/50 px-3 py-1.5 text-xs font-semibold uppercase text-red-300 transition hover:bg-red-400 hover:text-black"
+                          >
+                            Remove
                           </button>
-                        </div>
-                      </div>
-
-                      {isExpanded ? (
-                        <div className="mt-5 rounded-2xl border border-yellow-500/20 bg-black/50 p-4">
-                          <h3 className="mb-4 text-lg font-black text-yellow-400">
-                            Recent Session History
-                          </h3>
-
-                          {staff.recent_session_history.length === 0 ? (
-                            <p className="text-sm font-medium text-gray-400">
-                              No recent session history for this staff member.
-                            </p>
-                          ) : (
-                            <div className="space-y-3">
-                              {staff.recent_session_history.map((log) => (
-                                <div
-                                  key={log.id}
-                                  className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"
-                                >
-                                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                    <div>
-                                      <p className="font-black">
-                                        {log.client_name}
-                                      </p>
-
-                                      <p className="text-xs font-bold text-gray-500">
-                                        {log.client_email || "No client email"}
-                                      </p>
-                                    </div>
-
-                                    <p className="text-sm font-black text-yellow-400">
-                                      {formatDateTime(log.scanned_at)}
-                                    </p>
-                                  </div>
-
-                                  <div className="mt-3 grid gap-2 text-sm font-bold text-gray-400 md:grid-cols-3">
-                                    <p>Status: {log.status}</p>
-
-                                    <p>
-                                      Remaining After:{" "}
-                                      {log.remaining_after ?? "N/A"}
-                                    </p>
-
-                                    <p>{log.message || "Session scanned"}</p>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            )}
-          </section>
+            </section>
+          )}
         </div>
       </div>
     </main>

@@ -1,23 +1,75 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
+import { createClient } from "@supabase/supabase-js";
 
-type ActivateBody = {
-  email?: string;
-  code?: string;
-  password?: string;
+type ClientRow = {
+  id: string;
+  full_name: string;
+  email: string | null;
+  profile_id: string | null;
+  activation_code: string | null;
 };
+
+type ProfileRow = {
+  id: string;
+  email: string | null;
+  full_name: string | null;
+  role: string | null;
+};
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function normalizeCode(value: string | null | undefined) {
+  return String(value || "").trim();
+}
+
+function getCreateUserErrorMessage(message: string) {
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    lowerMessage.includes("already") ||
+    lowerMessage.includes("registered") ||
+    lowerMessage.includes("exists")
+  ) {
+    return "This email already has an account. Please use client login or ask admin to check this client profile.";
+  }
+
+  return message;
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as ActivateBody;
-
-    const email = body.email?.trim().toLowerCase();
-    const code = body.code?.trim();
-    const password = body.password || "";
-
-    if (!email || !code || !password) {
+    if (!supabaseUrl || !serviceRoleKey) {
       return NextResponse.json(
-        { error: "Email, authorization code, and password are required." },
+        { error: "Missing Supabase server environment variables." },
+        { status: 500 }
+      );
+    }
+
+    const body = (await request.json()) as {
+      email?: string;
+      code?: string;
+      password?: string;
+    };
+
+    const email = normalizeEmail(body.email || "");
+    const code = normalizeCode(body.code);
+    const password = String(body.password || "");
+
+    if (!email) {
+      return NextResponse.json(
+        { error: "Email is required." },
+        { status: 400 }
+      );
+    }
+
+    if (!code) {
+      return NextResponse.json(
+        { error: "Authorization code is required." },
         { status: 400 }
       );
     }
@@ -29,116 +81,171 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data: loginCode, error: loginCodeError } = await supabaseAdmin
-      .from("client_login_codes")
-      .select("id, client_id, email, code, used, expires_at")
-      .eq("email", email)
-      .eq("code", code)
-      .eq("used", false)
-      .maybeSingle();
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
 
-    if (loginCodeError) {
+    const { data: matchingClients, error: clientsError } = await supabaseAdmin
+      .from("clients")
+      .select("id, full_name, email, profile_id, activation_code")
+      .ilike("email", email)
+      .eq("activation_code", code)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (clientsError) {
       return NextResponse.json(
-        { error: loginCodeError.message },
+        { error: clientsError.message },
         { status: 500 }
       );
     }
 
-    let clientId: string | null = loginCode?.client_id || null;
+    const cleanClient = ((matchingClients || [])[0] || null) as ClientRow | null;
 
-    if (loginCode?.expires_at && new Date(loginCode.expires_at) < new Date()) {
-      return NextResponse.json(
-        { error: "This activation code has expired. Please ask admin for a new code." },
-        { status: 400 }
-      );
-    }
-
-    if (!clientId) {
-      const { data: fallbackClient, error: fallbackError } = await supabaseAdmin
+    if (!cleanClient) {
+      const { data: emailClients, error: emailCheckError } = await supabaseAdmin
         .from("clients")
-        .select("id")
-        .eq("email", email)
-        .eq("authorization_code", code)
-        .maybeSingle();
+        .select("id, email, activation_code")
+        .ilike("email", email)
+        .limit(5);
 
-      if (fallbackError) {
+      if (emailCheckError) {
         return NextResponse.json(
-          { error: fallbackError.message },
+          { error: emailCheckError.message },
           { status: 500 }
         );
       }
 
-      clientId = fallbackClient?.id || null;
-    }
+      if (!emailClients || emailClients.length === 0) {
+        return NextResponse.json(
+          { error: "No client found with this email." },
+          { status: 404 }
+        );
+      }
 
-    if (!clientId) {
-      return NextResponse.json(
-        { error: "Invalid email or authorization code." },
-        { status: 404 }
+      const hasAnyCode = emailClients.some((client) =>
+        Boolean(client.activation_code)
       );
-    }
 
-    const { data: client, error: clientError } = await supabaseAdmin
-      .from("clients")
-      .select("id, profile_id, full_name, email, status")
-      .eq("id", clientId)
-      .single();
+      if (!hasAnyCode) {
+        return NextResponse.json(
+          { error: "No activation code has been generated for this email yet." },
+          { status: 400 }
+        );
+      }
 
-    if (clientError || !client) {
       return NextResponse.json(
-        { error: "Client not found." },
-        { status: 404 }
-      );
-    }
-
-    if (client.profile_id) {
-      return NextResponse.json(
-        { error: "This client account is already activated." },
+        { error: "Authorization code is incorrect." },
         { status: 400 }
       );
     }
 
-    const { data: existingProfile } = await supabaseAdmin
-      .from("profiles")
-      .select("id, email, role")
-      .eq("email", email)
-      .maybeSingle();
+    let authUserId = cleanClient.profile_id;
 
-    if (existingProfile) {
-      return NextResponse.json(
-        { error: "A login already exists with this email." },
-        { status: 400 }
-      );
+    if (authUserId) {
+      const { error: updateUserError } =
+        await supabaseAdmin.auth.admin.updateUserById(authUserId, {
+          password,
+          email_confirm: true,
+          user_metadata: {
+            full_name: cleanClient.full_name,
+            role: "client",
+          },
+        });
+
+      if (updateUserError) {
+        return NextResponse.json(
+          { error: updateUserError.message },
+          { status: 500 }
+        );
+      }
+    } else {
+      const { data: existingProfiles, error: existingProfilesError } =
+        await supabaseAdmin
+          .from("profiles")
+          .select("id, email, full_name, role")
+          .ilike("email", email)
+          .limit(1);
+
+      if (existingProfilesError) {
+        return NextResponse.json(
+          { error: existingProfilesError.message },
+          { status: 500 }
+        );
+      }
+
+      const existingProfile =
+        ((existingProfiles || [])[0] || null) as ProfileRow | null;
+
+      if (existingProfile) {
+        authUserId = existingProfile.id;
+
+        const { error: updateExistingUserError } =
+          await supabaseAdmin.auth.admin.updateUserById(existingProfile.id, {
+            password,
+            email_confirm: true,
+            user_metadata: {
+              full_name: cleanClient.full_name,
+              role: "client",
+            },
+          });
+
+        if (updateExistingUserError) {
+          return NextResponse.json(
+            { error: updateExistingUserError.message },
+            { status: 500 }
+          );
+        }
+      } else {
+        const { data: createdUser, error: createUserError } =
+          await supabaseAdmin.auth.admin.createUser({
+            email,
+            password,
+            email_confirm: true,
+            user_metadata: {
+              full_name: cleanClient.full_name,
+              role: "client",
+            },
+          });
+
+        if (createUserError || !createdUser.user) {
+          return NextResponse.json(
+            {
+              error: getCreateUserErrorMessage(
+                createUserError?.message || "Could not create client account."
+              ),
+            },
+            { status: 500 }
+          );
+        }
+
+        authUserId = createdUser.user.id;
+      }
     }
 
-    const { data: createdUser, error: createUserError } =
-      await supabaseAdmin.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: {
-          full_name: client.full_name,
-          role: "client",
-        },
-      });
-
-    if (createUserError || !createdUser.user) {
+    if (!authUserId) {
       return NextResponse.json(
-        { error: createUserError?.message || "Could not create client login." },
+        { error: "Could not create or find the auth user." },
         { status: 500 }
       );
     }
 
-    const { error: profileError } = await supabaseAdmin.from("profiles").insert({
-      id: createdUser.user.id,
-      email,
-      full_name: client.full_name,
-      role: "client",
-    });
+    const { error: profileError } = await supabaseAdmin.from("profiles").upsert(
+      {
+        id: authUserId,
+        email,
+        full_name: cleanClient.full_name,
+        role: "client",
+      },
+      {
+        onConflict: "id",
+      }
+    );
 
     if (profileError) {
-      await supabaseAdmin.auth.admin.deleteUser(createdUser.user.id);
-
       return NextResponse.json(
         { error: profileError.message },
         { status: 500 }
@@ -148,36 +255,27 @@ export async function POST(request: NextRequest) {
     const { error: updateClientError } = await supabaseAdmin
       .from("clients")
       .update({
-        profile_id: createdUser.user.id,
-        status: "active",
+        profile_id: authUserId,
+        activation_code: null,
+        email,
       })
-      .eq("id", client.id);
+      .eq("id", cleanClient.id);
 
     if (updateClientError) {
-      await supabaseAdmin.auth.admin.deleteUser(createdUser.user.id);
-      await supabaseAdmin
-        .from("profiles")
-        .delete()
-        .eq("id", createdUser.user.id);
-
       return NextResponse.json(
         { error: updateClientError.message },
         { status: 500 }
       );
     }
 
-    if (loginCode?.id) {
-      await supabaseAdmin
-        .from("client_login_codes")
-        .update({ used: true })
-        .eq("id", loginCode.id);
-    }
+    return NextResponse.json({
+      success: true,
+      message: "Client account activated.",
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unexpected activation error.";
 
-    return NextResponse.json({ success: true });
-  } catch {
-    return NextResponse.json(
-      { error: "Unexpected activation error." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

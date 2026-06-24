@@ -1,132 +1,103 @@
 "use client";
 
-import { useState } from "react";
-import { supabase } from "../../../../lib/supabaseClient";
 import Link from "next/link";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "../../../../lib/supabaseClient";
+import { getCurrentUserRole } from "../../../../lib/checkUserRole";
 
-export default function ClientActivatePage() {
-  const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+export default function AdminClientActivatePage() {
+  const router = useRouter();
 
-  async function handleActivate(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setLoading(true);
+  useEffect(() => {
+    async function protectPage() {
+      const { user, role } = await getCurrentUserRole();
 
-    const response = await fetch("/api/client/activate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email, code, password }),
-    });
+      if (!user) {
+        router.push("/login");
+        return;
+      }
 
-    const result = await response.json();
+      if (role !== "admin") {
+        if (role === "trainer" || role === "nutrition_coach") {
+          router.push("/trainer/scan");
+          return;
+        }
 
-    setLoading(false);
+        if (role === "client") {
+          router.push("/client");
+          return;
+        }
 
-    if (!response.ok) {
-      alert(result.error || "Could not activate account.");
-      return;
+        await supabase.auth.signOut();
+        router.push("/login");
+      }
     }
 
-    alert("Your account is ready. You can now log in.");
-    window.location.href = "/client/login";
-  }
+    protectPage();
+  }, [router]);
 
   return (
-    <main className="min-h-screen bg-black text-white p-6">
-      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-        <div className="max-w-md mx-auto pt-16">
-          <div className="mb-8 text-center">
-            <h1 className="text-5xl font-black text-yellow-400">
+    <main className="min-h-screen bg-black p-4 text-white md:p-6">
+      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_30%),linear-gradient(135deg,_#050505,_#101010_45%,_#050505)] p-4 md:p-6">
+        <div className="mx-auto max-w-3xl">
+          <header className="mb-5 rounded-3xl border border-yellow-500/25 bg-black/50 p-5 shadow-2xl">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-[0.28em] text-yellow-400">
               FXA FITNESS
+            </p>
+
+            <h1 className="text-3xl font-semibold md:text-5xl">
+              Client Activation
             </h1>
 
-            <p className="mt-2 text-gray-400 tracking-[0.25em] uppercase text-sm">
-              Activate Client Account
+            <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
+              Client activation codes are generated from each client detail page.
             </p>
-          </div>
+          </header>
 
-          <form
-            onSubmit={handleActivate}
-            className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 shadow-2xl backdrop-blur"
-          >
-            <div className="mb-8 text-center">
-              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-yellow-500/30 bg-black/50 text-3xl">
-                🔐
-              </div>
+          <section className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-6 shadow-2xl backdrop-blur">
+            <h2 className="text-2xl font-semibold text-white">
+              How to activate a client
+            </h2>
 
-              <h2 className="text-2xl font-black uppercase text-white">
-                First-Time Setup
-              </h2>
+            <div className="mt-5 space-y-3 text-sm font-normal leading-6 text-gray-300">
+              <p>
+                1. Go to the client list.
+              </p>
 
-              <p className="mt-2 text-gray-400">
-                Enter your email, authorization code, and create your password.
+              <p>
+                2. Open the client detail page.
+              </p>
+
+              <p>
+                3. Press Generate First-Time Code.
+              </p>
+
+              <p>
+                4. Give the client their email and authorization code.
+              </p>
+
+              <p>
+                5. The client goes to the Activate Client Account page and creates their password.
               </p>
             </div>
 
-            <div className="mb-4">
-              <label className="mb-2 block font-bold text-gray-200">
-                Email
-              </label>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <Link
+                href="/admin/clients"
+                className="rounded-2xl bg-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase text-black transition hover:bg-yellow-300"
+              >
+                Go to Clients
+              </Link>
 
-              <input
-                className="w-full rounded-xl border border-white/20 bg-black/50 p-3 text-white placeholder:text-gray-500 outline-none focus:border-yellow-400"
-                type="email"
-                placeholder="your@email.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
+              <Link
+                href="/client/activate"
+                className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+              >
+                Open Client Activate Page
+              </Link>
             </div>
-
-            <div className="mb-4">
-              <label className="mb-2 block font-bold text-gray-200">
-                Authorization Code
-              </label>
-
-              <input
-                className="w-full rounded-xl border border-white/20 bg-black/50 p-3 text-white placeholder:text-gray-500 outline-none focus:border-yellow-400"
-                type="text"
-                placeholder="Example: 493821"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="mb-6">
-              <label className="mb-2 block font-bold text-gray-200">
-                Create Password
-              </label>
-
-              <input
-                className="w-full rounded-xl border border-white/20 bg-black/50 p-3 text-white placeholder:text-gray-500 outline-none focus:border-yellow-400"
-                type="password"
-                placeholder="Minimum 6 characters"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded-xl bg-yellow-400 p-3 font-black uppercase text-black hover:bg-yellow-300 disabled:opacity-60 transition"
-            >
-              {loading ? "Activating..." : "Activate Account"}
-            </button>
-
-            <Link
-              href="/client/login"
-              className="mt-4 block text-center text-sm font-bold text-yellow-400 hover:text-yellow-300"
-            >
-              Already activated? Client login
-            </Link>
-          </form>
+          </section>
         </div>
       </div>
     </main>
