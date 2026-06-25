@@ -235,6 +235,7 @@ export default function AdminClientDetailPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+
   const clientId = params.id as string;
   const action = searchParams.get("action");
 
@@ -271,7 +272,12 @@ export default function AdminClientDetailPage() {
   const [packageValue, setPackageValue] = useState("");
   const [packageStartDate, setPackageStartDate] = useState("");
   const [packageExpireDate, setPackageExpireDate] = useState("");
-  const [purchaseType, setPurchaseType] = useState("");
+
+  const [uploadedPurchaseType, setUploadedPurchaseType] = useState("");
+  const [savingUploadedPurchaseType, setSavingUploadedPurchaseType] =
+    useState(false);
+
+  const [renewPackageMode, setRenewPackageMode] = useState(false);
   const [savingPackage, setSavingPackage] = useState(false);
 
   const [debtAmount, setDebtAmount] = useState("");
@@ -291,7 +297,7 @@ export default function AdminClientDetailPage() {
   }
 
   function startRenewPackage() {
-    setPurchaseType("renew");
+    setRenewPackageMode(true);
     window.setTimeout(scrollToPackageSection, 100);
   }
 
@@ -455,7 +461,8 @@ export default function AdminClientDetailPage() {
     );
     setPackageStartDate(formatDateInput(activePackage?.starts_at || null));
     setPackageExpireDate(formatDateInput(activePackage?.expires_at || null));
-    setPurchaseType(action === "renew" ? "renew" : latestPurchase?.purchase_type || "");
+    setUploadedPurchaseType(latestPurchase?.purchase_type || "");
+    setRenewPackageMode(action === "renew");
 
     setDebtAmount(
       debtPurchase?.balance_due !== null && debtPurchase?.balance_due !== undefined
@@ -583,18 +590,86 @@ export default function AdminClientDetailPage() {
     setSavingClientInfo(false);
   }
 
-  async function savePackageDetails(event: FormEvent<HTMLFormElement>) {
+  async function saveUploadedPurchaseType(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!client) return;
 
     if (!allowPackageEdit) {
-      alert("Only admins can edit package details.");
+      alert("Only admins can edit uploaded purchase type.");
+      return;
+    }
+
+    if (!uploadedPurchaseType) {
+      alert("Please select New or Renew.");
+      return;
+    }
+
+    const latestPurchase = purchases[0] || null;
+
+    setSavingUploadedPurchaseType(true);
+
+    if (latestPurchase) {
+      const { error } = await supabase
+        .from("client_purchases")
+        .update({
+          purchase_type: uploadedPurchaseType,
+        })
+        .eq("id", latestPurchase.id);
+
+      if (error) {
+        alert(error.message);
+        setSavingUploadedPurchaseType(false);
+        return;
+      }
+    } else {
+      const numericTotalSessions = packageTotalSessions.trim()
+        ? Number(packageTotalSessions)
+        : null;
+
+      const numericPackageValue = packageValue.trim()
+        ? Number(packageValue)
+        : null;
+
+      const { error } = await supabase.from("client_purchases").insert({
+        client_id: client.id,
+        plan_name: packageName.trim() || null,
+        session_count:
+          numericTotalSessions !== null && !Number.isNaN(numericTotalSessions)
+            ? numericTotalSessions
+            : null,
+        price:
+          numericPackageValue !== null && !Number.isNaN(numericPackageValue)
+            ? numericPackageValue
+            : null,
+        purchase_type: uploadedPurchaseType,
+        status: "paid",
+        created_at: new Date().toISOString(),
+      });
+
+      if (error) {
+        alert(error.message);
+        setSavingUploadedPurchaseType(false);
+        return;
+      }
+    }
+
+    alert(`Uploaded purchase type saved as ${uploadedPurchaseType}.`);
+    await fetchClientDetail();
+    setSavingUploadedPurchaseType(false);
+  }
+
+  async function saveRenewPackage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowPackageEdit) {
+      alert("Only admins can renew package details.");
       return;
     }
 
     const activePackage = packages[0] || null;
-    const latestPurchase = purchases[0] || null;
 
     const numericTotalSessions = packageTotalSessions.trim()
       ? Number(packageTotalSessions)
@@ -616,11 +691,6 @@ export default function AdminClientDetailPage() {
       (Number.isNaN(numericPackageValue) || numericPackageValue < 0)
     ) {
       alert("Package value must be a valid number.");
-      return;
-    }
-
-    if (!purchaseType) {
-      alert("Please select New or Renew.");
       return;
     }
 
@@ -677,67 +747,27 @@ export default function AdminClientDetailPage() {
       }
     }
 
-    if (purchaseType === "renew") {
-      const { error: renewPurchaseError } = await supabase
-        .from("client_purchases")
-        .insert({
-          client_id: client.id,
-          plan_name: packageName.trim() || null,
-          session_count: numericTotalSessions,
-          price: numericPackageValue,
-          purchase_type: "renew",
-          status: "paid",
-          created_at: new Date().toISOString(),
-        });
+    const { error: renewPurchaseError } = await supabase
+      .from("client_purchases")
+      .insert({
+        client_id: client.id,
+        plan_name: packageName.trim() || null,
+        session_count: numericTotalSessions,
+        price: numericPackageValue,
+        purchase_type: "renew",
+        status: "paid",
+        created_at: new Date().toISOString(),
+      });
 
-      if (renewPurchaseError) {
-        alert(renewPurchaseError.message);
-        setSavingPackage(false);
-        return;
-      }
-    } else if (latestPurchase) {
-      const { error: purchaseError } = await supabase
-        .from("client_purchases")
-        .update({
-          plan_name: packageName.trim() || null,
-          session_count: numericTotalSessions,
-          price: numericPackageValue,
-          purchase_type: purchaseType || null,
-        })
-        .eq("id", latestPurchase.id);
-
-      if (purchaseError) {
-        alert(purchaseError.message);
-        setSavingPackage(false);
-        return;
-      }
-    } else {
-      const { error: insertPurchaseError } = await supabase
-        .from("client_purchases")
-        .insert({
-          client_id: client.id,
-          plan_name: packageName.trim() || null,
-          session_count: numericTotalSessions,
-          price: numericPackageValue,
-          purchase_type: purchaseType || null,
-          status: "paid",
-          created_at: new Date().toISOString(),
-        });
-
-      if (insertPurchaseError) {
-        alert(insertPurchaseError.message);
-        setSavingPackage(false);
-        return;
-      }
+    if (renewPurchaseError) {
+      alert(renewPurchaseError.message);
+      setSavingPackage(false);
+      return;
     }
 
-    alert(
-      purchaseType === "renew"
-        ? `Renew package saved with ${numericTotalSessions} sessions.`
-        : "Package details saved."
-    );
-
+    alert(`Renew package saved with ${numericTotalSessions} sessions.`);
     await fetchClientDetail();
+    setRenewPackageMode(false);
     setSavingPackage(false);
   }
 
@@ -789,7 +819,7 @@ export default function AdminClientDetailPage() {
         amount_paid: 0,
         balance_due: numericDebtAmount,
         debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
-        purchase_type: purchaseType || null,
+        purchase_type: uploadedPurchaseType || null,
         status: "paid",
         created_at: new Date().toISOString(),
       });
@@ -868,7 +898,7 @@ export default function AdminClientDetailPage() {
 
   useEffect(() => {
     if (action === "renew" && !loading) {
-      setPurchaseType("renew");
+      setRenewPackageMode(true);
       window.setTimeout(scrollToPackageSection, 300);
     }
   }, [action, loading]);
@@ -1230,7 +1260,7 @@ export default function AdminClientDetailPage() {
           <section
             id="package-renew-section"
             className={`mb-6 rounded-[2rem] border p-6 shadow-2xl backdrop-blur ${
-              purchaseType === "renew"
+              renewPackageMode
                 ? "border-green-400/60 bg-green-400/10"
                 : "border-yellow-500/30 bg-white/[0.07]"
             }`}
@@ -1242,84 +1272,53 @@ export default function AdminClientDetailPage() {
                 </p>
 
                 <h2 className="mt-2 text-2xl font-semibold">
-                  {purchaseType === "renew" ? "Renew Package" : "Package Details"}
+                  Package Details
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Add the number of sessions for this package, then choose New or
-                  Renew.
+                  Save uploaded New/Renew type separately from actual package renewal.
                 </p>
               </div>
 
               {isAdmin && (
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPurchaseType("new")}
-                    className={`rounded-xl px-4 py-2 text-xs font-semibold uppercase transition ${
-                      purchaseType === "new"
-                        ? "bg-yellow-400 text-black"
-                        : "border border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black"
-                    }`}
-                  >
-                    New
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setPurchaseType("renew")}
-                    className={`rounded-xl px-4 py-2 text-xs font-semibold uppercase transition ${
-                      purchaseType === "renew"
-                        ? "bg-green-400 text-black"
-                        : "border border-green-400 text-green-300 hover:bg-green-400 hover:text-black"
-                    }`}
-                  >
-                    Renew
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setRenewPackageMode(true)}
+                  className="rounded-xl bg-green-400 px-4 py-2 text-xs font-semibold uppercase text-black transition hover:bg-green-300"
+                >
+                  Renew Package
+                </button>
               )}
             </div>
 
-            <form onSubmit={savePackageDetails} className="mt-5">
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Package Name
-                  </span>
-                  <input
-                    value={packageName}
-                    onChange={(event) => setPackageName(event.target.value)}
-                    disabled={!allowPackageEdit}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
-                    placeholder="Example: 10 Session Package"
-                  />
-                </label>
+            <div className="mt-5 grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
+              <form
+                onSubmit={saveUploadedPurchaseType}
+                className="rounded-3xl border border-yellow-400/25 bg-black/40 p-5"
+              >
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-300">
+                  From Uploaded Data
+                </p>
 
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-green-300">
-                    Total Sessions
-                  </span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={packageTotalSessions}
-                    onChange={(event) =>
-                      setPackageTotalSessions(event.target.value)
-                    }
-                    disabled={!allowPackageEdit}
-                    className="w-full rounded-2xl border border-green-400/50 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-green-300 disabled:opacity-70"
-                    placeholder="Example: 10"
-                  />
-                </label>
+                <h3 className="mt-2 text-xl font-semibold text-white">
+                  Save As New / Renew
+                </h3>
 
-                <label>
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Use this to mark the uploaded purchase record as New or Renew.
+                  This does not add sessions.
+                </p>
+
+                <label className="mt-5 block">
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-yellow-300">
-                    New / Renew
+                    Uploaded Purchase Type
                   </span>
+
                   <select
-                    value={purchaseType}
-                    onChange={(event) => setPurchaseType(event.target.value)}
+                    value={uploadedPurchaseType}
+                    onChange={(event) =>
+                      setUploadedPurchaseType(event.target.value)
+                    }
                     disabled={!allowPackageEdit}
                     className="w-full rounded-2xl border border-yellow-400 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-300 disabled:opacity-70"
                   >
@@ -1333,79 +1332,134 @@ export default function AdminClientDetailPage() {
                       Renew
                     </option>
                   </select>
-
-                  <p className="mt-2 text-xs font-normal text-yellow-300">
-                    Current: {getPurchaseTypeLabel(purchaseType || null)}
-                  </p>
                 </label>
 
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Package Value
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={packageValue}
-                    onChange={(event) => setPackageValue(event.target.value)}
-                    disabled={!allowPackageEdit}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
-                  />
-                </label>
+                {allowPackageEdit && (
+                  <button
+                    type="submit"
+                    disabled={savingUploadedPurchaseType}
+                    className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                  >
+                    {savingUploadedPurchaseType
+                      ? "Saving..."
+                      : "Save Uploaded Type"}
+                  </button>
+                )}
+              </form>
 
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Start Date
-                  </span>
-                  <input
-                    type="date"
-                    value={packageStartDate}
-                    onChange={(event) => setPackageStartDate(event.target.value)}
-                    disabled={!allowPackageEdit}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Expire Date
-                  </span>
-                  <input
-                    type="date"
-                    value={packageExpireDate}
-                    onChange={(event) => setPackageExpireDate(event.target.value)}
-                    disabled={!allowPackageEdit}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
-                  />
-                </label>
-              </div>
-
-              {allowPackageEdit && (
-                <button
-                  type="submit"
-                  disabled={savingPackage}
-                  className={`mt-5 rounded-2xl px-5 py-3 text-sm font-semibold uppercase text-black transition disabled:opacity-60 ${
-                    purchaseType === "renew"
-                      ? "bg-green-400 hover:bg-green-300"
-                      : "bg-yellow-400 hover:bg-yellow-300"
-                  }`}
-                >
-                  {savingPackage
-                    ? "Saving..."
-                    : purchaseType === "renew"
-                      ? "Save Renew Package"
-                      : "Save Package Details"}
-                </button>
-              )}
-
-              {!allowPackageEdit && (
-                <p className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm text-yellow-100">
-                  Manager can view package details but cannot edit package value,
-                  sessions, dates, or purchase type.
+              <form
+                onSubmit={saveRenewPackage}
+                className="rounded-3xl border border-green-400/25 bg-black/40 p-5"
+              >
+                <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                  Renew Package
                 </p>
-              )}
-            </form>
+
+                <h3 className="mt-2 text-xl font-semibold text-white">
+                  Add Renewed Sessions
+                </h3>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Use this when the client is buying another package. This saves
+                  a Renew purchase and resets used sessions to 0.
+                </p>
+
+                <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Package Name
+                    </span>
+                    <input
+                      value={packageName}
+                      onChange={(event) => setPackageName(event.target.value)}
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                      placeholder="Example: 10 Session Package"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-green-300">
+                      Total Sessions
+                    </span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={packageTotalSessions}
+                      onChange={(event) =>
+                        setPackageTotalSessions(event.target.value)
+                      }
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-green-400/50 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-green-300 disabled:opacity-70"
+                      placeholder="Example: 10"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Package Value
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={packageValue}
+                      onChange={(event) => setPackageValue(event.target.value)}
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Start Date
+                    </span>
+                    <input
+                      type="date"
+                      value={packageStartDate}
+                      onChange={(event) =>
+                        setPackageStartDate(event.target.value)
+                      }
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Expire Date
+                    </span>
+                    <input
+                      type="date"
+                      value={packageExpireDate}
+                      onChange={(event) =>
+                        setPackageExpireDate(event.target.value)
+                      }
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+                </div>
+
+                {allowPackageEdit && (
+                  <button
+                    type="submit"
+                    disabled={savingPackage}
+                    className="mt-5 rounded-2xl bg-green-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
+                  >
+                    {savingPackage ? "Saving..." : "Save Renew Package"}
+                  </button>
+                )}
+              </form>
+            </div>
+
+            {!allowPackageEdit && (
+              <p className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm text-yellow-100">
+                Manager can view package details but cannot edit package value,
+                sessions, dates, or purchase type.
+              </p>
+            )}
           </section>
 
           <section className="mb-6 rounded-[2rem] border border-red-500/30 bg-red-500/10 p-6 shadow-2xl backdrop-blur">
