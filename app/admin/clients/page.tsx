@@ -5,6 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
+import {
+  canDeleteClients,
+  getRoleDisplayName,
+  isAdminOrManager,
+} from "../../../lib/role";
 
 type ClientRow = {
   id: string;
@@ -357,10 +362,14 @@ export default function AdminClientsPage() {
   const [sortKey, setSortKey] = useState<SortKey>("clientCode");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
+  const [userRole, setUserRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState("Checking access...");
   const [deletingClientId, setDeletingClientId] = useState<string | null>(null);
+
+  const roleLabel = getRoleDisplayName(userRole);
+  const showDeleteButton = canDeleteClients(userRole);
 
   async function fetchClientsPageData() {
     setLoading(true);
@@ -413,6 +422,11 @@ export default function AdminClientsPage() {
   }
 
   async function deleteClient(clientId: string, clientName: string) {
+    if (!canDeleteClients(userRole)) {
+      alert("Only admins can delete clients.");
+      return;
+    }
+
     const confirmed = window.confirm(
       `Delete ${clientName}? This will permanently remove the client and related records.`
     );
@@ -654,7 +668,7 @@ export default function AdminClientsPage() {
         return;
       }
 
-      if (role !== "admin") {
+      if (!isAdminOrManager(role)) {
         if (role === "trainer" || role === "nutrition_coach") {
           router.push("/trainer/clients");
           return;
@@ -670,6 +684,7 @@ export default function AdminClientsPage() {
         return;
       }
 
+      setUserRole(role);
       setCheckingRole(false);
       await fetchClientsPageData();
     }
@@ -738,7 +753,11 @@ export default function AdminClientsPage() {
                 </h1>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Shows Số buổi, Buổi còn lại, Công nợ còn lại, and admin actions.
+                  Shows Số buổi, Buổi còn lại, Công nợ còn lại, and client status.
+                </p>
+
+                <p className="mt-3 inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-normal text-yellow-300">
+                  Signed in as {roleLabel}
                 </p>
               </div>
 
@@ -889,8 +908,8 @@ export default function AdminClientsPage() {
                             column.align === "right"
                               ? "text-right"
                               : column.align === "center"
-                              ? "text-center"
-                              : "text-left"
+                                ? "text-center"
+                                : "text-left"
                           }`}
                         >
                           <button
@@ -900,8 +919,8 @@ export default function AdminClientsPage() {
                               column.align === "right"
                                 ? "justify-end"
                                 : column.align === "center"
-                                ? "justify-center"
-                                : "justify-start"
+                                  ? "justify-center"
+                                  : "justify-start"
                             }`}
                           >
                             <span>{column.label}</span>
@@ -975,8 +994,8 @@ export default function AdminClientsPage() {
                                 column.align === "right"
                                   ? "text-right"
                                   : column.align === "center"
-                                  ? "text-center"
-                                  : "text-left"
+                                    ? "text-center"
+                                    : "text-left"
                               } ${extraClass}`}
                             >
                               {column.key === "status" ? (
@@ -1003,14 +1022,16 @@ export default function AdminClientsPage() {
                               View
                             </Link>
 
-                            <button
-                              type="button"
-                              onClick={() => deleteClient(row.id, row.name)}
-                              disabled={deletingClientId === row.id}
-                              className="rounded-md border border-red-400 px-3 py-1.5 text-xs font-semibold uppercase text-red-300 transition hover:bg-red-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {deletingClientId === row.id ? "..." : "Delete"}
-                            </button>
+                            {showDeleteButton && (
+                              <button
+                                type="button"
+                                onClick={() => deleteClient(row.id, row.name)}
+                                disabled={deletingClientId === row.id}
+                                className="rounded-md border border-red-400 px-3 py-1.5 text-xs font-semibold uppercase text-red-300 transition hover:bg-red-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {deletingClientId === row.id ? "..." : "Delete"}
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

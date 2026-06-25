@@ -1,11 +1,12 @@
 import { supabase } from "./supabaseClient";
+import { normalizeRole, type AppRole } from "./role";
 
-export type UserRole = "admin" | "trainer" | "nutrition_coach" | "client" | null;
-
-export async function getCurrentUserRole(): Promise<{
+type CurrentUserRoleResult = {
   user: Awaited<ReturnType<typeof supabase.auth.getUser>>["data"]["user"];
-  role: UserRole;
-}> {
+  role: AppRole | null;
+};
+
+export async function getCurrentUserRole(): Promise<CurrentUserRoleResult> {
   const {
     data: { user },
     error: userError,
@@ -25,28 +26,15 @@ export async function getCurrentUserRole(): Promise<{
     .maybeSingle();
 
   if (profileError || !profile) {
+    console.error("Profile role fetch failed:", profileError);
     return {
       user,
       role: null,
     };
   }
 
-  const role = profile.role;
-
-  if (
-    role === "admin" ||
-    role === "trainer" ||
-    role === "nutrition_coach" ||
-    role === "client"
-  ) {
-    return {
-      user,
-      role,
-    };
-  }
-
   return {
     user,
-    role: null,
+    role: normalizeRole(profile.role),
   };
 }

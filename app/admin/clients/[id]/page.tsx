@@ -2,10 +2,17 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "../../../../lib/supabaseClient";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import QRCode from "qrcode";
 import { getCurrentUserRole } from "../../../../lib/checkUserRole";
+import {
+  canEditClientBasicInfo,
+  canEditDebt,
+  canEditPackages,
+  getRoleDisplayName,
+  isAdminOrManager,
+} from "../../../../lib/role";
 
 type ClientDetail = {
   id: string;
@@ -149,6 +156,7 @@ function getStatusClass(status: string | null) {
 function getPurchaseTypeLabel(value: string | null) {
   if (value === "new") return "New";
   if (value === "renew") return "Renew";
+  if (value === "renewal") return "Renew";
   return "-";
 }
 
@@ -226,7 +234,9 @@ function getDebtNotice(
 export default function AdminClientDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const clientId = params.id as string;
+  const action = searchParams.get("action");
 
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [packages, setPackages] = useState<SessionPackage[]>([]);
@@ -234,9 +244,10 @@ export default function AdminClientDetailPage() {
   const [sessionHistory, setSessionHistory] = useState<SessionHistory[]>([]);
   const [qrCode, setQrCode] = useState("");
 
+  const [userRole, setUserRole] = useState<string | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState(
-    "Checking admin access..."
+    "Checking client access..."
   );
   const [loading, setLoading] = useState(true);
 
@@ -256,6 +267,7 @@ export default function AdminClientDetailPage() {
     useState(false);
 
   const [packageName, setPackageName] = useState("");
+  const [packageTotalSessions, setPackageTotalSessions] = useState("");
   const [packageValue, setPackageValue] = useState("");
   const [packageStartDate, setPackageStartDate] = useState("");
   const [packageExpireDate, setPackageExpireDate] = useState("");
@@ -265,6 +277,23 @@ export default function AdminClientDetailPage() {
   const [debtAmount, setDebtAmount] = useState("");
   const [debtDeadline, setDebtDeadline] = useState("");
   const [savingDebt, setSavingDebt] = useState(false);
+
+  const roleLabel = getRoleDisplayName(userRole);
+  const allowBasicInfoEdit = canEditClientBasicInfo(userRole);
+  const allowPackageEdit = canEditPackages(userRole);
+  const allowDebtEdit = canEditDebt(userRole);
+  const isAdmin = userRole === "admin";
+
+  function scrollToPackageSection() {
+    document
+      .getElementById("package-renew-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function startRenewPackage() {
+    setPurchaseType("renew");
+    window.setTimeout(scrollToPackageSection, 100);
+  }
 
   async function fetchSessionHistory() {
     const { data: historyData, error: historyError } = await supabase
@@ -407,17 +436,26 @@ export default function AdminClientDetailPage() {
     setActivationCode(cleanClient.activation_code || "");
 
     setPackageName(activePackage?.package_name || latestPurchase?.plan_name || "");
+    setPackageTotalSessions(
+      activePackage?.total_sessions !== null &&
+        activePackage?.total_sessions !== undefined
+        ? String(activePackage.total_sessions)
+        : latestPurchase?.session_count !== null &&
+            latestPurchase?.session_count !== undefined
+          ? String(latestPurchase.session_count)
+          : ""
+    );
     setPackageValue(
       activePackage?.package_value !== null &&
         activePackage?.package_value !== undefined
         ? String(activePackage.package_value)
         : latestPurchase?.price !== null && latestPurchase?.price !== undefined
-        ? String(latestPurchase.price)
-        : ""
+          ? String(latestPurchase.price)
+          : ""
     );
     setPackageStartDate(formatDateInput(activePackage?.starts_at || null));
     setPackageExpireDate(formatDateInput(activePackage?.expires_at || null));
-    setPurchaseType(latestPurchase?.purchase_type || "");
+    setPurchaseType(action === "renew" ? "renew" : latestPurchase?.purchase_type || "");
 
     setDebtAmount(
       debtPurchase?.balance_due !== null && debtPurchase?.balance_due !== undefined
@@ -440,6 +478,11 @@ export default function AdminClientDetailPage() {
 
   async function generateClientActivationCode() {
     if (!client) return;
+
+    if (!isAdmin) {
+      alert("Only admins can generate activation codes.");
+      return;
+    }
 
     if (!client.email) {
       alert("Please save a client email before generating an activation code.");
@@ -478,6 +521,11 @@ export default function AdminClientDetailPage() {
 
     if (!client) return;
 
+    if (!allowBasicInfoEdit) {
+      alert("You do not have permission to edit client information.");
+      return;
+    }
+
     if (!editName.trim()) {
       alert("Client name is required.");
       return;
@@ -490,22 +538,38 @@ export default function AdminClientDetailPage() {
 
     setSavingClientInfo(true);
 
+    const updatePayload =
+      userRole === "admin"
+        ? {
+            client_code: editClientCode.trim() || null,
+            full_name: editName.trim(),
+            email: editEmail.trim() || null,
+            phone: editPhone.trim() || null,
+            gender: editGender.trim() || null,
+            date_of_birth: editDateOfBirth || null,
+            client_source: editClientSource || null,
+            client_source_other:
+              editClientSource === "other"
+                ? editClientSourceOther.trim() || null
+                : null,
+            client_note: editClientNote.trim() || null,
+          }
+        : {
+            full_name: editName.trim(),
+            email: editEmail.trim() || null,
+            phone: editPhone.trim() || null,
+            gender: editGender.trim() || null,
+            date_of_birth: editDateOfBirth || null,
+            client_source: editClientSource || null,
+            client_source_other:
+              editClientSource === "other"
+                ? editClientSourceOther.trim() || null
+                : null,
+          };
+
     const { error } = await supabase
       .from("clients")
-      .update({
-        client_code: editClientCode.trim() || null,
-        full_name: editName.trim(),
-        email: editEmail.trim() || null,
-        phone: editPhone.trim() || null,
-        gender: editGender.trim() || null,
-        date_of_birth: editDateOfBirth || null,
-        client_source: editClientSource || null,
-        client_source_other:
-          editClientSource === "other"
-            ? editClientSourceOther.trim() || null
-            : null,
-        client_note: editClientNote.trim() || null,
-      })
+      .update(updatePayload)
       .eq("id", client.id);
 
     if (error) {
@@ -524,16 +588,39 @@ export default function AdminClientDetailPage() {
 
     if (!client) return;
 
+    if (!allowPackageEdit) {
+      alert("Only admins can edit package details.");
+      return;
+    }
+
     const activePackage = packages[0] || null;
     const latestPurchase = purchases[0] || null;
 
+    const numericTotalSessions = packageTotalSessions.trim()
+      ? Number(packageTotalSessions)
+      : null;
+
     const numericPackageValue = packageValue.trim() ? Number(packageValue) : null;
+
+    if (
+      numericTotalSessions === null ||
+      Number.isNaN(numericTotalSessions) ||
+      numericTotalSessions <= 0
+    ) {
+      alert("Total sessions must be a valid number greater than 0.");
+      return;
+    }
 
     if (
       numericPackageValue !== null &&
       (Number.isNaN(numericPackageValue) || numericPackageValue < 0)
     ) {
       alert("Package value must be a valid number.");
+      return;
+    }
+
+    if (!purchaseType) {
+      alert("Please select New or Renew.");
       return;
     }
 
@@ -544,6 +631,9 @@ export default function AdminClientDetailPage() {
         .from("session_packages")
         .update({
           package_name: packageName.trim() || null,
+          total_sessions: numericTotalSessions,
+          used_sessions: 0,
+          remaining_sessions: numericTotalSessions,
           package_value: numericPackageValue,
           starts_at: packageStartDate
             ? new Date(`${packageStartDate}T00:00:00`).toISOString()
@@ -551,6 +641,7 @@ export default function AdminClientDetailPage() {
           expires_at: packageExpireDate
             ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
             : null,
+          status: "active",
         })
         .eq("id", activePackage.id);
 
@@ -559,13 +650,57 @@ export default function AdminClientDetailPage() {
         setSavingPackage(false);
         return;
       }
+    } else {
+      const { error: packageInsertError } = await supabase
+        .from("session_packages")
+        .insert({
+          client_id: client.id,
+          package_name: packageName.trim() || null,
+          total_sessions: numericTotalSessions,
+          used_sessions: 0,
+          remaining_sessions: numericTotalSessions,
+          package_value: numericPackageValue,
+          starts_at: packageStartDate
+            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
+            : null,
+          expires_at: packageExpireDate
+            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
+            : null,
+          status: "active",
+          created_at: new Date().toISOString(),
+        });
+
+      if (packageInsertError) {
+        alert(packageInsertError.message);
+        setSavingPackage(false);
+        return;
+      }
     }
 
-    if (latestPurchase) {
+    if (purchaseType === "renew") {
+      const { error: renewPurchaseError } = await supabase
+        .from("client_purchases")
+        .insert({
+          client_id: client.id,
+          plan_name: packageName.trim() || null,
+          session_count: numericTotalSessions,
+          price: numericPackageValue,
+          purchase_type: "renew",
+          status: "paid",
+          created_at: new Date().toISOString(),
+        });
+
+      if (renewPurchaseError) {
+        alert(renewPurchaseError.message);
+        setSavingPackage(false);
+        return;
+      }
+    } else if (latestPurchase) {
       const { error: purchaseError } = await supabase
         .from("client_purchases")
         .update({
           plan_name: packageName.trim() || null,
+          session_count: numericTotalSessions,
           price: numericPackageValue,
           purchase_type: purchaseType || null,
         })
@@ -582,6 +717,7 @@ export default function AdminClientDetailPage() {
         .insert({
           client_id: client.id,
           plan_name: packageName.trim() || null,
+          session_count: numericTotalSessions,
           price: numericPackageValue,
           purchase_type: purchaseType || null,
           status: "paid",
@@ -595,7 +731,12 @@ export default function AdminClientDetailPage() {
       }
     }
 
-    alert("Package details saved.");
+    alert(
+      purchaseType === "renew"
+        ? `Renew package saved with ${numericTotalSessions} sessions.`
+        : "Package details saved."
+    );
+
     await fetchClientDetail();
     setSavingPackage(false);
   }
@@ -604,6 +745,11 @@ export default function AdminClientDetailPage() {
     event.preventDefault();
 
     if (!client) return;
+
+    if (!allowDebtEdit) {
+      alert("Only admins can edit debt details.");
+      return;
+    }
 
     const latestPurchase = purchases[0] || null;
     const numericDebtAmount = debtAmount.trim() ? Number(debtAmount) : 0;
@@ -663,6 +809,11 @@ export default function AdminClientDetailPage() {
   async function toggleClientStatus() {
     if (!client) return;
 
+    if (!allowBasicInfoEdit) {
+      alert("You do not have permission to change client status.");
+      return;
+    }
+
     const newStatus = client.status === "active" ? "inactive" : "active";
 
     const { error } = await supabase
@@ -691,7 +842,7 @@ export default function AdminClientDetailPage() {
         return;
       }
 
-      if (role !== "admin") {
+      if (!isAdminOrManager(role)) {
         if (role === "trainer" || role === "nutrition_coach") {
           router.push(`/trainer/clients/${clientId}`);
           return;
@@ -707,12 +858,20 @@ export default function AdminClientDetailPage() {
         return;
       }
 
+      setUserRole(role);
       setCheckingRole(false);
       await fetchClientDetail();
     }
 
     protectPage();
   }, [router, clientId]);
+
+  useEffect(() => {
+    if (action === "renew" && !loading) {
+      setPurchaseType("renew");
+      window.setTimeout(scrollToPackageSection, 300);
+    }
+  }, [action, loading]);
 
   if (checkingRole) {
     return (
@@ -782,19 +941,35 @@ export default function AdminClientDetailPage() {
               </h1>
 
               <p className="mt-3 text-sm font-normal text-gray-400 md:text-base">
-                Edit client profile, first-time activation code, package details,
-                payment debt, and deadline.
+                View client profile, QR code, activation, package details,
+                payment debt, deadline, and recent sessions.
+              </p>
+
+              <p className="mt-3 inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-normal text-yellow-300">
+                Signed in as {roleLabel}
               </p>
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row">
-              <button
-                type="button"
-                onClick={toggleClientStatus}
-                className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
-              >
-                {client.status === "active" ? "Deactivate" : "Reactivate"}
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={startRenewPackage}
+                  className="rounded-2xl bg-green-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-green-300"
+                >
+                  Renew Package
+                </button>
+              )}
+
+              {allowBasicInfoEdit && (
+                <button
+                  type="button"
+                  onClick={toggleClientStatus}
+                  className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+                >
+                  {client.status === "active" ? "Deactivate" : "Reactivate"}
+                </button>
+              )}
 
               <Link
                 href="/admin/clients"
@@ -847,19 +1022,21 @@ export default function AdminClientDetailPage() {
               onSubmit={saveClientInfo}
               className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur"
             >
-              <h2 className="text-2xl font-semibold">Edit Client Info</h2>
+              <h2 className="text-2xl font-semibold">Client Info</h2>
 
               <div className="mt-5 grid gap-4 md:grid-cols-2">
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Client Code
-                  </span>
-                  <input
-                    value={editClientCode}
-                    onChange={(event) => setEditClientCode(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
-                  />
-                </label>
+                {isAdmin && (
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Client Code
+                    </span>
+                    <input
+                      value={editClientCode}
+                      onChange={(event) => setEditClientCode(event.target.value)}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    />
+                  </label>
+                )}
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
@@ -868,7 +1045,8 @@ export default function AdminClientDetailPage() {
                   <input
                     value={editName}
                     onChange={(event) => setEditName(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                     required
                   />
                 </label>
@@ -881,7 +1059,8 @@ export default function AdminClientDetailPage() {
                     type="email"
                     value={editEmail}
                     onChange={(event) => setEditEmail(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -892,7 +1071,8 @@ export default function AdminClientDetailPage() {
                   <input
                     value={editPhone}
                     onChange={(event) => setEditPhone(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -903,7 +1083,8 @@ export default function AdminClientDetailPage() {
                   <input
                     value={editGender}
                     onChange={(event) => setEditGender(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -915,7 +1096,8 @@ export default function AdminClientDetailPage() {
                     type="date"
                     value={editDateOfBirth}
                     onChange={(event) => setEditDateOfBirth(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -926,7 +1108,8 @@ export default function AdminClientDetailPage() {
                   <select
                     value={editClientSource}
                     onChange={(event) => setEditClientSource(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-400"
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-400 disabled:opacity-70"
                   >
                     {CLIENT_SOURCE_OPTIONS.map((option) => (
                       <option
@@ -950,30 +1133,35 @@ export default function AdminClientDetailPage() {
                       onChange={(event) =>
                         setEditClientSourceOther(event.target.value)
                       }
-                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                      disabled={!allowBasicInfoEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                     />
                   </label>
                 ) : null}
               </div>
 
-              <label className="mt-5 block">
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  Client Note
-                </span>
-                <textarea
-                  value={editClientNote}
-                  onChange={(event) => setEditClientNote(event.target.value)}
-                  className="min-h-32 w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal leading-6 text-white outline-none focus:border-yellow-400"
-                />
-              </label>
+              {isAdmin && (
+                <label className="mt-5 block">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Client Note
+                  </span>
+                  <textarea
+                    value={editClientNote}
+                    onChange={(event) => setEditClientNote(event.target.value)}
+                    className="min-h-32 w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal leading-6 text-white outline-none focus:border-yellow-400"
+                  />
+                </label>
+              )}
 
-              <button
-                type="submit"
-                disabled={savingClientInfo}
-                className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
-              >
-                {savingClientInfo ? "Saving..." : "Save Client Info"}
-              </button>
+              {allowBasicInfoEdit && (
+                <button
+                  type="submit"
+                  disabled={savingClientInfo}
+                  className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                >
+                  {savingClientInfo ? "Saving..." : "Save Client Info"}
+                </button>
+              )}
             </form>
 
             <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 text-center shadow-2xl backdrop-blur">
@@ -999,74 +1187,6 @@ export default function AdminClientDetailPage() {
                 )}
               </div>
             </section>
-          </section>
-
-          <section className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
-                  First-Time Setup
-                </p>
-
-                <h2 className="mt-2 text-2xl font-semibold text-white">
-                  Client Activation Code
-                </h2>
-
-                <p className="mt-2 text-sm font-normal text-gray-400">
-                  Give this code to the client. They use it on the Activate Client
-                  Account page with their email and new password.
-                </p>
-
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black/50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Client Email
-                  </p>
-                  <p className="mt-1 text-sm font-normal text-white">
-                    {client.email || "No email saved"}
-                  </p>
-                </div>
-              </div>
-
-              <div className="w-full rounded-2xl border border-yellow-400/30 bg-black/60 p-5 lg:w-96">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  Current Code
-                </p>
-
-                <p className="mt-3 rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-4 text-center text-4xl font-semibold tracking-[0.22em] text-yellow-300">
-                  {activationCode || "------"}
-                </p>
-
-                <button
-                  type="button"
-                  onClick={generateClientActivationCode}
-                  disabled={generatingActivationCode || !client.email}
-                  className="mt-4 w-full rounded-xl bg-yellow-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {generatingActivationCode
-                    ? "Generating..."
-                    : activationCode
-                    ? "Generate New Code"
-                    : "Generate First-Time Code"}
-                </button>
-
-                {!client.email ? (
-                  <p className="mt-3 text-xs font-normal text-red-300">
-                    Save a client email first before generating an activation code.
-                  </p>
-                ) : (
-                  <p className="mt-3 text-xs font-normal text-gray-400">
-                    Admin and staff can use this code for first-time account setup.
-                  </p>
-                )}
-
-                <Link
-                  href="/client/activate"
-                  className="mt-3 block text-center text-xs font-semibold uppercase text-yellow-400 hover:text-yellow-300"
-                >
-                  Open Activate Page
-                </Link>
-              </div>
-            </div>
           </section>
 
           <section className="mb-6 grid gap-4 md:grid-cols-4">
@@ -1107,11 +1227,61 @@ export default function AdminClientDetailPage() {
             </div>
           </section>
 
-          <section className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
-            <h2 className="text-2xl font-semibold">Package Details</h2>
+          <section
+            id="package-renew-section"
+            className={`mb-6 rounded-[2rem] border p-6 shadow-2xl backdrop-blur ${
+              purchaseType === "renew"
+                ? "border-green-400/60 bg-green-400/10"
+                : "border-yellow-500/30 bg-white/[0.07]"
+            }`}
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                  Package Management
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold">
+                  {purchaseType === "renew" ? "Renew Package" : "Package Details"}
+                </h2>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Add the number of sessions for this package, then choose New or
+                  Renew.
+                </p>
+              </div>
+
+              {isAdmin && (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPurchaseType("new")}
+                    className={`rounded-xl px-4 py-2 text-xs font-semibold uppercase transition ${
+                      purchaseType === "new"
+                        ? "bg-yellow-400 text-black"
+                        : "border border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black"
+                    }`}
+                  >
+                    New
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPurchaseType("renew")}
+                    className={`rounded-xl px-4 py-2 text-xs font-semibold uppercase transition ${
+                      purchaseType === "renew"
+                        ? "bg-green-400 text-black"
+                        : "border border-green-400 text-green-300 hover:bg-green-400 hover:text-black"
+                    }`}
+                  >
+                    Renew
+                  </button>
+                </div>
+              )}
+            </div>
 
             <form onSubmit={savePackageDetails} className="mt-5">
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
                     Package Name
@@ -1119,8 +1289,27 @@ export default function AdminClientDetailPage() {
                   <input
                     value={packageName}
                     onChange={(event) => setPackageName(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowPackageEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                     placeholder="Example: 10 Session Package"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-green-300">
+                    Total Sessions
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={packageTotalSessions}
+                    onChange={(event) =>
+                      setPackageTotalSessions(event.target.value)
+                    }
+                    disabled={!allowPackageEdit}
+                    className="w-full rounded-2xl border border-green-400/50 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-green-300 disabled:opacity-70"
+                    placeholder="Example: 10"
                   />
                 </label>
 
@@ -1131,7 +1320,8 @@ export default function AdminClientDetailPage() {
                   <select
                     value={purchaseType}
                     onChange={(event) => setPurchaseType(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-400 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-300"
+                    disabled={!allowPackageEdit}
+                    className="w-full rounded-2xl border border-yellow-400 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-300 disabled:opacity-70"
                   >
                     <option value="" className="bg-white text-black">
                       Select New or Renew
@@ -1159,7 +1349,8 @@ export default function AdminClientDetailPage() {
                     step="0.01"
                     value={packageValue}
                     onChange={(event) => setPackageValue(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowPackageEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -1171,7 +1362,8 @@ export default function AdminClientDetailPage() {
                     type="date"
                     value={packageStartDate}
                     onChange={(event) => setPackageStartDate(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowPackageEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -1183,18 +1375,36 @@ export default function AdminClientDetailPage() {
                     type="date"
                     value={packageExpireDate}
                     onChange={(event) => setPackageExpireDate(event.target.value)}
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowPackageEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
               </div>
 
-              <button
-                type="submit"
-                disabled={savingPackage}
-                className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
-              >
-                {savingPackage ? "Saving..." : "Save Package Details"}
-              </button>
+              {allowPackageEdit && (
+                <button
+                  type="submit"
+                  disabled={savingPackage}
+                  className={`mt-5 rounded-2xl px-5 py-3 text-sm font-semibold uppercase text-black transition disabled:opacity-60 ${
+                    purchaseType === "renew"
+                      ? "bg-green-400 hover:bg-green-300"
+                      : "bg-yellow-400 hover:bg-yellow-300"
+                  }`}
+                >
+                  {savingPackage
+                    ? "Saving..."
+                    : purchaseType === "renew"
+                      ? "Save Renew Package"
+                      : "Save Package Details"}
+                </button>
+              )}
+
+              {!allowPackageEdit && (
+                <p className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm text-yellow-100">
+                  Manager can view package details but cannot edit package value,
+                  sessions, dates, or purchase type.
+                </p>
+              )}
             </form>
           </section>
 
@@ -1206,8 +1416,8 @@ export default function AdminClientDetailPage() {
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-300">
-                  Admin-only payment tracking. Staff pages should not show this
-                  financial information.
+                  Admin-only payment tracking. Manager can view this information
+                  but cannot edit financial records.
                 </p>
               </div>
 
@@ -1230,8 +1440,9 @@ export default function AdminClientDetailPage() {
                     step="0.01"
                     value={debtAmount}
                     onChange={(event) => setDebtAmount(event.target.value)}
+                    disabled={!allowDebtEdit}
                     placeholder="0"
-                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -1243,7 +1454,8 @@ export default function AdminClientDetailPage() {
                     type="date"
                     value={debtDeadline}
                     onChange={(event) => setDebtDeadline(event.target.value)}
-                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    disabled={!allowDebtEdit}
+                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -1260,13 +1472,15 @@ export default function AdminClientDetailPage() {
                 </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={savingDebt}
-                className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
-              >
-                {savingDebt ? "Saving..." : "Save Debt"}
-              </button>
+              {allowDebtEdit && (
+                <button
+                  type="submit"
+                  disabled={savingDebt}
+                  className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                >
+                  {savingDebt ? "Saving..." : "Save Debt"}
+                </button>
+              )}
             </form>
           </section>
 
@@ -1294,6 +1508,15 @@ export default function AdminClientDetailPage() {
 
               <div className="rounded-2xl bg-black/40 p-4">
                 <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  Sessions
+                </p>
+                <p className="mt-2 font-normal text-cyan-300">
+                  {latestPurchase?.session_count ?? "-"}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-black/40 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
                   Price
                 </p>
                 <p className="mt-2 font-normal text-green-300">
@@ -1316,15 +1539,6 @@ export default function AdminClientDetailPage() {
                 </p>
                 <p className="mt-2 font-normal text-red-300">
                   {formatMoney(latestPurchase?.balance_due)}
-                </p>
-              </div>
-
-              <div className="rounded-2xl bg-black/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  Debt Deadline
-                </p>
-                <p className="mt-2 font-normal text-orange-300">
-                  {formatDate(latestPurchase?.debt_deadline || null)}
                 </p>
               </div>
             </div>

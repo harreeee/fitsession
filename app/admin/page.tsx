@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
 
+type AdminRole = "admin" | "manager";
+
 type ClientRow = {
   id: string;
   client_code: string | null;
@@ -121,20 +123,51 @@ function getDaysUntil(value: string | null) {
 }
 
 function getDebtNoticeClass(daysLeft: number | null) {
-  if (daysLeft === null) return "border-orange-400/30 bg-orange-400/10 text-orange-300";
-  if (daysLeft < 0) return "border-red-400/30 bg-red-400/10 text-red-300";
-  if (daysLeft <= 7) return "border-orange-400/30 bg-orange-400/10 text-orange-300";
+  if (daysLeft === null) {
+    return "border-orange-400/30 bg-orange-400/10 text-orange-300";
+  }
+
+  if (daysLeft < 0) {
+    return "border-red-400/30 bg-red-400/10 text-red-300";
+  }
+
+  if (daysLeft <= 7) {
+    return "border-orange-400/30 bg-orange-400/10 text-orange-300";
+  }
 
   return "border-yellow-400/30 bg-yellow-400/10 text-yellow-300";
 }
 
 function getDebtNoticeText(daysLeft: number | null) {
   if (daysLeft === null) return "No deadline";
-  if (daysLeft < 0) return `Overdue ${Math.abs(daysLeft)} day${Math.abs(daysLeft) === 1 ? "" : "s"}`;
+
+  if (daysLeft < 0) {
+    return `Overdue ${Math.abs(daysLeft)} day${
+      Math.abs(daysLeft) === 1 ? "" : "s"
+    }`;
+  }
+
   if (daysLeft === 0) return "Due today";
-  if (daysLeft <= 7) return `Due in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+
+  if (daysLeft <= 7) {
+    return `Due in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+  }
 
   return `Due in ${daysLeft} days`;
+}
+
+function getGreeting() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+
+  return "Good evening";
+}
+
+function getRoleLabel(role: AdminRole | null) {
+  if (role === "manager") return "Manager";
+  return "Admin";
 }
 
 export default function AdminDashboardPage() {
@@ -145,7 +178,13 @@ export default function AdminDashboardPage() {
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
-  const [checkingMessage, setCheckingMessage] = useState("Checking admin access...");
+  const [checkingMessage, setCheckingMessage] = useState(
+    "Checking admin access..."
+  );
+  const [currentRole, setCurrentRole] = useState<AdminRole | null>(null);
+
+  const isAdmin = currentRole === "admin";
+  const isManager = currentRole === "manager";
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -231,8 +270,9 @@ export default function AdminDashboardPage() {
         );
 
         const purchaseWithDebt =
-          clientPurchases.find((purchase) => Number(purchase.balance_due || 0) > 0) ||
-          getLatestByDate(clientPurchases);
+          clientPurchases.find(
+            (purchase) => Number(purchase.balance_due || 0) > 0
+          ) || getLatestByDate(clientPurchases);
 
         if (!purchaseWithDebt) return null;
 
@@ -337,24 +377,25 @@ export default function AdminDashboardPage() {
         return;
       }
 
-      if (role !== "admin") {
-        if (role === "trainer" || role === "nutrition_coach") {
-          router.push("/trainer/scan");
-          return;
-        }
-
-        if (role === "client") {
-          router.push("/client");
-          return;
-        }
-
-        await supabase.auth.signOut();
-        router.push("/login");
+      if (role === "admin" || role === "manager") {
+        setCurrentRole(role);
+        setCheckingRole(false);
+        await fetchDashboardData();
         return;
       }
 
-      setCheckingRole(false);
-      await fetchDashboardData();
+      if (role === "trainer" || role === "nutrition_coach") {
+        router.push("/trainer/scan");
+        return;
+      }
+
+      if (role === "client") {
+        router.push("/client");
+        return;
+      }
+
+      await supabase.auth.signOut();
+      router.push("/login");
     }
 
     protectDashboard();
@@ -409,20 +450,33 @@ export default function AdminDashboardPage() {
 
       <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_30%),linear-gradient(135deg,_#050505,_#101010_45%,_#050505)] p-4 md:p-6">
         <div className="mx-auto max-w-7xl">
-          <header className="mb-5 rounded-3xl border border-yellow-500/25 bg-black/50 p-5 shadow-2xl">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <header className="mb-5 rounded-3xl border border-yellow-500/25 bg-black/55 p-5 shadow-2xl">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <p className="mb-1 text-xs font-semibold uppercase tracking-[0.28em] text-yellow-400">
                   FXA FITNESS
                 </p>
 
                 <h1 className="text-3xl font-semibold md:text-5xl">
-                  Admin Dashboard
+                  {getGreeting()}, {getRoleLabel(currentRole)}
                 </h1>
 
                 <p className="mt-2 max-w-3xl text-sm font-normal leading-6 text-gray-400">
-                  Track clients, sessions, debt, payment deadlines, and important admin notices.
+                  Here is today&apos;s business snapshot: debt follow-ups,
+                  upcoming payment notices, low-session clients, and important
+                  client activity.
                 </p>
+
+                {isManager ? (
+                  <div className="mt-4 rounded-2xl border border-yellow-400/30 bg-yellow-400/10 p-4">
+                    <p className="text-sm font-normal leading-6 text-yellow-100">
+                      Manager mode: you can view admin-level business data and
+                      edit only basic client information. Delete, import, staff
+                      changes, package changes, debt changes, and financial
+                      edits should stay admin-only.
+                    </p>
+                  </div>
+                ) : null}
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -447,7 +501,7 @@ export default function AdminDashboardPage() {
           {loading ? (
             <section className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-8 text-center shadow-2xl">
               <p className="text-sm font-semibold text-yellow-400">
-                Loading admin dashboard...
+                Loading dashboard...
               </p>
             </section>
           ) : (
@@ -460,6 +514,9 @@ export default function AdminDashboardPage() {
                   <p className="mt-2 text-4xl font-semibold text-yellow-400">
                     {clients.length}
                   </p>
+                  <p className="mt-2 text-xs font-normal text-gray-500">
+                    All client profiles
+                  </p>
                 </div>
 
                 <div className="rounded-3xl border border-green-500/30 bg-green-500/10 p-5 shadow-2xl">
@@ -468,6 +525,9 @@ export default function AdminDashboardPage() {
                   </p>
                   <p className="mt-2 text-4xl font-semibold text-green-300">
                     {dashboardData.activeClients}
+                  </p>
+                  <p className="mt-2 text-xs font-normal text-gray-500">
+                    Currently active
                   </p>
                 </div>
 
@@ -478,6 +538,9 @@ export default function AdminDashboardPage() {
                   <p className="mt-2 text-4xl font-semibold text-yellow-300">
                     {dashboardData.totalSessionsLeft}
                   </p>
+                  <p className="mt-2 text-xs font-normal text-gray-500">
+                    Remaining sessions
+                  </p>
                 </div>
 
                 <div className="rounded-3xl border border-red-500/30 bg-red-500/10 p-5 shadow-2xl">
@@ -486,6 +549,9 @@ export default function AdminDashboardPage() {
                   </p>
                   <p className="mt-2 text-4xl font-semibold text-red-300">
                     {formatMoney(dashboardData.totalDebt)}
+                  </p>
+                  <p className="mt-2 text-xs font-normal text-gray-500">
+                    Outstanding balance
                   </p>
                 </div>
 
@@ -496,93 +562,125 @@ export default function AdminDashboardPage() {
                   <p className="mt-2 text-4xl font-semibold text-orange-300">
                     {dashboardData.dueSoonDebt.length}
                   </p>
+                  <p className="mt-2 text-xs font-normal text-gray-500">
+                    Due within 7 days
+                  </p>
                 </div>
               </section>
 
-              <section className="mb-5 grid gap-4 lg:grid-cols-3">
-                <div className="rounded-3xl border border-red-500/30 bg-red-500/10 p-5 shadow-2xl">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
-                    Urgent Notice
+              <section className="mb-5 rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl">
+                <div className="mb-4">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                    Today&apos;s Focus
                   </p>
 
-                  <h2 className="mt-2 text-2xl font-semibold text-white">
-                    Overdue Debt
+                  <h2 className="mt-1 text-2xl font-semibold text-white">
+                    Important Notices
                   </h2>
 
-                  <p className="mt-2 text-sm font-normal leading-6 text-gray-300">
-                    Clients with payment deadlines already passed.
+                  <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
+                    Start here before checking the full client directory.
                   </p>
+                </div>
 
-                  <p className="mt-4 text-5xl font-semibold text-red-300">
-                    {dashboardData.overdueDebt.length}
-                  </p>
+                <div className="grid gap-3 lg:grid-cols-3">
+                  <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                          Overdue Debt
+                        </p>
 
-                  {dashboardData.overdueDebt.length > 0 ? (
+                        <h3 className="mt-2 text-xl font-semibold text-white">
+                          Needs follow-up
+                        </h3>
+                      </div>
+
+                      <p className="text-4xl font-semibold text-red-300">
+                        {dashboardData.overdueDebt.length}
+                      </p>
+                    </div>
+
+                    <p className="mt-3 text-sm font-normal leading-6 text-gray-300">
+                      Clients with payment deadlines already passed.
+                    </p>
+
+                    {dashboardData.overdueDebt.length > 0 ? (
+                      <Link
+                        href="/admin/clients"
+                        className="mt-4 inline-block rounded-xl bg-red-300 px-4 py-2 text-xs font-semibold uppercase text-black transition hover:bg-red-200"
+                      >
+                        Review Now
+                      </Link>
+                    ) : (
+                      <p className="mt-4 rounded-xl border border-green-400/20 bg-green-400/10 p-3 text-sm font-normal text-green-300">
+                        No overdue debt right now.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-orange-500/30 bg-orange-500/10 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-widest text-orange-300">
+                          Due This Week
+                        </p>
+
+                        <h3 className="mt-2 text-xl font-semibold text-white">
+                          Payment reminders
+                        </h3>
+                      </div>
+
+                      <p className="text-4xl font-semibold text-orange-300">
+                        {dashboardData.dueSoonDebt.length}
+                      </p>
+                    </div>
+
+                    <p className="mt-3 text-sm font-normal leading-6 text-gray-300">
+                      Clients with debt due today or within 7 days.
+                    </p>
+
+                    {dashboardData.dueTodayDebt.length > 0 ? (
+                      <p className="mt-4 rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm font-normal text-red-200">
+                        {dashboardData.dueTodayDebt.length} client
+                        {dashboardData.dueTodayDebt.length === 1 ? "" : "s"} due
+                        today.
+                      </p>
+                    ) : (
+                      <p className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm font-normal text-yellow-100">
+                        No payment due today.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-widest text-yellow-300">
+                          Low Sessions
+                        </p>
+
+                        <h3 className="mt-2 text-xl font-semibold text-white">
+                          Renewal opportunity
+                        </h3>
+                      </div>
+
+                      <p className="text-4xl font-semibold text-yellow-300">
+                        {dashboardData.lowSessionRows.length}
+                      </p>
+                    </div>
+
+                    <p className="mt-3 text-sm font-normal leading-6 text-gray-300">
+                      Clients with 1 to 10 sessions left.
+                    </p>
+
                     <Link
                       href="/admin/clients"
-                      className="mt-5 inline-block rounded-xl bg-red-300 px-4 py-2 text-xs font-semibold uppercase text-black transition hover:bg-red-200"
+                      className="mt-4 inline-block rounded-xl bg-yellow-400 px-4 py-2 text-xs font-semibold uppercase text-black transition hover:bg-yellow-300"
                     >
-                      Review Overdue Clients
+                      View Clients
                     </Link>
-                  ) : (
-                    <p className="mt-5 rounded-2xl border border-green-400/20 bg-green-400/10 p-3 text-sm font-normal text-green-300">
-                      No overdue debt right now.
-                    </p>
-                  )}
-                </div>
-
-                <div className="rounded-3xl border border-orange-500/30 bg-orange-500/10 p-5 shadow-2xl">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-orange-300">
-                    Payment Notice
-                  </p>
-
-                  <h2 className="mt-2 text-2xl font-semibold text-white">
-                    Due Today / This Week
-                  </h2>
-
-                  <p className="mt-2 text-sm font-normal leading-6 text-gray-300">
-                    Clients with debt due today or within 7 days.
-                  </p>
-
-                  <p className="mt-4 text-5xl font-semibold text-orange-300">
-                    {dashboardData.dueSoonDebt.length}
-                  </p>
-
-                  {dashboardData.dueTodayDebt.length > 0 ? (
-                    <p className="mt-5 rounded-2xl border border-red-400/30 bg-red-400/10 p-3 text-sm font-normal text-red-200">
-                      {dashboardData.dueTodayDebt.length} client
-                      {dashboardData.dueTodayDebt.length === 1 ? "" : "s"} due today.
-                    </p>
-                  ) : (
-                    <p className="mt-5 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm font-normal text-yellow-100">
-                      No payment due today.
-                    </p>
-                  )}
-                </div>
-
-                <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
-                    Session Notice
-                  </p>
-
-                  <h2 className="mt-2 text-2xl font-semibold text-white">
-                    Low Sessions
-                  </h2>
-
-                  <p className="mt-2 text-sm font-normal leading-6 text-gray-300">
-                    Clients with 1 to 10 sessions left.
-                  </p>
-
-                  <p className="mt-4 text-5xl font-semibold text-yellow-300">
-                    {dashboardData.lowSessionRows.length}
-                  </p>
-
-                  <Link
-                    href="/admin/clients"
-                    className="mt-5 inline-block rounded-xl bg-yellow-400 px-4 py-2 text-xs font-semibold uppercase text-black transition hover:bg-yellow-300"
-                  >
-                    View Clients
-                  </Link>
+                  </div>
                 </div>
               </section>
 
@@ -595,8 +693,12 @@ export default function AdminDashboardPage() {
                       </p>
 
                       <h2 className="mt-1 text-2xl font-semibold text-white">
-                        Important Debt Notices
+                        Payment Priority List
                       </h2>
+
+                      <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
+                        Sorted by closest deadline first.
+                      </p>
                     </div>
 
                     <Link
@@ -676,12 +778,16 @@ export default function AdminDashboardPage() {
 
                 <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl">
                   <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
-                    Low Session Follow-Up
+                    Renewal Follow-Up
                   </p>
 
                   <h2 className="mt-1 text-2xl font-semibold text-white">
                     Clients Near Renewal
                   </h2>
+
+                  <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
+                    These clients may need a package reminder soon.
+                  </p>
 
                   {dashboardData.lowSessionRows.length === 0 ? (
                     <div className="mt-5 rounded-2xl border border-green-400/20 bg-green-400/10 p-5 text-center">
@@ -711,9 +817,14 @@ export default function AdminDashboardPage() {
                               </h3>
                             </div>
 
-                            <p className="text-3xl font-semibold text-yellow-300">
-                              {row.remainingSessions}
-                            </p>
+                            <div className="rounded-2xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-2 text-center">
+                              <p className="text-3xl font-semibold text-yellow-300">
+                                {row.remainingSessions}
+                              </p>
+                              <p className="text-[10px] font-semibold uppercase text-gray-400">
+                                left
+                              </p>
+                            </div>
                           </div>
 
                           <Link
@@ -729,54 +840,92 @@ export default function AdminDashboardPage() {
                 </div>
               </section>
 
-              <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <Link
-                  href="/admin/clients"
-                  className="rounded-3xl border border-yellow-500/30 bg-yellow-400 p-5 text-black shadow-2xl transition hover:bg-yellow-300"
-                >
-                  <h2 className="text-xl font-semibold uppercase">
-                    Manage Clients
-                  </h2>
-                  <p className="mt-2 text-sm font-normal leading-6 text-black/70">
-                    View clients, sessions, debt, and payment status.
+              <section className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl">
+                <div className="mb-4">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                    Quick Actions
                   </p>
-                </Link>
 
-                <Link
-                  href="/admin/import-clients"
-                  className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl transition hover:bg-yellow-400 hover:text-black"
-                >
-                  <h2 className="text-xl font-semibold uppercase">
-                    Import Excel
+                  <h2 className="mt-1 text-2xl font-semibold text-white">
+                    What would you like to do next?
                   </h2>
-                  <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
-                    Upload Google Sheet exports and update client data.
-                  </p>
-                </Link>
+                </div>
 
-                <Link
-                  href="/admin/trainers"
-                  className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl transition hover:bg-yellow-400 hover:text-black"
-                >
-                  <h2 className="text-xl font-semibold uppercase">
-                    Staff
-                  </h2>
-                  <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
-                    Manage trainers and nutrition coaches.
-                  </p>
-                </Link>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <Link
+                    href="/admin/clients"
+                    className="rounded-3xl border border-yellow-500/30 bg-yellow-400 p-5 text-black shadow-2xl transition hover:bg-yellow-300"
+                  >
+                    <h3 className="text-xl font-semibold uppercase">
+                      {isManager ? "View Clients" : "Manage Clients"}
+                    </h3>
+                    <p className="mt-2 text-sm font-normal leading-6 text-black/70">
+                      View clients, sessions, debt, and payment status.
+                    </p>
+                  </Link>
 
-                <Link
-                  href="/history"
-                  className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl transition hover:bg-yellow-400 hover:text-black"
-                >
-                  <h2 className="text-xl font-semibold uppercase">
-                    Session History
-                  </h2>
-                  <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
-                    Review recent scans and completed training sessions.
-                  </p>
-                </Link>
+                  {isAdmin ? (
+                    <>
+                      <Link
+                        href="/admin/import-clients"
+                        className="rounded-3xl border border-yellow-500/30 bg-black/45 p-5 shadow-2xl transition hover:bg-yellow-400 hover:text-black"
+                      >
+                        <h3 className="text-xl font-semibold uppercase">
+                          Import Excel
+                        </h3>
+                        <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
+                          Upload Google Sheet exports and update client data.
+                        </p>
+                      </Link>
+
+                      <Link
+                        href="/admin/trainers"
+                        className="rounded-3xl border border-yellow-500/30 bg-black/45 p-5 shadow-2xl transition hover:bg-yellow-400 hover:text-black"
+                      >
+                        <h3 className="text-xl font-semibold uppercase">
+                          Staff
+                        </h3>
+                        <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
+                          Manage trainers, nutrition coaches, and staff access.
+                        </p>
+                      </Link>
+                    </>
+                  ) : (
+                    <>
+                      <div className="rounded-3xl border border-white/10 bg-black/35 p-5 opacity-70 shadow-2xl">
+                        <h3 className="text-xl font-semibold uppercase text-gray-300">
+                          Import Excel
+                        </h3>
+                        <p className="mt-2 text-sm font-normal leading-6 text-gray-500">
+                          Admin-only. Managers can view imported data but cannot
+                          import or overwrite records.
+                        </p>
+                      </div>
+
+                      <div className="rounded-3xl border border-white/10 bg-black/35 p-5 opacity-70 shadow-2xl">
+                        <h3 className="text-xl font-semibold uppercase text-gray-300">
+                          Staff
+                        </h3>
+                        <p className="mt-2 text-sm font-normal leading-6 text-gray-500">
+                          Admin-only. Managers cannot create, delete, or change
+                          staff roles.
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  <Link
+                    href="/history"
+                    className="rounded-3xl border border-yellow-500/30 bg-black/45 p-5 shadow-2xl transition hover:bg-yellow-400 hover:text-black"
+                  >
+                    <h3 className="text-xl font-semibold uppercase">
+                      Session History
+                    </h3>
+                    <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
+                      Review recent scans and completed sessions.
+                    </p>
+                  </Link>
+                </div>
               </section>
             </>
           )}
