@@ -41,7 +41,7 @@ type ClientRow = {
   full_name: string;
   email: string | null;
   qr_token: string;
-  status: string;
+  status: string | null;
 };
 
 type SessionPackageRow = {
@@ -50,7 +50,8 @@ type SessionPackageRow = {
   total_sessions: number | null;
   used_sessions: number | null;
   remaining_sessions: number | null;
-  status: string;
+  status: string | null;
+  created_at: string | null;
 };
 
 type CreatedSessionHistoryRow = {
@@ -88,6 +89,21 @@ function toNumber(value: number | string | null | undefined) {
   if (Number.isNaN(numberValue)) return null;
 
   return numberValue;
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+
+  return "Unknown error";
 }
 
 export default function TrainerScanPage() {
@@ -175,7 +191,7 @@ export default function TrainerScanPage() {
       .in("id", logClientIds);
 
     if (clientsByIdError) {
-      console.error(clientsByIdError);
+      console.error("clients by id error:", clientsByIdError.message);
     }
 
     ((clientsById || []) as ClientInfo[]).forEach((client) => {
@@ -193,7 +209,7 @@ export default function TrainerScanPage() {
         .in("profile_id", logClientIds);
 
     if (clientsByProfileError) {
-      console.error(clientsByProfileError);
+      console.error("clients by profile id error:", clientsByProfileError.message);
     }
 
     ((clientsByProfileId || []) as ClientInfo[]).forEach((client) => {
@@ -349,9 +365,7 @@ export default function TrainerScanPage() {
         await fetchTrainerStats(trainerId);
       }
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to save note.";
-      setNoteMessage(message);
+      setNoteMessage(getErrorMessage(error) || "Unable to save note.");
     } finally {
       setSavingNote(false);
     }
@@ -406,7 +420,44 @@ export default function TrainerScanPage() {
     }
   }
 
-  async function insertSessionRecords({
+  async function findSessionPackage(clientId: string) {
+    const { data: activePackage, error: activePackageError } = await supabase
+      .from("session_packages")
+      .select(
+        "id, client_id, total_sessions, used_sessions, remaining_sessions, status, created_at"
+      )
+      .eq("client_id", clientId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (activePackageError) {
+      throw activePackageError;
+    }
+
+    if (activePackage) {
+      return activePackage as SessionPackageRow;
+    }
+
+    const { data: latestPackage, error: latestPackageError } = await supabase
+      .from("session_packages")
+      .select(
+        "id, client_id, total_sessions, used_sessions, remaining_sessions, status, created_at"
+      )
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestPackageError) {
+      throw latestPackageError;
+    }
+
+    return latestPackage as SessionPackageRow | null;
+  }
+
+  async function createHistoryRecord({
     client,
     sessionPackage,
     currentTrainerId,
@@ -421,7 +472,7 @@ export default function TrainerScanPage() {
       trainerName || trainerEmail || "staff"
     }.`;
 
-    const { data: historyData, error: historyError } = await supabase
+    const fullInsert = await supabase
       .from("session_history")
       .insert({
         client_id: client.id,
@@ -435,25 +486,151 @@ export default function TrainerScanPage() {
       .select("id")
       .single();
 
-    if (historyError) {
-      throw historyError;
+    if (!fullInsert.error && fullInsert.data) {
+      return fullInsert.data as CreatedSessionHistoryRow;
     }
 
-    const { error: logError } = await supabase.from("session_logs").insert({
+    console.error("session_history full insert failed:", fullInsert.error);
+
+    const withoutTrainerNote = await supabase
+      .from("session_history")
+      .insert({
+        client_id: client.id,
+        trainer_id: currentTrainerId,
+        package_id: sessionPackage.id,
+        status: "success",
+        message: historyMessage,
+        remaining_after: newRemaining,
+      })
+      .select("id")
+      .single();
+
+    if (!withoutTrainerNote.error && withoutTrainerNote.data) {
+      return withoutTrainerNote.data as CreatedSessionHistoryRow;
+    }
+
+    console.error(
+      "session_history without trainer_note failed:",
+      withoutTrainerNote.error
+    );
+
+    const withoutPackageId = await supabase
+      .from("session_history")
+      .insert({
+        client_id: client.id,
+        trainer_id: currentTrainerId,
+        status: "success",
+        message: historyMessage,
+        remaining_after: newRemaining,
+        trainer_note: null,
+      })
+      .select("id")
+      .single();
+
+    if (!withoutPackageId.error && withoutPackageId.data) {
+      return withoutPackageId.data as CreatedSessionHistoryRow;
+    }
+
+    console.error("session_history without package_id failed:", withoutPackageId.error);
+
+    const basicInsert = await supabase
+      .from("session_history")
+      .insert({
+        client_id: client.id,
+        trainer_id: currentTrainerId,
+        status: "success",
+        message: historyMessage,
+        remaining_after: newRemaining,
+      })
+      .select("id")
+      .single();
+
+    if (!basicInsert.error && basicInsert.data) {
+      return basicInsert.data as CreatedSessionHistoryRow;
+    }
+
+    console.error("session_history basic insert failed:", basicInsert.error);
+
+    const fullMessage = fullInsert.error?.message || "full insert failed";
+    const noteMessage =
+      withoutTrainerNote.error?.message || "without trainer_note failed";
+    const packageMessage =
+      withoutPackageId.error?.message || "without package_id failed";
+    const basicMessage = basicInsert.error?.message || "basic insert failed";
+
+    throw new Error(
+      `Could not create history. ${fullMessage} | ${noteMessage} | ${packageMessage} | ${basicMessage}`
+    );
+  }
+
+  async function createSessionLogRecord({
+    client,
+    sessionPackage,
+    currentTrainerId,
+    newRemaining,
+  }: {
+    client: ClientRow;
+    sessionPackage: SessionPackageRow;
+    currentTrainerId: string;
+    newRemaining: number;
+  }) {
+    const message = `Session scanned by ${
+      trainerName || trainerEmail || "staff"
+    }.`;
+
+    const fullInsert = await supabase.from("session_logs").insert({
       client_id: client.id,
       trainer_id: currentTrainerId,
       package_id: sessionPackage.id,
       status: "success",
-      message: historyMessage,
+      message,
       remaining_after: newRemaining,
     });
 
-    if (logError) {
-      console.log("session_logs insert error:", logError.message);
+    if (!fullInsert.error) return;
+
+    console.log("session_logs full insert error:", fullInsert.error.message);
+
+    const basicInsert = await supabase.from("session_logs").insert({
+      client_id: client.id,
+      trainer_id: currentTrainerId,
+      status: "success",
+      message,
+      remaining_after: newRemaining,
+    });
+
+    if (basicInsert.error) {
+      console.log("session_logs basic insert error:", basicInsert.error.message);
     }
+  }
+
+  async function insertSessionRecords({
+    client,
+    sessionPackage,
+    currentTrainerId,
+    newRemaining,
+  }: {
+    client: ClientRow;
+    sessionPackage: SessionPackageRow;
+    currentTrainerId: string;
+    newRemaining: number;
+  }) {
+    const history = await createHistoryRecord({
+      client,
+      sessionPackage,
+      currentTrainerId,
+      newRemaining,
+    });
+
+    await createSessionLogRecord({
+      client,
+      sessionPackage,
+      currentTrainerId,
+      newRemaining,
+    });
 
     return {
-      history: historyData as CreatedSessionHistoryRow,
+      history,
       historyClientId: client.id,
     };
   }
@@ -510,7 +687,7 @@ export default function TrainerScanPage() {
       return;
     }
 
-    if (client.status !== "active") {
+    if (client.status && client.status !== "active") {
       setResult({
         type: "error",
         message: "Client is inactive.",
@@ -518,31 +695,23 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const { data: packageData, error: packageError } = await supabase
-      .from("session_packages")
-      .select(
-        "id, client_id, total_sessions, used_sessions, remaining_sessions, status"
-      )
-      .eq("client_id", client.id)
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    let sessionPackage: SessionPackageRow | null = null;
 
-    if (packageError) {
+    try {
+      sessionPackage = await findSessionPackage(client.id);
+    } catch (error) {
       setResult({
         type: "error",
-        message: packageError.message,
+        message: `Package lookup error: ${getErrorMessage(error)}`,
       });
       return;
     }
 
-    const sessionPackage = packageData as SessionPackageRow | null;
-
     if (!sessionPackage) {
       setResult({
         type: "error",
-        message: "No active session package found.",
+        message:
+          "No package found for this client. Open the client profile and add/renew a session package first.",
       });
       return;
     }
@@ -605,12 +774,9 @@ export default function TrainerScanPage() {
 
       createdHistory = insertResult.history;
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Could not create history.";
-
       setResult({
         type: "error",
-        message,
+        message: getErrorMessage(error),
       });
       return;
     }
@@ -620,7 +786,7 @@ export default function TrainerScanPage() {
       .update({
         used_sessions: newUsed,
         remaining_sessions: newRemaining,
-        status: newRemaining <= 0 ? "completed" : sessionPackage.status,
+        status: newRemaining <= 0 ? "completed" : "active",
       })
       .eq("id", sessionPackage.id);
 
@@ -959,6 +1125,7 @@ export default function TrainerScanPage() {
             </div>
 
             <button
+              type="button"
               onClick={scannerStarted ? stopScanner : startScanner}
               className={`mb-6 w-full rounded-2xl p-4 text-base font-semibold uppercase tracking-wide transition md:text-lg ${
                 scannerStarted
@@ -976,7 +1143,7 @@ export default function TrainerScanPage() {
               />
             </div>
 
-            {result.message && (
+            {result.message ? (
               <div
                 className={`rounded-3xl border p-5 text-center text-base font-semibold leading-7 ${
                   result.type === "success"
@@ -986,7 +1153,7 @@ export default function TrainerScanPage() {
               >
                 {result.message}
               </div>
-            )}
+            ) : null}
 
             {showNoteBox ? (
               <div className="mt-5 rounded-3xl border border-yellow-400/40 bg-black/70 p-5">
