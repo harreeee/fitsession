@@ -1,40 +1,41 @@
 import { supabase } from "./supabaseClient";
-import { normalizeRole, type AppRole } from "./role";
 
-type CurrentUserRoleResult = {
-  user: Awaited<ReturnType<typeof supabase.auth.getUser>>["data"]["user"];
-  role: AppRole | null;
-};
-
-export async function getCurrentUserRole(): Promise<CurrentUserRoleResult> {
+export async function getCurrentUserRole() {
   const {
     data: { user },
     error: userError,
   } = await supabase.auth.getUser();
 
-  if (userError || !user) {
-    return {
-      user: null,
-      role: null,
-    };
+  if (userError) {
+    console.error("getCurrentUserRole auth error:", userError.message);
+    return { user: null, role: null };
+  }
+
+  if (!user) {
+    console.error("getCurrentUserRole: no logged-in user");
+    return { user: null, role: null };
   }
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("role")
+    .select("id, role")
     .eq("id", user.id)
     .maybeSingle();
 
-  if (profileError || !profile) {
-    console.error("Profile role fetch failed:", profileError);
-    return {
-      user,
-      role: null,
-    };
+  if (profileError) {
+    console.error("getCurrentUserRole profile error:", profileError.message);
+    return { user, role: null };
   }
 
-  return {
-    user,
-    role: normalizeRole(profile.role),
-  };
+  if (!profile) {
+    console.error("getCurrentUserRole: no profile row for user id:", user.id);
+    return { user, role: null };
+  }
+
+  if (!profile.role) {
+    console.error("getCurrentUserRole: profile exists but role is empty:", profile);
+    return { user, role: null };
+  }
+
+  return { user, role: profile.role };
 }

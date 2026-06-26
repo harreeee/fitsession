@@ -18,6 +18,7 @@ type ClientRow = {
   status: string | null;
   client_source: string | null;
   client_source_other: string | null;
+  sales_person_id: string | null;
   created_at: string | null;
 };
 
@@ -49,6 +50,12 @@ type PurchaseRow = {
   created_at: string | null;
 };
 
+type SalesPersonProfile = {
+  id: string;
+  full_name: string | null;
+  role: string | null;
+};
+
 type ClientTableRow = {
   id: string;
   clientCode: string;
@@ -65,6 +72,7 @@ type ClientTableRow = {
   balanceDue: number | null;
   purchaseType: string;
   source: string;
+  salesPerson: string;
 };
 
 type SortKey =
@@ -81,7 +89,8 @@ type SortKey =
   | "amountPaid"
   | "balanceDue"
   | "purchaseType"
-  | "source";
+  | "source"
+  | "salesPerson";
 
 type SortDirection = "asc" | "desc";
 
@@ -106,6 +115,7 @@ const PURCHASE_TYPE_LABELS: Record<string, string> = {
   new: "New",
   renew: "Renew",
   renewal: "Renew",
+  paid: "Paid",
 };
 
 const columns: Column[] = [
@@ -147,6 +157,7 @@ const columns: Column[] = [
   },
   { key: "purchaseType", label: "Gói tập", width: "w-[120px]" },
   { key: "source", label: "Nguồn khách", width: "w-[180px]" },
+  { key: "salesPerson", label: "Sale Person", width: "w-[180px]" },
 ];
 
 function toNumber(value: number | string | null | undefined) {
@@ -357,6 +368,7 @@ export default function AdminClientsPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [packages, setPackages] = useState<SessionPackageRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
+  const [salesPeople, setSalesPeople] = useState<SalesPersonProfile[]>([]);
 
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("clientCode");
@@ -374,28 +386,35 @@ export default function AdminClientsPage() {
   async function fetchClientsPageData() {
     setLoading(true);
 
-    const [clientsResult, packagesResult, purchasesResult] = await Promise.all([
-      supabase
-        .from("clients")
-        .select(
-          "id, client_code, full_name, status, client_source, client_source_other, created_at"
-        )
-        .order("client_code", { ascending: true }),
+    const [clientsResult, packagesResult, purchasesResult, salesPeopleResult] =
+      await Promise.all([
+        supabase
+          .from("clients")
+          .select(
+            "id, client_code, full_name, status, client_source, client_source_other, sales_person_id, created_at"
+          )
+          .order("client_code", { ascending: true }),
 
-      supabase
-        .from("session_packages")
-        .select(
-          "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
-        )
-        .order("created_at", { ascending: false }),
+        supabase
+          .from("session_packages")
+          .select(
+            "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
+          )
+          .order("created_at", { ascending: false }),
 
-      supabase
-        .from("client_purchases")
-        .select(
-          "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
-        )
-        .order("created_at", { ascending: false }),
-    ]);
+        supabase
+          .from("client_purchases")
+          .select(
+            "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
+          )
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("profiles")
+          .select("id, full_name, role")
+          .in("role", ["trainer", "nutrition_coach"])
+          .order("full_name", { ascending: true }),
+      ]);
 
     if (clientsResult.error) {
       alert(clientsResult.error.message);
@@ -415,9 +434,17 @@ export default function AdminClientsPage() {
       return;
     }
 
+    if (salesPeopleResult.error) {
+      alert(salesPeopleResult.error.message);
+      setLoading(false);
+      return;
+    }
+
     setClients((clientsResult.data || []) as ClientRow[]);
     setPackages((packagesResult.data || []) as SessionPackageRow[]);
     setPurchases((purchasesResult.data || []) as PurchaseRow[]);
+    setSalesPeople((salesPeopleResult.data || []) as SalesPersonProfile[]);
+
     setLoading(false);
   }
 
@@ -511,6 +538,15 @@ export default function AdminClientsPage() {
     setSortDirection("asc");
   }
 
+  const salesPersonNameMap = useMemo(() => {
+    return new Map(
+      salesPeople.map((person) => [
+        person.id,
+        person.full_name || "Unnamed Staff",
+      ])
+    );
+  }, [salesPeople]);
+
   const tableRows = useMemo<ClientTableRow[]>(() => {
     return clients.map((client) => {
       const clientPackages = packages.filter(
@@ -527,8 +563,7 @@ export default function AdminClientsPage() {
         (purchase) => Number(purchase.balance_due || 0) > 0
       );
 
-      const latestPurchase =
-        purchaseWithDebt || getLatestByDate(clientPurchases);
+      const latestPurchase = purchaseWithDebt || getLatestByDate(clientPurchases);
 
       const totalSessions = calculateTotalSessions(
         latestPackage,
@@ -547,7 +582,6 @@ export default function AdminClientsPage() {
       );
 
       const packageValue = calculatePackageValue(latestPackage, latestPurchase);
-
       const amountPaid = calculateAmountPaid(latestPurchase);
 
       const balanceDue = calculateBalanceDue(
@@ -579,9 +613,12 @@ export default function AdminClientsPage() {
           client.client_source,
           client.client_source_other
         ),
+        salesPerson: client.sales_person_id
+          ? salesPersonNameMap.get(client.sales_person_id) || "-"
+          : "-",
       };
     });
-  }, [clients, packages, purchases]);
+  }, [clients, packages, purchases, salesPersonNameMap]);
 
   const filteredAndSortedRows = useMemo(() => {
     const searchText = search.trim().toLowerCase();
@@ -604,6 +641,7 @@ export default function AdminClientsPage() {
         formatMoney(row.balanceDue),
         row.purchaseType,
         row.source,
+        row.salesPerson,
       ]
         .join(" ")
         .toLowerCase()
@@ -753,7 +791,7 @@ export default function AdminClientsPage() {
                 </h1>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Shows Số buổi, Buổi còn lại, Công nợ còn lại, and client status.
+                  Shows sessions, debt, source, sale person, and client status.
                 </p>
 
                 <p className="mt-3 inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-normal text-yellow-300">
@@ -762,6 +800,13 @@ export default function AdminClientsPage() {
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row">
+                <Link
+                  href="/admin/clients/new"
+                  className="rounded-xl bg-yellow-400 px-4 py-2 text-center text-xs font-semibold uppercase text-black transition hover:bg-yellow-300"
+                >
+                  Add Client
+                </Link>
+
                 <Link
                   href="/admin"
                   className="rounded-xl border border-yellow-400 px-4 py-2 text-center text-xs font-semibold uppercase text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
@@ -836,7 +881,7 @@ export default function AdminClientsPage() {
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search mã khách hàng, tên khách, số buổi, công nợ, nguồn khách..."
+                  placeholder="Search mã khách hàng, tên khách, sale person, số buổi, công nợ, nguồn khách..."
                   className="w-full rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
                 />
               </div>
@@ -898,7 +943,7 @@ export default function AdminClientsPage() {
               </div>
 
               <div className="fxa-scrollbar overflow-x-auto">
-                <table className="w-full min-w-[1840px] table-fixed border-collapse text-left text-xs">
+                <table className="w-full min-w-[2020px] table-fixed border-collapse text-left text-xs">
                   <thead>
                     <tr className="bg-yellow-400 text-black">
                       {columns.map((column) => (
@@ -985,6 +1030,13 @@ export default function AdminClientsPage() {
 
                           if (column.key === "balanceDue") {
                             extraClass = getDebtTextClass(row.balanceDue);
+                          }
+
+                          if (column.key === "salesPerson") {
+                            extraClass =
+                              row.salesPerson === "-"
+                                ? "text-gray-500"
+                                : "text-yellow-300";
                           }
 
                           return (

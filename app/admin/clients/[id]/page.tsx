@@ -28,6 +28,7 @@ type ClientDetail = {
   client_note: string | null;
   client_source: string | null;
   client_source_other: string | null;
+  sales_person_id: string | null;
   created_at: string | null;
 };
 
@@ -73,6 +74,7 @@ type SessionHistory = {
 type TrainerProfile = {
   id: string;
   full_name: string | null;
+  role?: string | null;
 };
 
 const CLIENT_SOURCE_OPTIONS = [
@@ -90,7 +92,7 @@ function generateActivationCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-function formatDate(value: string | null) {
+function formatDate(value: string | null | undefined) {
   if (!value) return "-";
 
   const date = new Date(value);
@@ -120,7 +122,7 @@ function formatDateTime(value: string | null) {
   });
 }
 
-function formatDateInput(value: string | null) {
+function formatDateInput(value: string | null | undefined) {
   if (!value) return "";
 
   const date = new Date(value);
@@ -157,6 +159,7 @@ function getPurchaseTypeLabel(value: string | null) {
   if (value === "new") return "New";
   if (value === "renew") return "Renew";
   if (value === "renewal") return "Renew";
+  if (value === "paid") return "Paid";
   return "-";
 }
 
@@ -245,6 +248,10 @@ export default function AdminClientDetailPage() {
   const [sessionHistory, setSessionHistory] = useState<SessionHistory[]>([]);
   const [qrCode, setQrCode] = useState("");
 
+  const [salesPeople, setSalesPeople] = useState<TrainerProfile[]>([]);
+  const [selectedSalesPersonId, setSelectedSalesPersonId] = useState("");
+  const [savingSalesPerson, setSavingSalesPerson] = useState(false);
+
   const [userRole, setUserRole] = useState<string | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState(
@@ -270,6 +277,7 @@ export default function AdminClientDetailPage() {
   const [packageName, setPackageName] = useState("");
   const [packageTotalSessions, setPackageTotalSessions] = useState("");
   const [packageValue, setPackageValue] = useState("");
+  const [packageAmountPaid, setPackageAmountPaid] = useState("");
   const [packageStartDate, setPackageStartDate] = useState("");
   const [packageExpireDate, setPackageExpireDate] = useState("");
 
@@ -284,6 +292,12 @@ export default function AdminClientDetailPage() {
   const [debtDeadline, setDebtDeadline] = useState("");
   const [savingDebt, setSavingDebt] = useState(false);
 
+  const [newDebtAmount, setNewDebtAmount] = useState("");
+  const [newDebtDeadline, setNewDebtDeadline] = useState("");
+  const [newDebtNote, setNewDebtNote] = useState("");
+  const [addingDebt, setAddingDebt] = useState(false);
+  const [completingDebtId, setCompletingDebtId] = useState<string | null>(null);
+
   const roleLabel = getRoleDisplayName(userRole);
   const allowBasicInfoEdit = canEditClientBasicInfo(userRole);
   const allowPackageEdit = canEditPackages(userRole);
@@ -293,6 +307,18 @@ export default function AdminClientDetailPage() {
   function scrollToPackageSection() {
     document
       .getElementById("package-renew-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function scrollToDebtSection() {
+    document
+      .getElementById("debt-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function scrollToSalesPersonSection() {
+    document
+      .getElementById("sales-person-section")
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -366,31 +392,38 @@ export default function AdminClientDetailPage() {
   async function fetchClientDetail() {
     setLoading(true);
 
-    const [clientResult, packageResult, purchaseResult] = await Promise.all([
-      supabase
-        .from("clients")
-        .select(
-          "id, client_code, full_name, email, phone, gender, date_of_birth, qr_token, activation_code, status, client_note, client_source, client_source_other, created_at"
-        )
-        .eq("id", clientId)
-        .maybeSingle(),
+    const [clientResult, packageResult, purchaseResult, salesPeopleResult] =
+      await Promise.all([
+        supabase
+          .from("clients")
+          .select(
+            "id, client_code, full_name, email, phone, gender, date_of_birth, qr_token, activation_code, status, client_note, client_source, client_source_other, sales_person_id, created_at"
+          )
+          .eq("id", clientId)
+          .maybeSingle(),
 
-      supabase
-        .from("session_packages")
-        .select(
-          "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
-        )
-        .eq("client_id", clientId)
-        .order("created_at", { ascending: false }),
+        supabase
+          .from("session_packages")
+          .select(
+            "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
+          )
+          .eq("client_id", clientId)
+          .order("created_at", { ascending: false }),
 
-      supabase
-        .from("client_purchases")
-        .select(
-          "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
-        )
-        .eq("client_id", clientId)
-        .order("created_at", { ascending: false }),
-    ]);
+        supabase
+          .from("client_purchases")
+          .select(
+            "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
+          )
+          .eq("client_id", clientId)
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("profiles")
+          .select("id, full_name, role")
+          .in("role", ["trainer", "nutrition_coach"])
+          .order("full_name", { ascending: true }),
+      ]);
 
     if (clientResult.error) {
       alert(clientResult.error.message);
@@ -416,19 +449,26 @@ export default function AdminClientDetailPage() {
       return;
     }
 
+    if (salesPeopleResult.error) {
+      alert(salesPeopleResult.error.message);
+      setLoading(false);
+      return;
+    }
+
     const cleanClient = clientResult.data as ClientDetail;
     const cleanPackages = (packageResult.data || []) as SessionPackage[];
     const cleanPurchases = (purchaseResult.data || []) as ClientPurchase[];
 
-    const activePackage = cleanPackages[0] || null;
     const latestPurchase = cleanPurchases[0] || null;
-    const debtPurchase =
+    const firstDebtPurchase =
       cleanPurchases.find((purchase) => Number(purchase.balance_due || 0) > 0) ||
       latestPurchase;
 
     setClient(cleanClient);
     setPackages(cleanPackages);
     setPurchases(cleanPurchases);
+    setSalesPeople((salesPeopleResult.data || []) as TrainerProfile[]);
+    setSelectedSalesPersonId(cleanClient.sales_person_id || "");
 
     setEditClientCode(cleanClient.client_code || "");
     setEditName(cleanClient.full_name || "");
@@ -441,35 +481,22 @@ export default function AdminClientDetailPage() {
     setEditClientNote(cleanClient.client_note || "");
     setActivationCode(cleanClient.activation_code || "");
 
-    setPackageName(activePackage?.package_name || latestPurchase?.plan_name || "");
-    setPackageTotalSessions(
-      activePackage?.total_sessions !== null &&
-        activePackage?.total_sessions !== undefined
-        ? String(activePackage.total_sessions)
-        : latestPurchase?.session_count !== null &&
-            latestPurchase?.session_count !== undefined
-          ? String(latestPurchase.session_count)
-          : ""
-    );
-    setPackageValue(
-      activePackage?.package_value !== null &&
-        activePackage?.package_value !== undefined
-        ? String(activePackage.package_value)
-        : latestPurchase?.price !== null && latestPurchase?.price !== undefined
-          ? String(latestPurchase.price)
-          : ""
-    );
-    setPackageStartDate(formatDateInput(activePackage?.starts_at || null));
-    setPackageExpireDate(formatDateInput(activePackage?.expires_at || null));
+    setPackageName("");
+    setPackageTotalSessions("");
+    setPackageValue("");
+    setPackageAmountPaid("");
+    setPackageStartDate("");
+    setPackageExpireDate("");
     setUploadedPurchaseType(latestPurchase?.purchase_type || "");
     setRenewPackageMode(action === "renew");
 
     setDebtAmount(
-      debtPurchase?.balance_due !== null && debtPurchase?.balance_due !== undefined
-        ? String(debtPurchase.balance_due)
+      firstDebtPurchase?.balance_due !== null &&
+        firstDebtPurchase?.balance_due !== undefined
+        ? String(firstDebtPurchase.balance_due)
         : ""
     );
-    setDebtDeadline(formatDateInput(debtPurchase?.debt_deadline || null));
+    setDebtDeadline(formatDateInput(firstDebtPurchase?.debt_deadline || null));
 
     if (cleanClient.qr_token) {
       const qrImage = await QRCode.toDataURL(cleanClient.qr_token);
@@ -590,6 +617,36 @@ export default function AdminClientDetailPage() {
     setSavingClientInfo(false);
   }
 
+  async function saveSalesPerson(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowBasicInfoEdit) {
+      alert("You do not have permission to assign a sale person.");
+      return;
+    }
+
+    setSavingSalesPerson(true);
+
+    const { error } = await supabase
+      .from("clients")
+      .update({
+        sales_person_id: selectedSalesPersonId || null,
+      })
+      .eq("id", client.id);
+
+    if (error) {
+      alert(error.message);
+      setSavingSalesPerson(false);
+      return;
+    }
+
+    alert("Sale person saved.");
+    await fetchClientDetail();
+    setSavingSalesPerson(false);
+  }
+
   async function saveUploadedPurchaseType(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -623,25 +680,13 @@ export default function AdminClientDetailPage() {
         return;
       }
     } else {
-      const numericTotalSessions = packageTotalSessions.trim()
-        ? Number(packageTotalSessions)
-        : null;
-
-      const numericPackageValue = packageValue.trim()
-        ? Number(packageValue)
-        : null;
-
       const { error } = await supabase.from("client_purchases").insert({
         client_id: client.id,
-        plan_name: packageName.trim() || null,
-        session_count:
-          numericTotalSessions !== null && !Number.isNaN(numericTotalSessions)
-            ? numericTotalSessions
-            : null,
-        price:
-          numericPackageValue !== null && !Number.isNaN(numericPackageValue)
-            ? numericPackageValue
-            : null,
+        plan_name: "Uploaded Purchase",
+        session_count: null,
+        price: 0,
+        amount_paid: 0,
+        balance_due: 0,
         purchase_type: uploadedPurchaseType,
         status: "paid",
         created_at: new Date().toISOString(),
@@ -659,23 +704,25 @@ export default function AdminClientDetailPage() {
     setSavingUploadedPurchaseType(false);
   }
 
-  async function saveRenewPackage(event: FormEvent<HTMLFormElement>) {
+  async function saveNewRenewPackage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!client) return;
 
     if (!allowPackageEdit) {
-      alert("Only admins can renew package details.");
+      alert("Only admins can add a new package.");
       return;
     }
-
-    const activePackage = packages[0] || null;
 
     const numericTotalSessions = packageTotalSessions.trim()
       ? Number(packageTotalSessions)
       : null;
 
     const numericPackageValue = packageValue.trim() ? Number(packageValue) : null;
+
+    const numericAmountPaid = packageAmountPaid.trim()
+      ? Number(packageAmountPaid)
+      : numericPackageValue ?? 0;
 
     if (
       numericTotalSessions === null ||
@@ -694,81 +741,169 @@ export default function AdminClientDetailPage() {
       return;
     }
 
-    setSavingPackage(true);
-
-    if (activePackage) {
-      const { error: packageError } = await supabase
-        .from("session_packages")
-        .update({
-          package_name: packageName.trim() || null,
-          total_sessions: numericTotalSessions,
-          used_sessions: 0,
-          remaining_sessions: numericTotalSessions,
-          package_value: numericPackageValue,
-          starts_at: packageStartDate
-            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
-            : null,
-          expires_at: packageExpireDate
-            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
-            : null,
-          status: "active",
-        })
-        .eq("id", activePackage.id);
-
-      if (packageError) {
-        alert(packageError.message);
-        setSavingPackage(false);
-        return;
-      }
-    } else {
-      const { error: packageInsertError } = await supabase
-        .from("session_packages")
-        .insert({
-          client_id: client.id,
-          package_name: packageName.trim() || null,
-          total_sessions: numericTotalSessions,
-          used_sessions: 0,
-          remaining_sessions: numericTotalSessions,
-          package_value: numericPackageValue,
-          starts_at: packageStartDate
-            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
-            : null,
-          expires_at: packageExpireDate
-            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
-            : null,
-          status: "active",
-          created_at: new Date().toISOString(),
-        });
-
-      if (packageInsertError) {
-        alert(packageInsertError.message);
-        setSavingPackage(false);
-        return;
-      }
+    if (Number.isNaN(numericAmountPaid) || numericAmountPaid < 0) {
+      alert("Amount paid must be a valid number.");
+      return;
     }
 
-    const { error: renewPurchaseError } = await supabase
+    const cleanPackageValue = numericPackageValue ?? 0;
+    const cleanAmountPaid = Math.min(numericAmountPaid, cleanPackageValue);
+    const balanceDue = Math.max(cleanPackageValue - cleanAmountPaid, 0);
+
+    setSavingPackage(true);
+
+    const { error: packageInsertError } = await supabase
+      .from("session_packages")
+      .insert({
+        client_id: client.id,
+        package_name: packageName.trim() || "Renew Package",
+        total_sessions: numericTotalSessions,
+        used_sessions: 0,
+        remaining_sessions: numericTotalSessions,
+        package_value: cleanPackageValue,
+        starts_at: packageStartDate
+          ? new Date(`${packageStartDate}T00:00:00`).toISOString()
+          : null,
+        expires_at: packageExpireDate
+          ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
+          : null,
+        status: "active",
+        created_at: new Date().toISOString(),
+      });
+
+    if (packageInsertError) {
+      alert(packageInsertError.message);
+      setSavingPackage(false);
+      return;
+    }
+
+    const { error: purchaseInsertError } = await supabase
       .from("client_purchases")
       .insert({
         client_id: client.id,
-        plan_name: packageName.trim() || null,
+        plan_name: packageName.trim() || "Renew Package",
         session_count: numericTotalSessions,
-        price: numericPackageValue,
+        price: cleanPackageValue,
+        amount_paid: cleanAmountPaid,
+        balance_due: balanceDue,
+        debt_deadline: balanceDue > 0 ? packageExpireDate || null : null,
         purchase_type: "renew",
         status: "paid",
         created_at: new Date().toISOString(),
       });
 
-    if (renewPurchaseError) {
-      alert(renewPurchaseError.message);
+    if (purchaseInsertError) {
+      alert(purchaseInsertError.message);
       setSavingPackage(false);
       return;
     }
 
-    alert(`Renew package saved with ${numericTotalSessions} sessions.`);
+    setPackageName("");
+    setPackageTotalSessions("");
+    setPackageValue("");
+    setPackageAmountPaid("");
+    setPackageStartDate("");
+    setPackageExpireDate("");
+
+    alert(`New renew package added with ${numericTotalSessions} sessions.`);
     await fetchClientDetail();
     setRenewPackageMode(false);
     setSavingPackage(false);
+  }
+
+  async function addDebtRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowDebtEdit) {
+      alert("Only admins can add debt records.");
+      return;
+    }
+
+    const numericDebtAmount = newDebtAmount.trim() ? Number(newDebtAmount) : 0;
+
+    if (Number.isNaN(numericDebtAmount) || numericDebtAmount <= 0) {
+      alert("Debt amount must be greater than 0.");
+      return;
+    }
+
+    if (!newDebtDeadline) {
+      alert("Please add a deadline for this debt.");
+      return;
+    }
+
+    setAddingDebt(true);
+
+    const { error } = await supabase.from("client_purchases").insert({
+      client_id: client.id,
+      plan_name: newDebtNote.trim() || "Manual Debt",
+      session_count: null,
+      price: 0,
+      amount_paid: 0,
+      balance_due: numericDebtAmount,
+      debt_deadline: newDebtDeadline,
+      purchase_type: null,
+      status: "paid",
+      created_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      alert(error.message);
+      setAddingDebt(false);
+      return;
+    }
+
+    setNewDebtAmount("");
+    setNewDebtDeadline("");
+    setNewDebtNote("");
+
+    alert("Debt record added.");
+    await fetchClientDetail();
+    setAddingDebt(false);
+  }
+
+  async function completeDebtRecord(purchase: ClientPurchase) {
+    if (!allowDebtEdit) {
+      alert("Only admins can complete debt records.");
+      return;
+    }
+
+    const currentBalance = Number(purchase.balance_due || 0);
+
+    if (currentBalance <= 0) {
+      alert("This debt is already complete.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Mark this debt as complete? Amount: ${formatMoney(currentBalance)}`
+    );
+
+    if (!confirmed) return;
+
+    setCompletingDebtId(purchase.id);
+
+    const currentPaid = Number(purchase.amount_paid || 0);
+
+    const { error } = await supabase
+      .from("client_purchases")
+      .update({
+        amount_paid: currentPaid + currentBalance,
+        balance_due: 0,
+        status: "paid",
+      })
+      .eq("id", purchase.id);
+
+    if (error) {
+      alert(error.message);
+      setCompletingDebtId(null);
+      return;
+    }
+
+    alert("Debt marked as complete.");
+    await fetchClientDetail();
+    setCompletingDebtId(null);
   }
 
   async function saveDebtDetails(event: FormEvent<HTMLFormElement>) {
@@ -781,7 +916,11 @@ export default function AdminClientDetailPage() {
       return;
     }
 
-    const latestPurchase = purchases[0] || null;
+    const debtPurchase =
+      purchases.find((purchase) => Number(purchase.balance_due || 0) > 0) ||
+      purchases[0] ||
+      null;
+
     const numericDebtAmount = debtAmount.trim() ? Number(debtAmount) : 0;
 
     if (Number.isNaN(numericDebtAmount) || numericDebtAmount < 0) {
@@ -796,7 +935,7 @@ export default function AdminClientDetailPage() {
 
     setSavingDebt(true);
 
-    if (latestPurchase) {
+    if (debtPurchase) {
       const { error } = await supabase
         .from("client_purchases")
         .update({
@@ -804,7 +943,7 @@ export default function AdminClientDetailPage() {
           debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
           status: "paid",
         })
-        .eq("id", latestPurchase.id);
+        .eq("id", debtPurchase.id);
 
       if (error) {
         alert(error.message);
@@ -814,12 +953,13 @@ export default function AdminClientDetailPage() {
     } else {
       const { error } = await supabase.from("client_purchases").insert({
         client_id: client.id,
-        plan_name: packageName.trim() || "Manual Debt",
-        price: numericDebtAmount,
+        plan_name: "Manual Debt",
+        session_count: null,
+        price: 0,
         amount_paid: 0,
         balance_due: numericDebtAmount,
         debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
-        purchase_type: uploadedPurchaseType || null,
+        purchase_type: null,
         status: "paid",
         created_at: new Date().toISOString(),
       });
@@ -948,12 +1088,39 @@ export default function AdminClientDetailPage() {
 
   const activePackage = packages[0] || null;
   const latestPurchase = purchases[0] || null;
-  const debtPurchase =
-    purchases.find((purchase) => Number(purchase.balance_due || 0) > 0) ||
-    latestPurchase;
+
+  const activeDebtPurchases = purchases.filter(
+    (purchase) => Number(purchase.balance_due || 0) > 0
+  );
+
+  const completedDebtPurchases = purchases.filter((purchase) => {
+    const paidAmount = Number(purchase.amount_paid || 0);
+    const balanceDue = Number(purchase.balance_due || 0);
+    const price = Number(purchase.price || 0);
+    const planName = (purchase.plan_name || "").toLowerCase();
+
+    return balanceDue <= 0 && paidAmount > 0 && (price === 0 || planName.includes("debt"));
+  });
+
+  const totalClientDebt = activeDebtPurchases.reduce(
+    (sum, purchase) => sum + Number(purchase.balance_due || 0),
+    0
+  );
+
+  const totalCompletedDebt = completedDebtPurchases.reduce(
+    (sum, purchase) => sum + Number(purchase.amount_paid || 0),
+    0
+  );
+
+  const debtPurchase = activeDebtPurchases[0] || latestPurchase;
+
   const debtNotice = getDebtNotice(
-    debtPurchase?.balance_due,
+    totalClientDebt,
     debtPurchase?.debt_deadline || null
+  );
+
+  const selectedSalesPerson = salesPeople.find(
+    (person) => person.id === client.sales_person_id
   );
 
   return (
@@ -971,8 +1138,8 @@ export default function AdminClientDetailPage() {
               </h1>
 
               <p className="mt-3 text-sm font-normal text-gray-400 md:text-base">
-                View client profile, QR code, activation, package details,
-                payment debt, deadline, and recent sessions.
+                View client profile, QR code, sale person, packages, debt records,
+                completed debt, and recent sessions.
               </p>
 
               <p className="mt-3 inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-normal text-yellow-300">
@@ -980,7 +1147,7 @@ export default function AdminClientDetailPage() {
               </p>
             </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               {isAdmin && (
                 <button
                   type="button"
@@ -988,6 +1155,26 @@ export default function AdminClientDetailPage() {
                   className="rounded-2xl bg-green-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-green-300"
                 >
                   Renew Package
+                </button>
+              )}
+
+              {allowDebtEdit && (
+                <button
+                  type="button"
+                  onClick={scrollToDebtSection}
+                  className="rounded-2xl bg-red-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-red-300"
+                >
+                  Add Debt
+                </button>
+              )}
+
+              {allowBasicInfoEdit && (
+                <button
+                  type="button"
+                  onClick={scrollToSalesPersonSection}
+                  className="rounded-2xl bg-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-yellow-300"
+                >
+                  Add Sale Person
                 </button>
               )}
 
@@ -1027,6 +1214,13 @@ export default function AdminClientDetailPage() {
                     {client.client_code || "-"}
                   </span>
                 </p>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Sale Person:{" "}
+                  <span className="text-yellow-300">
+                    {selectedSalesPerson?.full_name || "Not assigned"}
+                  </span>
+                </p>
               </div>
 
               <div className="flex flex-col items-start gap-2 md:items-end">
@@ -1045,6 +1239,70 @@ export default function AdminClientDetailPage() {
                 </span>
               </div>
             </div>
+          </section>
+
+          <section
+            id="sales-person-section"
+            className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                  Sale Person
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  Assigned Staff
+                </h2>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Choose from trainers and nutrition coaches. This name will show
+                  on the client table.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-yellow-400/20 bg-black/40 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  Current
+                </p>
+                <p className="mt-1 text-sm font-semibold text-yellow-300">
+                  {selectedSalesPerson?.full_name || "Not assigned"}
+                </p>
+              </div>
+            </div>
+
+            <form
+              onSubmit={saveSalesPerson}
+              className="mt-5 grid gap-4 md:grid-cols-[1fr_auto]"
+            >
+              <select
+                value={selectedSalesPersonId}
+                onChange={(event) => setSelectedSalesPersonId(event.target.value)}
+                disabled={!allowBasicInfoEdit}
+                className="w-full rounded-2xl border border-yellow-500/30 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-400 disabled:opacity-70"
+              >
+                <option value="">No sale person</option>
+
+                {salesPeople.map((person) => (
+                  <option key={person.id} value={person.id}>
+                    {person.full_name || "Unnamed Staff"}{" "}
+                    {person.role === "nutrition_coach"
+                      ? "(Nutrition Coach)"
+                      : "(Trainer)"}
+                  </option>
+                ))}
+              </select>
+
+              {allowBasicInfoEdit && (
+                <button
+                  type="submit"
+                  disabled={savingSalesPerson}
+                  className="rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                >
+                  {savingSalesPerson ? "Saving..." : "Save Sale Person"}
+                </button>
+              )}
+            </form>
           </section>
 
           <section className="mb-6 grid gap-6 lg:grid-cols-[1.35fr_0.65fr]">
@@ -1216,13 +1474,33 @@ export default function AdminClientDetailPage() {
                   </div>
                 )}
               </div>
+
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={generateClientActivationCode}
+                  disabled={generatingActivationCode}
+                  className="mt-5 rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:opacity-60"
+                >
+                  {generatingActivationCode
+                    ? "Generating..."
+                    : "Generate Activation Code"}
+                </button>
+              )}
+
+              <p className="mt-3 text-xs text-gray-400">
+                Activation Code:{" "}
+                <span className="text-yellow-300">
+                  {activationCode || "-"}
+                </span>
+              </p>
             </section>
           </section>
 
-          <section className="mb-6 grid gap-4 md:grid-cols-4">
+          <section className="mb-6 grid gap-4 md:grid-cols-5">
             <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-2xl backdrop-blur">
               <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                Total Sessions
+                Current Package Sessions
               </p>
               <p className="mt-3 text-4xl font-semibold text-yellow-400">
                 {activePackage?.total_sessions ?? 0}
@@ -1249,10 +1527,19 @@ export default function AdminClientDetailPage() {
 
             <div className="rounded-[2rem] border border-red-500/30 bg-red-500/10 p-5 text-center shadow-2xl backdrop-blur">
               <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
-                Current Debt
+                Active Debt
               </p>
               <p className="mt-3 text-4xl font-semibold text-red-300">
-                {formatMoney(debtPurchase?.balance_due)}
+                {formatMoney(totalClientDebt)}
+              </p>
+            </div>
+
+            <div className="rounded-[2rem] border border-green-500/30 bg-green-500/10 p-5 text-center shadow-2xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                Completed Debt
+              </p>
+              <p className="mt-3 text-4xl font-semibold text-green-300">
+                {formatMoney(totalCompletedDebt)}
               </p>
             </div>
           </section>
@@ -1272,11 +1559,12 @@ export default function AdminClientDetailPage() {
                 </p>
 
                 <h2 className="mt-2 text-2xl font-semibold">
-                  Package Details
+                  Add Complete New Package
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Save uploaded New/Renew type separately from actual package renewal.
+                  Renew package creates a brand-new package record. It does not
+                  overwrite the existing package.
                 </p>
               </div>
 
@@ -1348,20 +1636,19 @@ export default function AdminClientDetailPage() {
               </form>
 
               <form
-                onSubmit={saveRenewPackage}
+                onSubmit={saveNewRenewPackage}
                 className="rounded-3xl border border-green-400/25 bg-black/40 p-5"
               >
                 <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
-                  Renew Package
+                  New Renew Package
                 </p>
 
                 <h3 className="mt-2 text-xl font-semibold text-white">
-                  Add Renewed Sessions
+                  Create Complete New Package
                 </h3>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Use this when the client is buying another package. This saves
-                  a Renew purchase and resets used sessions to 0.
+                  This inserts a new session package and a new renew purchase.
                 </p>
 
                 <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -1413,6 +1700,24 @@ export default function AdminClientDetailPage() {
 
                   <label>
                     <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Amount Paid
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={packageAmountPaid}
+                      onChange={(event) =>
+                        setPackageAmountPaid(event.target.value)
+                      }
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                      placeholder="Leave blank if fully paid"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
                       Start Date
                     </span>
                     <input
@@ -1428,7 +1733,7 @@ export default function AdminClientDetailPage() {
 
                   <label>
                     <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                      Expire Date
+                      Expire Date / Debt Deadline
                     </span>
                     <input
                       type="date"
@@ -1448,21 +1753,17 @@ export default function AdminClientDetailPage() {
                     disabled={savingPackage}
                     className="mt-5 rounded-2xl bg-green-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
                   >
-                    {savingPackage ? "Saving..." : "Save Renew Package"}
+                    {savingPackage ? "Saving..." : "Create New Package"}
                   </button>
                 )}
               </form>
             </div>
-
-            {!allowPackageEdit && (
-              <p className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm text-yellow-100">
-                Manager can view package details but cannot edit package value,
-                sessions, dates, or purchase type.
-              </p>
-            )}
           </section>
 
-          <section className="mb-6 rounded-[2rem] border border-red-500/30 bg-red-500/10 p-6 shadow-2xl backdrop-blur">
+          <section
+            id="debt-section"
+            className="mb-6 rounded-[2rem] border border-red-500/30 bg-red-500/10 p-6 shadow-2xl backdrop-blur"
+          >
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
                 <h2 className="text-2xl font-semibold text-white">
@@ -1470,8 +1771,8 @@ export default function AdminClientDetailPage() {
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-300">
-                  Admin-only payment tracking. Manager can view this information
-                  but cannot edit financial records.
+                  Add multiple debt records. Complete debt keeps the record on
+                  this page and removes it from active debt.
                 </p>
               </div>
 
@@ -1482,11 +1783,217 @@ export default function AdminClientDetailPage() {
               </span>
             </div>
 
-            <form onSubmit={saveDebtDetails} className="mt-5">
-              <div className="grid gap-4 md:grid-cols-3">
+            <form
+              onSubmit={addDebtRecord}
+              className="mt-5 rounded-3xl border border-red-400/30 bg-black/40 p-5"
+            >
+              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                    Add New Debt
+                  </p>
+
+                  <h3 className="mt-1 text-xl font-semibold text-white">
+                    Create Multiple Debt Records
+                  </h3>
+
+                  <p className="mt-2 text-sm font-normal text-gray-400">
+                    This adds a new debt row without adding package gross value.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Total Active Debt
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-red-300">
+                    {formatMoney(totalClientDebt)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-4">
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
                     Debt Amount
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={newDebtAmount}
+                    onChange={(event) => setNewDebtAmount(event.target.value)}
+                    disabled={!allowDebtEdit}
+                    placeholder="Example: 300"
+                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Deadline
+                  </span>
+                  <input
+                    type="date"
+                    value={newDebtDeadline}
+                    onChange={(event) => setNewDebtDeadline(event.target.value)}
+                    disabled={!allowDebtEdit}
+                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+
+                <label className="md:col-span-2">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Note / Debt Name
+                  </span>
+                  <input
+                    value={newDebtNote}
+                    onChange={(event) => setNewDebtNote(event.target.value)}
+                    disabled={!allowDebtEdit}
+                    placeholder="Example: Old package debt"
+                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+              </div>
+
+              {allowDebtEdit && (
+                <button
+                  type="submit"
+                  disabled={addingDebt}
+                  className="mt-5 rounded-2xl bg-red-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-red-300 disabled:opacity-60"
+                >
+                  {addingDebt ? "Adding..." : "Add Debt"}
+                </button>
+              )}
+            </form>
+
+            <div className="mt-5 rounded-3xl border border-white/10 bg-black/35 p-5">
+              <h3 className="text-lg font-semibold text-white">
+                Active Debt Records
+              </h3>
+
+              {activeDebtPurchases.length === 0 ? (
+                <p className="mt-3 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
+                  No active debt records.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-2">
+                  {activeDebtPurchases.map((purchase) => (
+                    <div
+                      key={purchase.id}
+                      className="grid gap-3 rounded-2xl border border-red-400/20 bg-red-400/10 p-4 md:grid-cols-[1fr_auto_auto_auto]"
+                    >
+                      <div>
+                        <p className="font-semibold text-white">
+                          {purchase.plan_name || "Manual Debt"}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-400">
+                          Added {formatDate(purchase.created_at)}
+                        </p>
+                      </div>
+
+                      <div className="text-left md:text-right">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                          Deadline
+                        </p>
+                        <p className="mt-1 text-sm text-yellow-300">
+                          {formatDate(purchase.debt_deadline)}
+                        </p>
+                      </div>
+
+                      <div className="text-left md:text-right">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                          Balance
+                        </p>
+                        <p className="mt-1 text-lg font-semibold text-red-300">
+                          {formatMoney(purchase.balance_due)}
+                        </p>
+                      </div>
+
+                      {allowDebtEdit && (
+                        <div className="flex items-center justify-start md:justify-end">
+                          <button
+                            type="button"
+                            onClick={() => completeDebtRecord(purchase)}
+                            disabled={completingDebtId === purchase.id}
+                            className="rounded-xl bg-green-400 px-4 py-2 text-xs font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
+                          >
+                            {completingDebtId === purchase.id
+                              ? "Saving..."
+                              : "Complete"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 rounded-3xl border border-green-400/20 bg-green-400/10 p-5">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <h3 className="text-lg font-semibold text-white">
+                  Completed Debt Records
+                </h3>
+
+                <p className="text-sm font-semibold text-green-300">
+                  Total Completed: {formatMoney(totalCompletedDebt)}
+                </p>
+              </div>
+
+              {completedDebtPurchases.length === 0 ? (
+                <p className="mt-3 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
+                  No completed debt records yet.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-2">
+                  {completedDebtPurchases.map((purchase) => (
+                    <div
+                      key={purchase.id}
+                      className="grid gap-3 rounded-2xl border border-green-400/20 bg-black/35 p-4 md:grid-cols-[1fr_auto_auto]"
+                    >
+                      <div>
+                        <p className="font-semibold text-white">
+                          {purchase.plan_name || "Completed Debt"}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-400">
+                          Original deadline {formatDate(purchase.debt_deadline)}
+                        </p>
+                      </div>
+
+                      <div className="text-left md:text-right">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                          Paid Amount
+                        </p>
+                        <p className="mt-1 text-lg font-semibold text-green-300">
+                          {formatMoney(purchase.amount_paid)}
+                        </p>
+                      </div>
+
+                      <div className="text-left md:text-right">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                          Balance
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-green-300">
+                          Complete
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={saveDebtDetails} className="mt-5">
+              <p className="mb-4 text-sm text-gray-300">
+                Edit the first active debt record below. Use Add Debt above for
+                multiple separate debt records.
+              </p>
+
+              <div className="grid gap-4 md:grid-cols-3">
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Edit Debt Amount
                   </span>
                   <input
                     type="number"
@@ -1502,7 +2009,7 @@ export default function AdminClientDetailPage() {
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
-                    Debt Deadline
+                    Edit Debt Deadline
                   </span>
                   <input
                     type="date"
@@ -1532,7 +2039,7 @@ export default function AdminClientDetailPage() {
                   disabled={savingDebt}
                   className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
                 >
-                  {savingDebt ? "Saving..." : "Save Debt"}
+                  {savingDebt ? "Saving..." : "Save First Debt"}
                 </button>
               )}
             </form>
