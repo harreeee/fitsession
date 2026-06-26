@@ -5,6 +5,7 @@ import { supabase } from "../../../../lib/supabaseClient";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import QRCode from "qrcode";
+
 import { getCurrentUserRole } from "../../../../lib/checkUserRole";
 import {
   canEditClientBasicInfo,
@@ -12,6 +13,8 @@ import {
   canEditPackages,
   getRoleDisplayName,
   isAdminOrManager,
+  normalizeRole,
+  type AppRole,
 } from "../../../../lib/role";
 
 type ClientDetail = {
@@ -252,7 +255,7 @@ export default function AdminClientDetailPage() {
   const [selectedSalesPersonId, setSelectedSalesPersonId] = useState("");
   const [savingSalesPerson, setSavingSalesPerson] = useState(false);
 
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<AppRole | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState(
     "Checking client access..."
@@ -1028,7 +1031,7 @@ export default function AdminClientDetailPage() {
         return;
       }
 
-      setUserRole(role);
+      setUserRole(normalizeRole(role));
       setCheckingRole(false);
       await fetchClientDetail();
     }
