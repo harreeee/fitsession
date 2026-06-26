@@ -90,16 +90,6 @@ function toNumber(value: number | string | null | undefined) {
   return numberValue;
 }
 
-function isForeignKeyClientIdError(message: string) {
-  const lowerMessage = message.toLowerCase();
-
-  return (
-    lowerMessage.includes("session_history_client_id_fkey") ||
-    lowerMessage.includes("foreign key constraint") ||
-    lowerMessage.includes("violates foreign key")
-  );
-}
-
 export default function TrainerScanPage() {
   const router = useRouter();
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -416,7 +406,7 @@ export default function TrainerScanPage() {
     }
   }
 
-  async function insertSessionHistoryWithFallback({
+  async function insertSessionRecords({
     client,
     sessionPackage,
     currentTrainerId,
@@ -427,44 +417,45 @@ export default function TrainerScanPage() {
     currentTrainerId: string;
     newRemaining: number;
   }) {
-    const possibleClientIds = [client.id, client.profile_id].filter(
-      (value): value is string => Boolean(value)
-    );
+    const historyMessage = `Session scanned by ${
+      trainerName || trainerEmail || "staff"
+    }.`;
 
-    let lastErrorMessage = "";
+    const { data: historyData, error: historyError } = await supabase
+      .from("session_history")
+      .insert({
+        client_id: client.id,
+        trainer_id: currentTrainerId,
+        package_id: sessionPackage.id,
+        status: "success",
+        message: historyMessage,
+        remaining_after: newRemaining,
+        trainer_note: null,
+      })
+      .select("id")
+      .single();
 
-    for (const possibleClientId of possibleClientIds) {
-      const { data, error } = await supabase
-        .from("session_history")
-        .insert({
-          client_id: possibleClientId,
-          trainer_id: currentTrainerId,
-          package_id: sessionPackage.id,
-          status: "success",
-          message: `Session scanned by ${
-            trainerName || trainerEmail || "staff"
-          }.`,
-          remaining_after: newRemaining,
-          trainer_note: null,
-        })
-        .select("id")
-        .single();
-
-      if (!error) {
-        return {
-          history: data as CreatedSessionHistoryRow,
-          historyClientId: possibleClientId,
-        };
-      }
-
-      lastErrorMessage = error.message;
-
-      if (!isForeignKeyClientIdError(error.message)) {
-        throw error;
-      }
+    if (historyError) {
+      throw historyError;
     }
 
-    throw new Error(lastErrorMessage || "Could not create session history.");
+    const { error: logError } = await supabase.from("session_logs").insert({
+      client_id: client.id,
+      trainer_id: currentTrainerId,
+      package_id: sessionPackage.id,
+      status: "success",
+      message: historyMessage,
+      remaining_after: newRemaining,
+    });
+
+    if (logError) {
+      console.log("session_logs insert error:", logError.message);
+    }
+
+    return {
+      history: historyData as CreatedSessionHistoryRow,
+      historyClientId: client.id,
+    };
   }
 
   async function markSession(qrToken: string) {
@@ -573,14 +564,10 @@ export default function TrainerScanPage() {
     const thirtyMinutesAgo = new Date();
     thirtyMinutesAgo.setMinutes(thirtyMinutesAgo.getMinutes() - 30);
 
-    const duplicateClientIds = [client.id, client.profile_id].filter(
-      (value): value is string => Boolean(value)
-    );
-
     const { data: recentScan, error: recentScanError } = await supabase
       .from("session_history")
       .select("id")
-      .in("client_id", duplicateClientIds)
+      .eq("client_id", client.id)
       .eq("status", "success")
       .gte("created_at", thirtyMinutesAgo.toISOString())
       .limit(1)
@@ -609,7 +596,7 @@ export default function TrainerScanPage() {
     let createdHistory: CreatedSessionHistoryRow | null = null;
 
     try {
-      const insertResult = await insertSessionHistoryWithFallback({
+      const insertResult = await insertSessionRecords({
         client,
         sessionPackage,
         currentTrainerId,

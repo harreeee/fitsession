@@ -398,12 +398,20 @@ export default function TrainerClientsPage() {
         return;
       }
 
-      if (role !== "admin" && role !== "trainer" && role !== "nutrition_coach") {
-        setCheckingMessage("Redirecting to login...");
-        await supabase.auth.signOut();
-        router.push("/login");
-        return;
-      }
+      if (
+  role !== "trainer" &&
+  role !== "nutrition_coach" &&
+  role !== "admin" &&
+  role !== "manager"
+) {
+  if (role === "client") {
+    router.push("/client");
+    return;
+  }
+
+  router.push("/login");
+  return;
+}
 
       setUserRole(role || "");
       setCheckingRole(false);
