@@ -1,41 +1,48 @@
 import { supabase } from "./supabaseClient";
 
-export async function getCurrentUserRole() {
+export type UserRole =
+  | "admin"
+  | "manager"
+  | "trainer"
+  | "client"
+  | "nutrition_coach"
+  | null;
+
+export async function getCurrentUserRole(): Promise<{
+  user: Awaited<ReturnType<typeof supabase.auth.getUser>>["data"]["user"];
+  role: UserRole;
+}> {
   const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
 
-  if (userError) {
-    console.error("getCurrentUserRole auth error:", userError.message);
-    return { user: null, role: null };
+  if (sessionError || !session?.user) {
+    return {
+      user: null,
+      role: null,
+    };
   }
 
-  if (!user) {
-    console.error("getCurrentUserRole: no logged-in user");
-    return { user: null, role: null };
-  }
+  const user = session.user;
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id, role")
+    .select("role")
     .eq("id", user.id)
     .maybeSingle();
 
   if (profileError) {
     console.error("getCurrentUserRole profile error:", profileError.message);
-    return { user, role: null };
+
+    return {
+      user,
+      role: null,
+    };
   }
 
-  if (!profile) {
-    console.error("getCurrentUserRole: no profile row for user id:", user.id);
-    return { user, role: null };
-  }
-
-  if (!profile.role) {
-    console.error("getCurrentUserRole: profile exists but role is empty:", profile);
-    return { user, role: null };
-  }
-
-  return { user, role: profile.role };
+  return {
+    user,
+    role: (profile?.role as UserRole) || null,
+  };
 }
