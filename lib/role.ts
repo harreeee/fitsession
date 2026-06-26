@@ -3,108 +3,204 @@ export type AppRole =
   | "manager"
   | "trainer"
   | "client"
-  | "nutrition_coach";
+  | "nutrition_coach"
+  | null
+  | undefined;
 
-export function normalizeRole(role: string | null | undefined): AppRole | null {
-  if (
-    role === "admin" ||
-    role === "manager" ||
-    role === "trainer" ||
-    role === "client" ||
-    role === "nutrition_coach"
-  ) {
-    return role;
-  }
+export function getRoleDisplayName(role: AppRole) {
+  if (role === "admin") return "Admin";
+  if (role === "manager") return "Manager";
+  if (role === "trainer") return "Trainer";
+  if (role === "nutrition_coach") return "Nutrition Coach";
+  if (role === "client") return "Client";
 
-  return null;
+  return "Unknown";
 }
 
-export function getRoleDisplayName(role: string | null | undefined): string {
-  switch (role) {
-    case "admin":
-      return "Admin";
-    case "manager":
-      return "Manager";
-    case "trainer":
-      return "Trainer";
-    case "nutrition_coach":
-      return "Nutrition Coach";
-    case "client":
-      return "Client";
-    default:
-      return "Unknown";
-  }
-}
-
-export function getDashboardPathForRole(role: string | null | undefined): string {
-  switch (role) {
-    case "admin":
-      return "/admin";
-    case "manager":
-      return "/admin";
-    case "trainer":
-      return "/trainer/scan";
-    case "nutrition_coach":
-      return "/trainer/scan";
-    case "client":
-      return "/client";
-    default:
-      return "/login";
-  }
-}
-
-export function isAdmin(role: string | null | undefined): boolean {
+export function isAdmin(role: AppRole) {
   return role === "admin";
 }
 
-export function isManager(role: string | null | undefined): boolean {
+export function isManager(role: AppRole) {
   return role === "manager";
 }
 
-export function isAdminOrManager(role: string | null | undefined): boolean {
+export function isAdminOrManager(role: AppRole) {
   return role === "admin" || role === "manager";
 }
 
-export function isStaffRole(role: string | null | undefined): boolean {
+export function isTrainer(role: AppRole) {
+  return role === "trainer";
+}
+
+export function isNutritionCoach(role: AppRole) {
+  return role === "nutrition_coach";
+}
+
+export function isClient(role: AppRole) {
+  return role === "client";
+}
+
+export function isStaffRole(role: AppRole) {
   return role === "trainer" || role === "nutrition_coach";
 }
 
-export function canViewAdminDashboard(role: string | null | undefined): boolean {
+/**
+ * Page access
+ */
+
+export function canViewAdminDashboard(role: AppRole) {
   return role === "admin" || role === "manager";
 }
 
-export function canViewFinancials(role: string | null | undefined): boolean {
+export function canViewAdminClientPages(role: AppRole) {
   return role === "admin" || role === "manager";
 }
 
-export function canEditClientBasicInfo(role: string | null | undefined): boolean {
+export function canViewStaffClientPages(role: AppRole) {
+  return role === "trainer" || role === "nutrition_coach";
+}
+
+export function canAccessScanner(role: AppRole) {
+  return role === "admin" || role === "trainer" || role === "nutrition_coach";
+}
+
+export function canViewSessionHistory(role: AppRole) {
+  return (
+    role === "admin" ||
+    role === "manager" ||
+    role === "trainer" ||
+    role === "nutrition_coach"
+  );
+}
+
+export function canViewReports(role: AppRole) {
   return role === "admin" || role === "manager";
 }
 
-export function canDeleteClients(role: string | null | undefined): boolean {
+export function canViewDebtPage(role: AppRole) {
+  return role === "admin" || role === "manager";
+}
+
+export function canViewPurchases(role: AppRole) {
+  return role === "admin" || role === "manager";
+}
+
+/**
+ * Client permissions
+ */
+
+export function canAddClients(role: AppRole) {
+  return role === "admin" || role === "manager";
+}
+
+export function canEditClientBasicInfo(role: AppRole) {
+  return role === "admin" || role === "manager";
+}
+
+export function canDeleteClients(role: AppRole) {
   return role === "admin";
 }
 
-export function canManageStaff(role: string | null | undefined): boolean {
+export function canChangeClientStatus(role: AppRole) {
+  return role === "admin" || role === "manager";
+}
+
+export function canAssignSalesPerson(role: AppRole) {
+  return role === "admin" || role === "manager";
+}
+
+/**
+ * Package / session permissions
+ */
+
+export function canEditPackages(role: AppRole) {
   return role === "admin";
 }
 
-export function canChangeRoles(role: string | null | undefined): boolean {
+export function canRenewPackages(role: AppRole) {
   return role === "admin";
 }
 
-export function canEditPurchases(role: string | null | undefined): boolean {
+export function canManuallySubtractSession(role: AppRole) {
   return role === "admin";
 }
 
-export function canEditDebt(role: string | null | undefined): boolean {
+export function canScanClientQr(role: AppRole) {
+  return role === "admin" || role === "trainer" || role === "nutrition_coach";
+}
+
+/**
+ * Debt / financial permissions
+ */
+
+export function canViewFinancials(role: AppRole) {
+  return role === "admin" || role === "manager";
+}
+
+export function canEditDebt(role: AppRole) {
   return role === "admin";
 }
 
-export function canEditPackages(role: string | null | undefined): boolean {
+export function canCompleteDebt(role: AppRole) {
   return role === "admin";
 }
 
-export function canEditSessionCounts(role: string | null | undefined): boolean {
+export function canEditPurchases(role: AppRole) {
   return role === "admin";
+}
+
+export function canExportReports(role: AppRole) {
+  return role === "admin";
+}
+
+export function canImportClients(role: AppRole) {
+  return role === "admin";
+}
+
+/**
+ * Staff permissions
+ */
+
+export function canManageStaff(role: AppRole) {
+  return role === "admin";
+}
+
+export function canViewStaff(role: AppRole) {
+  return role === "admin" || role === "manager";
+}
+
+/**
+ * Notes permissions
+ */
+
+export function canViewClientNotes(role: AppRole) {
+  return (
+    role === "admin" ||
+    role === "manager" ||
+    role === "trainer" ||
+    role === "nutrition_coach"
+  );
+}
+
+export function canAddClientNotes(role: AppRole) {
+  return role === "admin" || role === "trainer" || role === "nutrition_coach";
+}
+
+export function canEditClientNotes(role: AppRole) {
+  return role === "admin" || role === "trainer" || role === "nutrition_coach";
+}
+
+/**
+ * Redirect helpers
+ */
+
+export function getDefaultRedirectPath(role: AppRole) {
+  if (role === "admin") return "/admin";
+  if (role === "manager") return "/admin";
+  if (role === "trainer") return "/trainer/scan";
+  if (role === "nutrition_coach") return "/trainer/scan";
+  if (role === "client") return "/client";
+
+  return "/login";
 }
