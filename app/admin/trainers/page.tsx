@@ -182,7 +182,7 @@ export default function AdminTrainersPage() {
 
     setAddingStaff(true);
 
-    const response = await fetch("/api/admin/create-staff", {
+    const response = await fetch("/api/admin/trainers", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -199,10 +199,11 @@ export default function AdminTrainersPage() {
     const result = await response.json().catch(() => null);
 
     if (!response.ok) {
-      alert(result?.error || "Could not add staff member.");
-      setAddingStaff(false);
-      return;
-    }
+  console.error("Add staff error:", result);
+  alert(result?.error || `Could not add staff member. Status: ${response.status}`);
+  setAddingStaff(false);
+  return;
+}
 
     setFullName("");
     setEmail("");
