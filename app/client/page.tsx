@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -221,9 +221,59 @@ export default function ClientPortalPage() {
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
 
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState("");
+  const [passwordMessageType, setPasswordMessageType] = useState<
+    "success" | "error" | ""
+  >("");
+
   async function handleLogout() {
     await supabase.auth.signOut();
     router.push("/client/login");
+  }
+
+  async function changePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    setPasswordMessage("");
+    setPasswordMessageType("");
+
+    const cleanPassword = newPassword.trim();
+    const cleanConfirmPassword = confirmPassword.trim();
+
+    if (cleanPassword.length < 6) {
+      setPasswordMessage("Password must be at least 6 characters.");
+      setPasswordMessageType("error");
+      return;
+    }
+
+    if (cleanPassword !== cleanConfirmPassword) {
+      setPasswordMessage("Passwords do not match.");
+      setPasswordMessageType("error");
+      return;
+    }
+
+    setSavingPassword(true);
+
+    const { error } = await supabase.auth.updateUser({
+      password: cleanPassword,
+    });
+
+    if (error) {
+      setPasswordMessage(error.message);
+      setPasswordMessageType("error");
+      setSavingPassword(false);
+      return;
+    }
+
+    setNewPassword("");
+    setConfirmPassword("");
+    setPasswordMessage("Password updated successfully.");
+    setPasswordMessageType("success");
+    setSavingPassword(false);
   }
 
   async function fetchUpcomingBookings(clientId: string) {
@@ -686,6 +736,89 @@ export default function ClientPortalPage() {
               Packages & purchases
             </span>
           </Link>
+        </section>
+
+        <section className="fade-up mb-5">
+          <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.04] shadow-2xl">
+            <div className="flex items-center justify-between gap-4 p-6">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400">
+                  Account Security
+                </p>
+
+                <h2 className="mt-2 text-xl font-semibold text-white">
+                  Change Password
+                </h2>
+
+                <p className="mt-1.5 max-w-md text-xs leading-5 text-gray-500">
+                  Update your login password anytime. Use at least 6 characters.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPasswordForm((current) => !current);
+                  setPasswordMessage("");
+                  setPasswordMessageType("");
+                  setNewPassword("");
+                  setConfirmPassword("");
+                }}
+                className="shrink-0 rounded-xl border border-yellow-400/40 bg-yellow-400/10 px-4 py-2 text-xs font-bold uppercase text-yellow-300 transition hover:bg-yellow-400 hover:text-black active:scale-[0.97]"
+              >
+                {showPasswordForm ? "Close" : "Change"}
+              </button>
+            </div>
+
+            {showPasswordForm ? (
+              <form
+                onSubmit={changePassword}
+                className="border-t border-white/10 p-6"
+              >
+                <div className="grid gap-3">
+                  <input
+                    value={newPassword}
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    type="password"
+                    minLength={6}
+                    placeholder="New password"
+                    className="w-full rounded-2xl border border-yellow-500/20 bg-black/50 px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-yellow-400"
+                  />
+
+                  <input
+                    value={confirmPassword}
+                    onChange={(event) =>
+                      setConfirmPassword(event.target.value)
+                    }
+                    type="password"
+                    minLength={6}
+                    placeholder="Confirm new password"
+                    className="w-full rounded-2xl border border-yellow-500/20 bg-black/50 px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-yellow-400"
+                  />
+                </div>
+
+                {passwordMessage ? (
+                  <p
+                    className={`mt-4 rounded-2xl border p-4 text-sm font-semibold ${
+                      passwordMessageType === "success"
+                        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                        : "border-rose-400/30 bg-rose-400/10 text-rose-300"
+                    }`}
+                  >
+                    {passwordMessage}
+                  </p>
+                ) : null}
+
+                <button
+                  type="submit"
+                  disabled={savingPassword}
+                  className="mt-4 w-full rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-bold uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingPassword ? "Updating..." : "Update Password"}
+                </button>
+              </form>
+            ) : null}
+          </div>
         </section>
 
         <section className="fade-up mb-5">
