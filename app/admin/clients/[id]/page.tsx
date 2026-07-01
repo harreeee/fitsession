@@ -80,6 +80,8 @@ type TrainerProfile = {
   role?: string | null;
 };
 
+type SessionAdjustAction = "add" | "subtract" | "fix";
+
 const CLIENT_SOURCE_OPTIONS = [
   { value: "", label: "Select source" },
   { value: "coach", label: "Coach" },
@@ -237,6 +239,23 @@ function getDebtNotice(
   };
 }
 
+function getPackageNumbers(packageRow: SessionPackage | null) {
+  const totalSessions = Number(packageRow?.total_sessions || 0);
+  const usedSessions = Number(packageRow?.used_sessions || 0);
+
+  const remainingSessions =
+    packageRow?.remaining_sessions !== null &&
+    packageRow?.remaining_sessions !== undefined
+      ? Number(packageRow.remaining_sessions)
+      : Math.max(totalSessions - usedSessions, 0);
+
+  return {
+    totalSessions,
+    usedSessions,
+    remainingSessions,
+  };
+}
+
 export default function AdminClientDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -291,6 +310,10 @@ export default function AdminClientDetailPage() {
   const [renewPackageMode, setRenewPackageMode] = useState(false);
   const [savingPackage, setSavingPackage] = useState(false);
 
+  const [sessionAdjustValue, setSessionAdjustValue] = useState("");
+  const [sessionAdjustAction, setSessionAdjustAction] =
+    useState<SessionAdjustAction | null>(null);
+
   const [debtAmount, setDebtAmount] = useState("");
   const [debtDeadline, setDebtDeadline] = useState("");
   const [savingDebt, setSavingDebt] = useState(false);
@@ -310,6 +333,12 @@ export default function AdminClientDetailPage() {
   function scrollToPackageSection() {
     document
       .getElementById("package-renew-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function scrollToSessionControlSection() {
+    document
+      .getElementById("session-control-section")
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -713,26 +742,28 @@ export default function AdminClientDetailPage() {
     if (!client) return;
 
     if (!allowPackageEdit) {
-      alert("Only admins can add a new package.");
+      alert("Only admins can renew packages.");
       return;
     }
 
-    const numericTotalSessions = packageTotalSessions.trim()
+    const addedSessions = packageTotalSessions.trim()
       ? Number(packageTotalSessions)
       : null;
 
-    const numericPackageValue = packageValue.trim() ? Number(packageValue) : null;
+    const numericPackageValue = packageValue.trim()
+      ? Number(packageValue)
+      : null;
 
     const numericAmountPaid = packageAmountPaid.trim()
       ? Number(packageAmountPaid)
       : numericPackageValue ?? 0;
 
     if (
-      numericTotalSessions === null ||
-      Number.isNaN(numericTotalSessions) ||
-      numericTotalSessions <= 0
+      addedSessions === null ||
+      Number.isNaN(addedSessions) ||
+      addedSessions <= 0
     ) {
-      alert("Total sessions must be a valid number greater than 0.");
+      alert("Sessions to add must be a valid number greater than 0.");
       return;
     }
 
@@ -753,31 +784,71 @@ export default function AdminClientDetailPage() {
     const cleanAmountPaid = Math.min(numericAmountPaid, cleanPackageValue);
     const balanceDue = Math.max(cleanPackageValue - cleanAmountPaid, 0);
 
+    const currentPackage = packages[0] || null;
+
     setSavingPackage(true);
 
-    const { error: packageInsertError } = await supabase
-      .from("session_packages")
-      .insert({
-        client_id: client.id,
-        package_name: packageName.trim() || "Renew Package",
-        total_sessions: numericTotalSessions,
-        used_sessions: 0,
-        remaining_sessions: numericTotalSessions,
-        package_value: cleanPackageValue,
-        starts_at: packageStartDate
-          ? new Date(`${packageStartDate}T00:00:00`).toISOString()
-          : null,
-        expires_at: packageExpireDate
-          ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
-          : null,
-        status: "active",
-        created_at: new Date().toISOString(),
-      });
+    if (currentPackage) {
+      const { totalSessions, usedSessions, remainingSessions } =
+        getPackageNumbers(currentPackage);
 
-    if (packageInsertError) {
-      alert(packageInsertError.message);
-      setSavingPackage(false);
-      return;
+      const currentPackageValue = Number(currentPackage.package_value || 0);
+
+      const newTotalSessions = totalSessions + addedSessions;
+      const newRemainingSessions = remainingSessions + addedSessions;
+      const newPackageValue = currentPackageValue + cleanPackageValue;
+
+      const { error: packageUpdateError } = await supabase
+        .from("session_packages")
+        .update({
+          package_name:
+            packageName.trim() ||
+            currentPackage.package_name ||
+            "Renew Package",
+          total_sessions: newTotalSessions,
+          used_sessions: usedSessions,
+          remaining_sessions: newRemainingSessions,
+          package_value: newPackageValue,
+          starts_at: packageStartDate
+            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
+            : currentPackage.starts_at,
+          expires_at: packageExpireDate
+            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
+            : currentPackage.expires_at,
+          status: "active",
+        })
+        .eq("id", currentPackage.id);
+
+      if (packageUpdateError) {
+        alert(packageUpdateError.message);
+        setSavingPackage(false);
+        return;
+      }
+    } else {
+      const { error: packageInsertError } = await supabase
+        .from("session_packages")
+        .insert({
+          client_id: client.id,
+          package_name: packageName.trim() || "Renew Package",
+          total_sessions: addedSessions,
+          used_sessions: 0,
+          remaining_sessions: addedSessions,
+          package_value: cleanPackageValue,
+          starts_at: packageStartDate
+            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
+            : null,
+          expires_at: packageExpireDate
+            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
+            : null,
+          status: "active",
+          created_at: new Date().toISOString(),
+        });
+
+      if (packageInsertError) {
+        alert(packageInsertError.message);
+        setSavingPackage(false);
+        return;
+      }
     }
 
     const { error: purchaseInsertError } = await supabase
@@ -785,7 +856,7 @@ export default function AdminClientDetailPage() {
       .insert({
         client_id: client.id,
         plan_name: packageName.trim() || "Renew Package",
-        session_count: numericTotalSessions,
+        session_count: addedSessions,
         price: cleanPackageValue,
         amount_paid: cleanAmountPaid,
         balance_due: balanceDue,
@@ -808,10 +879,101 @@ export default function AdminClientDetailPage() {
     setPackageStartDate("");
     setPackageExpireDate("");
 
-    alert(`New renew package added with ${numericTotalSessions} sessions.`);
+    alert(`Renew completed. Added ${addedSessions} sessions.`);
     await fetchClientDetail();
     setRenewPackageMode(false);
     setSavingPackage(false);
+  }
+
+  async function adjustClientSessions(actionType: SessionAdjustAction) {
+    if (!client) return;
+
+    if (!allowPackageEdit) {
+      alert("Only admins can adjust sessions.");
+      return;
+    }
+
+    const currentPackage = packages[0] || null;
+
+    if (!currentPackage) {
+      alert("No package found. Please renew/add a package first.");
+      return;
+    }
+
+    const amount = sessionAdjustValue.trim()
+      ? Number(sessionAdjustValue)
+      : null;
+
+    if (amount === null || Number.isNaN(amount) || amount < 0) {
+      alert("Please enter a valid session number.");
+      return;
+    }
+
+    if ((actionType === "add" || actionType === "subtract") && amount <= 0) {
+      alert("Session amount must be greater than 0.");
+      return;
+    }
+
+    const { totalSessions, usedSessions, remainingSessions } =
+      getPackageNumbers(currentPackage);
+
+    let nextTotalSessions = totalSessions;
+    let nextUsedSessions = usedSessions;
+    let nextRemainingSessions = remainingSessions;
+
+    if (actionType === "add") {
+      nextTotalSessions = totalSessions + amount;
+      nextUsedSessions = usedSessions;
+      nextRemainingSessions = remainingSessions + amount;
+    }
+
+    if (actionType === "subtract") {
+      if (amount > remainingSessions) {
+        alert(
+          `Cannot subtract ${amount} sessions. Client only has ${remainingSessions} remaining.`
+        );
+        return;
+      }
+
+      nextTotalSessions = totalSessions;
+      nextUsedSessions = usedSessions + amount;
+      nextRemainingSessions = remainingSessions - amount;
+    }
+
+    if (actionType === "fix") {
+      nextRemainingSessions = amount;
+      nextUsedSessions = usedSessions;
+      nextTotalSessions = usedSessions + amount;
+    }
+
+    const confirmed = window.confirm(
+      `Confirm session update?\n\nBefore:\nTotal: ${totalSessions}\nUsed: ${usedSessions}\nRemaining: ${remainingSessions}\n\nAfter:\nTotal: ${nextTotalSessions}\nUsed: ${nextUsedSessions}\nRemaining: ${nextRemainingSessions}`
+    );
+
+    if (!confirmed) return;
+
+    setSessionAdjustAction(actionType);
+
+    const { error } = await supabase
+      .from("session_packages")
+      .update({
+        total_sessions: nextTotalSessions,
+        used_sessions: nextUsedSessions,
+        remaining_sessions: nextRemainingSessions,
+        status: nextRemainingSessions <= 0 ? "completed" : "active",
+      })
+      .eq("id", currentPackage.id);
+
+    if (error) {
+      alert(error.message);
+      setSessionAdjustAction(null);
+      return;
+    }
+
+    setSessionAdjustValue("");
+    alert("Sessions updated.");
+    await fetchClientDetail();
+    setSessionAdjustAction(null);
   }
 
   async function addDebtRecord(event: FormEvent<HTMLFormElement>) {
@@ -1102,7 +1264,11 @@ export default function AdminClientDetailPage() {
     const price = Number(purchase.price || 0);
     const planName = (purchase.plan_name || "").toLowerCase();
 
-    return balanceDue <= 0 && paidAmount > 0 && (price === 0 || planName.includes("debt"));
+    return (
+      balanceDue <= 0 &&
+      paidAmount > 0 &&
+      (price === 0 || planName.includes("debt"))
+    );
   });
 
   const totalClientDebt = activeDebtPurchases.reduce(
@@ -1126,6 +1292,8 @@ export default function AdminClientDetailPage() {
     (person) => person.id === client.sales_person_id
   );
 
+  const activePackageNumbers = getPackageNumbers(activePackage);
+
   return (
     <main className="min-h-screen bg-black p-4 text-white md:p-6">
       <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
@@ -1141,8 +1309,8 @@ export default function AdminClientDetailPage() {
               </h1>
 
               <p className="mt-3 text-sm font-normal text-gray-400 md:text-base">
-                View client profile, QR code, sale person, packages, debt records,
-                completed debt, and recent sessions.
+                View client profile, QR code, sale person, packages, session
+                control, debt records, completed debt, and recent sessions.
               </p>
 
               <p className="mt-3 inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-normal text-yellow-300">
@@ -1158,6 +1326,16 @@ export default function AdminClientDetailPage() {
                   className="rounded-2xl bg-green-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-green-300"
                 >
                   Renew Package
+                </button>
+              )}
+
+              {allowPackageEdit && (
+                <button
+                  type="button"
+                  onClick={scrollToSessionControlSection}
+                  className="rounded-2xl bg-cyan-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-cyan-300"
+                >
+                  Fix Sessions
                 </button>
               )}
 
@@ -1259,8 +1437,8 @@ export default function AdminClientDetailPage() {
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Choose from trainers and nutrition coaches. This name will show
-                  on the client table.
+                  Choose from trainers and nutrition coaches. This name will
+                  show on the client table.
                 </p>
               </div>
 
@@ -1280,7 +1458,9 @@ export default function AdminClientDetailPage() {
             >
               <select
                 value={selectedSalesPersonId}
-                onChange={(event) => setSelectedSalesPersonId(event.target.value)}
+                onChange={(event) =>
+                  setSelectedSalesPersonId(event.target.value)
+                }
                 disabled={!allowBasicInfoEdit}
                 className="w-full rounded-2xl border border-yellow-500/30 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-400 disabled:opacity-70"
               >
@@ -1323,7 +1503,9 @@ export default function AdminClientDetailPage() {
                     </span>
                     <input
                       value={editClientCode}
-                      onChange={(event) => setEditClientCode(event.target.value)}
+                      onChange={(event) =>
+                        setEditClientCode(event.target.value)
+                      }
                       className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
                     />
                   </label>
@@ -1398,7 +1580,9 @@ export default function AdminClientDetailPage() {
                   </span>
                   <select
                     value={editClientSource}
-                    onChange={(event) => setEditClientSource(event.target.value)}
+                    onChange={(event) =>
+                      setEditClientSource(event.target.value)
+                    }
                     disabled={!allowBasicInfoEdit}
                     className="w-full rounded-2xl border border-yellow-500/30 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-400 disabled:opacity-70"
                   >
@@ -1506,7 +1690,7 @@ export default function AdminClientDetailPage() {
                 Current Package Sessions
               </p>
               <p className="mt-3 text-4xl font-semibold text-yellow-400">
-                {activePackage?.total_sessions ?? 0}
+                {activePackageNumbers.totalSessions}
               </p>
             </div>
 
@@ -1515,7 +1699,7 @@ export default function AdminClientDetailPage() {
                 Used Sessions
               </p>
               <p className="mt-3 text-4xl font-semibold text-yellow-400">
-                {activePackage?.used_sessions ?? 0}
+                {activePackageNumbers.usedSessions}
               </p>
             </div>
 
@@ -1524,7 +1708,7 @@ export default function AdminClientDetailPage() {
                 Remaining
               </p>
               <p className="mt-3 text-4xl font-semibold text-yellow-400">
-                {activePackage?.remaining_sessions ?? 0}
+                {activePackageNumbers.remainingSessions}
               </p>
             </div>
 
@@ -1548,6 +1732,124 @@ export default function AdminClientDetailPage() {
           </section>
 
           <section
+            id="session-control-section"
+            className="mb-6 rounded-[2rem] border border-cyan-400/40 bg-cyan-400/10 p-6 shadow-2xl backdrop-blur"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                  Session Control
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  Add / Subtract / Fix Sessions
+                </h2>
+
+                <p className="mt-2 text-sm font-normal leading-6 text-gray-300">
+                  Use Add Sessions for renew corrections, Subtract Sessions for
+                  manual deduction, and Fix Remaining Sessions when the number is
+                  wrong and you need to set the exact remaining balance.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-cyan-400/25 bg-black/40 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  Current
+                </p>
+                <p className="mt-1 text-sm font-semibold text-cyan-300">
+                  Total {activePackageNumbers.totalSessions} / Used{" "}
+                  {activePackageNumbers.usedSessions} / Left{" "}
+                  {activePackageNumbers.remainingSessions}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_2fr]">
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                  Session Number
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={sessionAdjustValue}
+                  onChange={(event) => setSessionAdjustValue(event.target.value)}
+                  disabled={!allowPackageEdit}
+                  placeholder="Example: 5"
+                  className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-cyan-300 disabled:opacity-70"
+                />
+              </label>
+
+              {allowPackageEdit && (
+                <div className="grid gap-3 md:grid-cols-3">
+                  <button
+                    type="button"
+                    onClick={() => adjustClientSessions("add")}
+                    disabled={sessionAdjustAction !== null}
+                    className="rounded-2xl bg-green-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
+                  >
+                    {sessionAdjustAction === "add"
+                      ? "Adding..."
+                      : "Add Sessions"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => adjustClientSessions("subtract")}
+                    disabled={sessionAdjustAction !== null}
+                    className="rounded-2xl bg-red-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-red-300 disabled:opacity-60"
+                  >
+                    {sessionAdjustAction === "subtract"
+                      ? "Subtracting..."
+                      : "Subtract Sessions"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => adjustClientSessions("fix")}
+                    disabled={sessionAdjustAction !== null}
+                    className="rounded-2xl bg-cyan-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-cyan-300 disabled:opacity-60"
+                  >
+                    {sessionAdjustAction === "fix"
+                      ? "Fixing..."
+                      : "Fix Remaining"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-green-400/20 bg-green-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                  Add Sessions
+                </p>
+                <p className="mt-2 text-sm text-gray-300">
+                  Adds to total and remaining. Used sessions stay the same.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-red-400/20 bg-red-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                  Subtract Sessions
+                </p>
+                <p className="mt-2 text-sm text-gray-300">
+                  Reduces remaining and increases used sessions.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                  Fix Remaining
+                </p>
+                <p className="mt-2 text-sm text-gray-300">
+                  Sets exact remaining. Total becomes used plus remaining.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section
             id="package-renew-section"
             className={`mb-6 rounded-[2rem] border p-6 shadow-2xl backdrop-blur ${
               renewPackageMode
@@ -1562,12 +1864,12 @@ export default function AdminClientDetailPage() {
                 </p>
 
                 <h2 className="mt-2 text-2xl font-semibold">
-                  Add Complete New Package
+                  Renew / Add Sessions
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Renew package creates a brand-new package record. It does not
-                  overwrite the existing package.
+                  Renew package adds sessions on top of the client&apos;s current
+                  remaining sessions. It keeps used sessions the same.
                 </p>
               </div>
 
@@ -1643,15 +1945,16 @@ export default function AdminClientDetailPage() {
                 className="rounded-3xl border border-green-400/25 bg-black/40 p-5"
               >
                 <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
-                  New Renew Package
+                  Renew Package
                 </p>
 
                 <h3 className="mt-2 text-xl font-semibold text-white">
-                  Create Complete New Package
+                  Add Sessions to Current Package
                 </h3>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  This inserts a new session package and a new renew purchase.
+                  This adds sessions to the current package and records a renew
+                  purchase.
                 </p>
 
                 <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -1670,7 +1973,7 @@ export default function AdminClientDetailPage() {
 
                   <label>
                     <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-green-300">
-                      Total Sessions
+                      Sessions to Add
                     </span>
                     <input
                       type="number"
@@ -1756,7 +2059,7 @@ export default function AdminClientDetailPage() {
                     disabled={savingPackage}
                     className="mt-5 rounded-2xl bg-green-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
                   >
-                    {savingPackage ? "Saving..." : "Create New Package"}
+                    {savingPackage ? "Saving..." : "Add Renew Sessions"}
                   </button>
                 )}
               </form>
