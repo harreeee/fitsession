@@ -114,14 +114,14 @@ export async function GET(request: NextRequest) {
     );
 
     const { data: sessionHistoryData, error: sessionHistoryError } =
-      await supabaseAdmin
-        .from("session_history")
-        .select(
-          "id, client_id, trainer_id, package_id, status, message, trainer_note, remaining_after, created_at"
-        )
-        .in("client_id", lookupClientIds)
-        .order("created_at", { ascending: false })
-        .limit(100);
+  await supabaseAdmin
+    .from("session_history")
+    .select(
+      "id, client_id, trainer_id, package_id, status, message, trainer_note, remaining_after, created_at"
+    )
+    .in("client_id", lookupClientIds)
+    .order("created_at", { ascending: false })
+    .limit(100);
 
     if (sessionHistoryError) {
       return NextResponse.json(

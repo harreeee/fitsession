@@ -563,47 +563,6 @@ export default function TrainerScanPage() {
     );
   }
 
-  async function createSessionLogRecord({
-    client,
-    sessionPackage,
-    currentTrainerId,
-    newRemaining,
-  }: {
-    client: ClientRow;
-    sessionPackage: SessionPackageRow;
-    currentTrainerId: string;
-    newRemaining: number;
-  }) {
-    const message = `Session scanned by ${
-      trainerName || trainerEmail || "staff"
-    }.`;
-
-    const fullInsert = await supabase.from("session_logs").insert({
-      client_id: client.id,
-      trainer_id: currentTrainerId,
-      package_id: sessionPackage.id,
-      status: "success",
-      message,
-      remaining_after: newRemaining,
-    });
-
-    if (!fullInsert.error) return;
-
-    console.log("session_logs full insert error:", fullInsert.error.message);
-
-    const basicInsert = await supabase.from("session_logs").insert({
-      client_id: client.id,
-      trainer_id: currentTrainerId,
-      status: "success",
-      message,
-      remaining_after: newRemaining,
-    });
-
-    if (basicInsert.error) {
-      console.log("session_logs basic insert error:", basicInsert.error.message);
-    }
-  }
-
   async function insertSessionRecords({
     client,
     sessionPackage,
@@ -616,13 +575,6 @@ export default function TrainerScanPage() {
     newRemaining: number;
   }) {
     const history = await createHistoryRecord({
-      client,
-      sessionPackage,
-      currentTrainerId,
-      newRemaining,
-    });
-
-    await createSessionLogRecord({
       client,
       sessionPackage,
       currentTrainerId,

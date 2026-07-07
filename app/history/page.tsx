@@ -1,90 +1,42 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
-import {
-  canViewSessionHistory,
-  getDashboardPathForRole,
-  getRoleDisplayName,
-  normalizeRole,
-  type AppRole,
-} from "../../lib/role";
 
-type SessionLog = {
+type HistoryLog = {
   id: string;
   client_id: string | null;
   trainer_id: string | null;
-  status: string;
-  message: string | null;
-  trainer_note: string | null;
-  remaining_after: number | null;
-  scanned_at: string;
-  source: "session_logs" | "session_history";
-  client_name: string;
-  client_email: string;
-  trainer_name: string;
-  trainer_email: string | null;
-};
-
-type RawSessionLog = {
-  id: string;
-  client_id: string | null;
-  trainer_id: string | null;
-  status: string | null;
-  message: string | null;
-  remaining_after: number | null;
-  scanned_at: string | null;
-};
-
-type RawSessionHistory = {
-  id: string;
-  client_id: string | null;
-  trainer_id: string | null;
+  package_id: string | null;
   status: string | null;
   message: string | null;
   trainer_note: string | null;
   remaining_after: number | null;
-  created_at: string | null;
+  created_at: string;
 };
 
-type ClientLookup = {
+type ClientRow = {
+  id: string;
+  profile_id: string | null;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+};
+
+type TrainerRow = {
   id: string;
   full_name: string | null;
   email: string | null;
+  role: string | null;
 };
 
-type TrainerLookup = {
-  id: string;
-  full_name: string | null;
-  email: string | null;
+type DateFilter = {
+  startDate: string;
+  endDate: string;
 };
-
-function getSessionStatusLabel(status: string) {
-  if (status === "success") return "Session Scanned";
-  if (status === "manual_subtract") return "Manual Subtract";
-  if (status === "no_show") return "No-Show";
-  if (status === "failed") return "Failed";
-  return status || "Recorded";
-}
-
-function getStatusClass(status: string) {
-  if (status === "success") {
-    return "bg-green-200 text-green-900";
-  }
-
-  if (status === "manual_subtract" || status === "no_show") {
-    return "bg-yellow-200 text-yellow-950";
-  }
-
-  if (status === "failed" || status === "cancelled") {
-    return "bg-red-200 text-red-900";
-  }
-
-  return "bg-gray-200 text-gray-900";
-}
 
 function formatDateTime(value: string | null) {
   if (!value) return "-";
@@ -102,239 +54,328 @@ function formatDateTime(value: string | null) {
   });
 }
 
-function normalizeLogRows(
-  sessionLogs: RawSessionLog[],
-  sessionHistory: RawSessionHistory[]
-): SessionLog[] {
-  const logsFromSessionLogs: SessionLog[] = sessionLogs.map((log) => ({
-    id: log.id,
-    client_id: log.client_id,
-    trainer_id: log.trainer_id,
-    status: log.status || "success",
-    message: log.message,
-    trainer_note: null,
-    remaining_after: log.remaining_after,
-    scanned_at: log.scanned_at || new Date().toISOString(),
-    source: "session_logs",
-    client_name: "Unknown Client",
-    client_email: "-",
-    trainer_name: "Admin / Manual",
-    trainer_email: null,
-  }));
+function formatDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
 
-  const logsFromSessionHistory: SessionLog[] = sessionHistory.map((log) => ({
-    id: log.id,
-    client_id: log.client_id,
-    trainer_id: log.trainer_id,
-    status: log.status || "success",
-    message: log.message,
-    trainer_note: log.trainer_note,
-    remaining_after: log.remaining_after,
-    scanned_at: log.created_at || new Date().toISOString(),
-    source: "session_history",
-    client_name: "Unknown Client",
-    client_email: "-",
-    trainer_name: "Admin / Manual",
-    trainer_email: null,
-  }));
+  return `${year}-${month}-${day}`;
+}
 
-  return [...logsFromSessionLogs, ...logsFromSessionHistory].sort(
-    (a, b) => new Date(b.scanned_at).getTime() - new Date(a.scanned_at).getTime()
-  );
+function getStartOfToday() {
+  return formatDateInput(new Date());
+}
+
+function getStartOfWeek() {
+  const date = new Date();
+  const day = date.getDay();
+  const diff = day === 0 ? 6 : day - 1;
+
+  date.setDate(date.getDate() - diff);
+
+  return formatDateInput(date);
+}
+
+function getStartOfMonth() {
+  const date = new Date();
+  date.setDate(1);
+
+  return formatDateInput(date);
+}
+
+function dateToStartIso(value: string) {
+  return new Date(`${value}T00:00:00`).toISOString();
+}
+
+function dateToEndIso(value: string) {
+  return new Date(`${value}T23:59:59.999`).toISOString();
+}
+
+function getStatusClass(status: string | null) {
+  const cleanStatus = (status || "").toLowerCase();
+
+  if (cleanStatus === "success" || cleanStatus === "completed") {
+    return "border-green-400/40 bg-green-400/10 text-green-300";
+  }
+
+  if (cleanStatus === "no_show" || cleanStatus === "no-show") {
+    return "border-orange-400/40 bg-orange-400/10 text-orange-300";
+  }
+
+  if (cleanStatus === "cancelled" || cleanStatus === "canceled") {
+    return "border-red-400/40 bg-red-400/10 text-red-300";
+  }
+
+  return "border-yellow-400/40 bg-yellow-400/10 text-yellow-300";
+}
+
+function getRoleLabel(role: string | null) {
+  if (role === "admin") return "Admin";
+  if (role === "manager") return "Manager";
+  if (role === "trainer") return "Trainer";
+  if (role === "nutrition_coach") return "Nutrition Coach";
+  if (role === "client") return "Client";
+
+  return "Staff";
 }
 
 export default function HistoryPage() {
   const router = useRouter();
 
-  const [logs, setLogs] = useState<SessionLog[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [logs, setLogs] = useState<HistoryLog[]>([]);
+  const [clients, setClients] = useState<ClientRow[]>([]);
+  const [trainers, setTrainers] = useState<TrainerRow[]>([]);
+
   const [search, setSearch] = useState("");
+  const [startDate, setStartDate] = useState(getStartOfMonth());
+  const [endDate, setEndDate] = useState(getStartOfToday());
+
+  const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
-  const [userRole, setUserRole] = useState<AppRole | null>(null);
+  const [role, setRole] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [activeFilterLabel, setActiveFilterLabel] = useState("This Month");
 
-  async function fetchLogs() {
-    setLoading(true);
+  const clientMap = useMemo(() => {
+    const map = new Map<string, ClientRow>();
 
-    const [sessionLogsResult, sessionHistoryResult] = await Promise.all([
-      supabase
-        .from("session_logs")
-        .select("id, client_id, trainer_id, status, message, remaining_after, scanned_at")
-        .order("scanned_at", { ascending: false })
-        .limit(300),
+    clients.forEach((client) => {
+      map.set(client.id, client);
 
-      supabase
-        .from("session_history")
-        .select(
-          "id, client_id, trainer_id, status, message, trainer_note, remaining_after, created_at"
-        )
-        .order("created_at", { ascending: false })
-        .limit(300),
-    ]);
-
-    if (sessionLogsResult.error) {
-      console.log("session_logs history error:", sessionLogsResult.error.message);
-    }
-
-    if (sessionHistoryResult.error) {
-      console.log(
-        "session_history history error:",
-        sessionHistoryResult.error.message
-      );
-    }
-
-    const rawSessionLogs = !sessionLogsResult.error
-      ? ((sessionLogsResult.data || []) as RawSessionLog[])
-      : [];
-
-    const rawSessionHistory = !sessionHistoryResult.error
-      ? ((sessionHistoryResult.data || []) as RawSessionHistory[])
-      : [];
-
-    const normalizedLogs = normalizeLogRows(rawSessionLogs, rawSessionHistory);
-
-    const clientIds = Array.from(
-      new Set(
-        normalizedLogs
-          .map((log) => log.client_id)
-          .filter((clientId): clientId is string => Boolean(clientId))
-      )
-    );
-
-    const trainerIds = Array.from(
-      new Set(
-        normalizedLogs
-          .map((log) => log.trainer_id)
-          .filter((trainerId): trainerId is string => Boolean(trainerId))
-      )
-    );
-
-    let clients: ClientLookup[] = [];
-    let trainers: TrainerLookup[] = [];
-
-    if (clientIds.length > 0) {
-      const { data: clientData, error: clientError } = await supabase
-        .from("clients")
-        .select("id, full_name, email")
-        .in("id", clientIds);
-
-      if (clientError) {
-        console.log("clients lookup error:", clientError.message);
-      } else {
-        clients = (clientData || []) as ClientLookup[];
+      if (client.profile_id) {
+        map.set(client.profile_id, client);
       }
-    }
+    });
 
-    if (trainerIds.length > 0) {
-      const { data: trainerData, error: trainerError } = await supabase
-        .from("profiles")
-        .select("id, full_name, email")
-        .in("id", trainerIds);
+    return map;
+  }, [clients]);
 
-      if (trainerError) {
-        console.log("trainer lookup error:", trainerError.message);
-      } else {
-        trainers = (trainerData || []) as TrainerLookup[];
-      }
-    }
+  const trainerMap = useMemo(() => {
+    const map = new Map<string, TrainerRow>();
 
-    const clientMap = new Map(
-      clients.map((client) => [
-        client.id,
-        {
-          full_name: client.full_name || "Unknown Client",
-          email: client.email || "-",
-        },
-      ])
-    );
+    trainers.forEach((trainer) => {
+      map.set(trainer.id, trainer);
+    });
 
-    const trainerMap = new Map(
-      trainers.map((trainer) => [
-        trainer.id,
-        {
-          full_name: trainer.full_name || null,
-          email: trainer.email || null,
-        },
-      ])
-    );
+    return map;
+  }, [trainers]);
 
-    const mergedLogs: SessionLog[] = normalizedLogs.map((log) => {
+  const filteredLogs = useMemo(() => {
+    const cleanSearch = search.trim().toLowerCase();
+
+    if (!cleanSearch) return logs;
+
+    return logs.filter((log) => {
       const client = log.client_id ? clientMap.get(log.client_id) : null;
       const trainer = log.trainer_id ? trainerMap.get(log.trainer_id) : null;
 
-      return {
-        ...log,
-        client_name: client?.full_name || "Unknown Client",
-        client_email: client?.email || "-",
-        trainer_name:
-          trainer?.full_name ||
-          trainer?.email ||
-          (log.trainer_id ? "Trainer account removed" : "Admin / Manual"),
-        trainer_email: trainer?.email || null,
-      };
+      return [
+        client?.full_name,
+        client?.email,
+        client?.phone,
+        trainer?.full_name,
+        trainer?.email,
+        log.status,
+        log.message,
+        log.trainer_note,
+        log.remaining_after,
+        formatDateTime(log.created_at),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(cleanSearch);
     });
+  }, [logs, search, clientMap, trainerMap]);
 
-    console.log("History page debug:", {
-      sessionLogsCount: rawSessionLogs.length,
-      sessionHistoryCount: rawSessionHistory.length,
-      mergedCount: mergedLogs.length,
-    });
+  const completedCount = logs.filter(
+    (log) => log.status === "success" || log.status === "completed"
+  ).length;
 
-    setLogs(mergedLogs);
+  const uniqueClientCount = new Set(
+    logs.map((log) => log.client_id).filter(Boolean)
+  ).size;
+
+  async function fetchHistory(filter?: DateFilter) {
+    setLoading(true);
+
+    const cleanStartDate = filter?.startDate ?? startDate;
+    const cleanEndDate = filter?.endDate ?? endDate;
+
+    let historyQuery = supabase
+      .from("session_history")
+      .select(
+        "id, client_id, trainer_id, package_id, status, message, trainer_note, remaining_after, created_at"
+      )
+      .order("created_at", { ascending: false })
+      .limit(1000);
+
+    if (cleanStartDate) {
+      historyQuery = historyQuery.gte("created_at", dateToStartIso(cleanStartDate));
+    }
+
+    if (cleanEndDate) {
+      historyQuery = historyQuery.lte("created_at", dateToEndIso(cleanEndDate));
+    }
+
+    if (
+      currentUserId &&
+      role !== "admin" &&
+      role !== "manager"
+    ) {
+      historyQuery = historyQuery.eq("trainer_id", currentUserId);
+    }
+
+    const [historyResult, clientsResult, trainersResult] = await Promise.all([
+      historyQuery,
+
+      supabase
+        .from("clients")
+        .select("id, profile_id, full_name, email, phone"),
+
+      supabase
+        .from("profiles")
+        .select("id, full_name, email, role"),
+    ]);
+
+    if (historyResult.error) {
+      alert(historyResult.error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (clientsResult.error) {
+      alert(clientsResult.error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (trainersResult.error) {
+      alert(trainersResult.error.message);
+      setLoading(false);
+      return;
+    }
+
+    setLogs((historyResult.data || []) as HistoryLog[]);
+    setClients((clientsResult.data || []) as ClientRow[]);
+    setTrainers((trainersResult.data || []) as TrainerRow[]);
     setLoading(false);
+  }
+
+  async function applyCustomFilter() {
+    if (startDate && endDate && startDate > endDate) {
+      alert("Start date cannot be after end date.");
+      return;
+    }
+
+    setActiveFilterLabel("Custom Range");
+    await fetchHistory({
+      startDate,
+      endDate,
+    });
+  }
+
+  async function applyTodayFilter() {
+    const today = getStartOfToday();
+
+    setStartDate(today);
+    setEndDate(today);
+    setActiveFilterLabel("Today");
+
+    await fetchHistory({
+      startDate: today,
+      endDate: today,
+    });
+  }
+
+  async function applyThisWeekFilter() {
+    const weekStart = getStartOfWeek();
+    const today = getStartOfToday();
+
+    setStartDate(weekStart);
+    setEndDate(today);
+    setActiveFilterLabel("This Week");
+
+    await fetchHistory({
+      startDate: weekStart,
+      endDate: today,
+    });
+  }
+
+  async function applyThisMonthFilter() {
+    const monthStart = getStartOfMonth();
+    const today = getStartOfToday();
+
+    setStartDate(monthStart);
+    setEndDate(today);
+    setActiveFilterLabel("This Month");
+
+    await fetchHistory({
+      startDate: monthStart,
+      endDate: today,
+    });
+  }
+
+  async function applyAllTimeFilter() {
+    setStartDate("");
+    setEndDate("");
+    setActiveFilterLabel("All Time");
+
+    await fetchHistory({
+      startDate: "",
+      endDate: "",
+    });
   }
 
   useEffect(() => {
     async function protectHistoryPage() {
-      const { user, role } = await getCurrentUserRole();
+      const { user, role: userRole } = await getCurrentUserRole();
 
       if (!user) {
         router.push("/login");
         return;
       }
 
-      const cleanRole = normalizeRole(role);
+      if (userRole === "client") {
+        router.push("/client");
+        return;
+      }
 
-      if (!canViewSessionHistory(cleanRole)) {
-        if (cleanRole === "client") {
-          router.push("/client");
-          return;
-        }
-
+      if (
+        userRole !== "admin" &&
+        userRole !== "manager" &&
+        userRole !== "trainer" &&
+        userRole !== "nutrition_coach"
+      ) {
         await supabase.auth.signOut();
         router.push("/login");
         return;
       }
 
-      setUserRole(cleanRole);
+      setRole(userRole || null);
+      setCurrentUserId(user.id);
       setCheckingRole(false);
-      await fetchLogs();
     }
 
     protectHistoryPage();
   }, [router]);
 
-  const filteredLogs = logs.filter((log) => {
-    const searchText = search.trim().toLowerCase();
+  useEffect(() => {
+    if (checkingRole) return;
 
-    if (!searchText) return true;
-
-    return (
-      log.client_name.toLowerCase().includes(searchText) ||
-      log.client_email.toLowerCase().includes(searchText) ||
-      log.trainer_name.toLowerCase().includes(searchText) ||
-      (log.trainer_email || "").toLowerCase().includes(searchText) ||
-      getSessionStatusLabel(log.status).toLowerCase().includes(searchText) ||
-      log.status.toLowerCase().includes(searchText) ||
-      log.source.toLowerCase().includes(searchText) ||
-      formatDateTime(log.scanned_at).toLowerCase().includes(searchText)
-    );
-  });
+    fetchHistory({
+      startDate,
+      endDate,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkingRole, currentUserId, role]);
 
   if (checkingRole) {
     return (
-      <main className="min-h-screen bg-black p-6 text-white">
-        <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-          <p className="font-bold text-yellow-400">Checking access...</p>
+      <main className="min-h-screen bg-black p-5 text-white">
+        <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+          <p className="text-base font-semibold text-yellow-400">
+            Checking history access...
+          </p>
         </div>
       </main>
     );
@@ -342,258 +383,316 @@ export default function HistoryPage() {
 
   return (
     <main className="min-h-screen bg-black p-4 text-white md:p-6">
-      <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-6">
+      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
         <div className="mx-auto max-w-7xl">
-          <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <header className="mb-6 flex flex-col gap-4 rounded-3xl border border-yellow-500/25 bg-black/50 p-5 shadow-2xl md:flex-row md:items-end md:justify-between">
             <div>
-              <h1 className="text-4xl font-black text-yellow-400 md:text-5xl">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.35em] text-yellow-400">
                 FXA FITNESS
+              </p>
+
+              <h1 className="text-4xl font-semibold tracking-tight md:text-6xl">
+                Session History
               </h1>
 
-              <p className="text-sm uppercase tracking-[0.25em] text-gray-400">
-                Session History
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-gray-400">
+                Filter completed sessions by date range. This page reads only
+                from{" "}
+                <span className="font-semibold text-yellow-400">
+                  session_history
+                </span>
+                .
               </p>
 
-              <p className="mt-2 text-sm text-gray-500">
-                Signed in as {getRoleDisplayName(userRole)}
-              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <p className="inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-yellow-300">
+                  Signed in as {getRoleLabel(role)}
+                </p>
+
+                <p className="inline-flex rounded-full border border-cyan-400/25 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-300">
+                  Filter: {activeFilterLabel}
+                </p>
+              </div>
             </div>
 
-            <Link
-              href={getDashboardPathForRole(userRole)}
-              className="rounded-xl bg-yellow-400 px-5 py-3 text-center font-black uppercase text-black transition hover:bg-yellow-300"
-            >
-              Dashboard
-            </Link>
-          </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => fetchHistory()}
+                className="rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-yellow-300"
+              >
+                Refresh
+              </button>
 
-          <div className="mb-4 grid gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-yellow-500/30 bg-white/[0.06] p-4">
-              <p className="text-xs uppercase tracking-widest text-gray-400">
+              {role === "admin" || role === "manager" ? (
+                <Link
+                  href="/admin"
+                  className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+                >
+                  Back to Admin
+                </Link>
+              ) : (
+                <Link
+                  href="/trainer/scan"
+                  className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+                >
+                  Back to Scanner
+                </Link>
+              )}
+            </div>
+          </header>
+
+          <section className="mb-5 grid gap-4 md:grid-cols-4">
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
                 Total Records
               </p>
-              <p className="mt-1 text-3xl font-black text-yellow-400">
+              <p className="mt-2 text-4xl font-semibold text-yellow-400">
                 {logs.length}
               </p>
             </div>
 
-            <div className="rounded-2xl border border-green-500/30 bg-green-500/10 p-4">
-              <p className="text-xs uppercase tracking-widest text-gray-400">
-                Session Logs
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                Completed
               </p>
-              <p className="mt-1 text-3xl font-black text-green-300">
-                {logs.filter((log) => log.source === "session_logs").length}
+              <p className="mt-2 text-4xl font-semibold text-green-300">
+                {completedCount}
+              </p>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                Unique Clients
+              </p>
+              <p className="mt-2 text-4xl font-semibold text-cyan-300">
+                {uniqueClientCount}
               </p>
             </div>
 
-            <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4">
-              <p className="text-xs uppercase tracking-widest text-gray-400">
-                Session History
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                Data Source
               </p>
-              <p className="mt-1 text-3xl font-black text-blue-300">
-                {logs.filter((log) => log.source === "session_history").length}
+              <p className="mt-3 text-lg font-semibold text-yellow-300">
+                session_history
               </p>
             </div>
-          </div>
+          </section>
 
-          <div className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-5 shadow-2xl backdrop-blur md:p-6">
-            <div className="mb-6">
-              <label className="mb-2 block font-bold text-gray-200">
-                Search History
-              </label>
+          <section className="mb-5 rounded-3xl border border-yellow-500/25 bg-black/50 p-5 shadow-2xl">
+            <div className="mb-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={applyTodayFilter}
+                className="rounded-xl bg-yellow-400 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black transition hover:bg-yellow-300"
+              >
+                Today
+              </button>
 
-              <input
-                className="w-full rounded-xl border border-white/20 bg-black/50 p-3 text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
-                type="text"
-                placeholder="Search by client, trainer, status, source, or date..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
+              <button
+                type="button"
+                onClick={applyThisWeekFilter}
+                className="rounded-xl border border-yellow-400 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+              >
+                This Week
+              </button>
+
+              <button
+                type="button"
+                onClick={applyThisMonthFilter}
+                className="rounded-xl border border-yellow-400 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+              >
+                This Month
+              </button>
+
+              <button
+                type="button"
+                onClick={applyAllTimeFilter}
+                className="rounded-xl border border-white/20 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-gray-300 transition hover:border-yellow-400 hover:text-yellow-400"
+              >
+                All Time
+              </button>
             </div>
 
-            {loading ? (
-              <p className="font-bold text-yellow-400">Loading history...</p>
-            ) : filteredLogs.length === 0 ? (
-              <div className="rounded-2xl border border-yellow-500/30 bg-black/40 p-10 text-center">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-yellow-500/30 bg-black/50 text-3xl">
-                  📋
-                </div>
+            <div className="grid gap-4 lg:grid-cols-[1fr_1fr_1.3fr_auto]">
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  From
+                </label>
 
-                <h2 className="mb-2 text-2xl font-black text-white">
-                  No Session History Found
-                </h2>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => setStartDate(event.target.value)}
+                  className="w-full rounded-2xl border border-yellow-500/25 bg-black/70 px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+                />
+              </div>
 
-                <p className="text-gray-300">
-                  No records match your search, or the scanner is not saving
-                  records into session_logs/session_history.
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  To
+                </label>
+
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => setEndDate(event.target.value)}
+                  className="w-full rounded-2xl border border-yellow-500/25 bg-black/70 px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  Search
+                </label>
+
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search client, trainer, note, status..."
+                  className="w-full rounded-2xl border border-yellow-500/25 bg-black/70 px-4 py-3 text-sm text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
+                />
+              </div>
+
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={applyCustomFilter}
+                  className="w-full rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-yellow-300 lg:w-auto"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {loading ? (
+            <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-10 text-center">
+              <p className="text-sm font-semibold text-yellow-400">
+                Loading history...
+              </p>
+            </section>
+          ) : filteredLogs.length === 0 ? (
+            <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-10 text-center">
+              <p className="text-sm font-semibold text-yellow-400">
+                No history found for this filter.
+              </p>
+            </section>
+          ) : (
+            <section className="overflow-hidden rounded-3xl border border-yellow-500/30 bg-black/60 shadow-2xl">
+              <div className="border-b border-yellow-500/25 bg-black px-5 py-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                  Showing {filteredLogs.length} of {logs.length} records
                 </p>
               </div>
-            ) : (
-              <>
-                <div className="hidden overflow-x-auto xl:block">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr className="border-b border-yellow-500/30 text-left text-sm uppercase tracking-wide text-yellow-400">
-                        <th className="p-3">Client</th>
-                        <th className="p-3">Email</th>
-                        <th className="p-3">Trainer</th>
-                        <th className="p-3">Status</th>
-                        <th className="p-3">Remaining</th>
-                        <th className="p-3">Source</th>
-                        <th className="p-3">Date / Time</th>
-                      </tr>
-                    </thead>
 
-                    <tbody>
-                      {filteredLogs.map((log) => (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1150px] border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="bg-yellow-400 text-black">
+                      <th className="w-[185px] px-4 py-3 text-xs font-bold uppercase">
+                        Date
+                      </th>
+                      <th className="w-[220px] px-4 py-3 text-xs font-bold uppercase">
+                        Client
+                      </th>
+                      <th className="w-[220px] px-4 py-3 text-xs font-bold uppercase">
+                        Trainer
+                      </th>
+                      <th className="w-[120px] px-4 py-3 text-xs font-bold uppercase">
+                        Status
+                      </th>
+                      <th className="w-[120px] px-4 py-3 text-xs font-bold uppercase">
+                        Remaining
+                      </th>
+                      <th className="px-4 py-3 text-xs font-bold uppercase">
+                        Message / Note
+                      </th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {filteredLogs.map((log, index) => {
+                      const client = log.client_id
+                        ? clientMap.get(log.client_id)
+                        : null;
+
+                      const trainer = log.trainer_id
+                        ? trainerMap.get(log.trainer_id)
+                        : null;
+
+                      return (
                         <tr
-                          key={`${log.source}-${log.id}`}
-                          className="border-b border-white/10 hover:bg-white/[0.04]"
+                          key={log.id}
+                          className={`border-b border-white/10 ${
+                            index % 2 === 0 ? "bg-[#101010]" : "bg-[#171717]"
+                          } hover:bg-yellow-400/10`}
                         >
-                          <td className="p-3 font-black text-white">
-                            {log.client_name}
+                          <td className="px-4 py-4 align-top text-xs text-gray-300">
+                            {formatDateTime(log.created_at)}
                           </td>
 
-                          <td className="p-3 text-gray-300">
-                            {log.client_email}
-                          </td>
-
-                          <td className="p-3">
-                            <p className="font-bold text-gray-200">
-                              {log.trainer_name}
+                          <td className="px-4 py-4 align-top">
+                            <p className="font-semibold text-white">
+                              {client?.full_name || "Unknown Client"}
                             </p>
-
-                            {log.trainer_email ? (
-                              <p className="text-xs text-gray-500">
-                                {log.trainer_email}
-                              </p>
-                            ) : null}
+                            <p className="mt-1 text-xs text-gray-500">
+                              {client?.email || "No email"}
+                            </p>
                           </td>
 
-                          <td className="p-3">
+                          <td className="px-4 py-4 align-top">
+                            <p className="font-semibold text-yellow-300">
+                              {trainer?.full_name ||
+                                trainer?.email ||
+                                "Unknown Staff"}
+                            </p>
+                            <p className="mt-1 text-xs text-gray-500">
+                              {getRoleLabel(trainer?.role || null)}
+                            </p>
+                          </td>
+
+                          <td className="px-4 py-4 align-top">
                             <span
-                              className={`rounded-full px-3 py-1 text-sm font-black uppercase ${getStatusClass(
+                              className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase ${getStatusClass(
                                 log.status
                               )}`}
                             >
-                              {getSessionStatusLabel(log.status)}
+                              {log.status || "-"}
                             </span>
                           </td>
 
-                          <td className="p-3 font-black text-yellow-400">
-                            {log.remaining_after ?? "-"}
+                          <td className="px-4 py-4 align-top text-sm font-semibold text-cyan-300">
+                            {log.remaining_after === null
+                              ? "-"
+                              : log.remaining_after}
                           </td>
 
-                          <td className="p-3">
-                            <span className="rounded-full border border-white/15 bg-black/50 px-3 py-1 text-xs font-bold uppercase text-gray-300">
-                              {log.source}
-                            </span>
-                          </td>
+                          <td className="px-4 py-4 align-top">
+                            <p className="text-sm leading-6 text-gray-300">
+                              {log.message || "Session recorded."}
+                            </p>
 
-                          <td className="p-3 text-gray-300">
-                            {formatDateTime(log.scanned_at)}
+                            {log.trainer_note ? (
+                              <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                                  Trainer Note
+                                </p>
+                                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
+                                  {log.trainer_note}
+                                </p>
+                              </div>
+                            ) : null}
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="grid gap-4 xl:hidden">
-                  {filteredLogs.map((log) => (
-                    <div
-                      key={`${log.source}-${log.id}`}
-                      className="rounded-2xl border border-yellow-500/30 bg-black/40 p-5"
-                    >
-                      <div className="mb-4 flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-black uppercase tracking-widest text-yellow-400">
-                            Client
-                          </p>
-
-                          <h2 className="text-xl font-black text-white">
-                            {log.client_name}
-                          </h2>
-
-                          <p className="text-sm text-gray-400">
-                            {log.client_email}
-                          </p>
-                        </div>
-
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-black uppercase ${getStatusClass(
-                            log.status
-                          )}`}
-                        >
-                          {getSessionStatusLabel(log.status)}
-                        </span>
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-xl bg-white/[0.05] p-3">
-                          <p className="text-xs font-black uppercase tracking-widest text-gray-500">
-                            Trainer
-                          </p>
-
-                          <p className="mt-1 font-black text-yellow-400">
-                            {log.trainer_name}
-                          </p>
-
-                          {log.trainer_email ? (
-                            <p className="text-xs text-gray-500">
-                              {log.trainer_email}
-                            </p>
-                          ) : null}
-                        </div>
-
-                        <div className="rounded-xl bg-white/[0.05] p-3">
-                          <p className="text-xs font-black uppercase tracking-widest text-gray-500">
-                            Remaining
-                          </p>
-
-                          <p className="mt-1 font-black text-yellow-400">
-                            {log.remaining_after ?? "-"}
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl bg-white/[0.05] p-3">
-                          <p className="text-xs font-black uppercase tracking-widest text-gray-500">
-                            Source
-                          </p>
-
-                          <p className="mt-1 font-black text-gray-200">
-                            {log.source}
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl bg-white/[0.05] p-3">
-                          <p className="text-xs font-black uppercase tracking-widest text-gray-500">
-                            Date / Time
-                          </p>
-
-                          <p className="mt-1 font-bold text-gray-200">
-                            {formatDateTime(log.scanned_at)}
-                          </p>
-                        </div>
-                      </div>
-
-                      {log.message ? (
-                        <p className="mt-4 rounded-xl bg-white/[0.05] p-3 text-sm text-gray-300">
-                          {log.message}
-                        </p>
-                      ) : null}
-
-                      {log.trainer_note ? (
-                        <p className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm text-yellow-100">
-                          {log.trainer_note}
-                        </p>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </main>

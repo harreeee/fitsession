@@ -75,7 +75,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
 
-    const { error: logError } = await supabaseAdmin.from("session_logs").insert({
+    const { error: logError } = await supabaseAdmin.from("session_history").insert({
       client_id: clientId,
       trainer_id: null,
       package_id: activePackage.id,
