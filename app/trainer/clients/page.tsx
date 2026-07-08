@@ -13,6 +13,8 @@ type ClientRow = {
   status: string | null;
   client_source: string | null;
   client_source_other: string | null;
+  assigned_trainer_id: string | null;
+  assigned_nutrition_coach_id: string | null;
   created_at: string | null;
 };
 
@@ -39,10 +41,19 @@ type PurchaseRow = {
   created_at: string | null;
 };
 
+type StaffProfileRow = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  role: string | null;
+};
+
 type ClientTableRow = {
   id: string;
   clientCode: string;
   name: string;
+  assignedTrainer: string;
+  assignedNutritionCoach: string;
   purchaseDate: string | null;
   startDate: string | null;
   expireDate: string | null;
@@ -58,6 +69,8 @@ type ClientTableRow = {
 type SortKey =
   | "clientCode"
   | "name"
+  | "assignedTrainer"
+  | "assignedNutritionCoach"
   | "purchaseDate"
   | "startDate"
   | "expireDate"
@@ -96,6 +109,8 @@ const PURCHASE_TYPE_LABELS: Record<string, string> = {
 const columns: Column[] = [
   { key: "clientCode", label: "Code", width: "w-[90px]" },
   { key: "name", label: "Client", width: "w-[230px]" },
+  { key: "assignedTrainer", label: "PT", width: "w-[170px]" },
+  { key: "assignedNutritionCoach", label: "NC", width: "w-[170px]" },
   { key: "purchaseDate", label: "Purchase", width: "w-[115px]" },
   { key: "startDate", label: "Start", width: "w-[115px]" },
   { key: "expireDate", label: "Expire", width: "w-[115px]" },
@@ -203,6 +218,7 @@ export default function TrainerClientsPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [packages, setPackages] = useState<SessionPackageRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
+  const [staffProfiles, setStaffProfiles] = useState<StaffProfileRow[]>([]);
 
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("purchaseDate");
@@ -216,11 +232,12 @@ export default function TrainerClientsPage() {
   async function fetchClientsPageData() {
     setLoading(true);
 
-    const [clientsResult, packagesResult, purchasesResult] = await Promise.all([
+    const [clientsResult, packagesResult, purchasesResult, staffResult] =
+      await Promise.all([
       supabase
         .from("clients")
         .select(
-          "id, client_code, full_name, status, client_source, client_source_other, created_at"
+          "id, client_code, full_name, status, client_source, client_source_other, assigned_trainer_id, assigned_nutrition_coach_id, created_at"
         )
         .order("created_at", { ascending: false }),
 
@@ -237,6 +254,12 @@ export default function TrainerClientsPage() {
           "id, client_id, plan_name, session_count, purchase_type, status, created_at"
         )
         .order("created_at", { ascending: false }),
+
+      supabase
+        .from("profiles")
+        .select("id, full_name, email, role")
+        .in("role", ["trainer", "nutrition_coach"])
+        .order("full_name", { ascending: true }),
     ]);
 
     if (clientsResult.error) {
@@ -257,9 +280,16 @@ export default function TrainerClientsPage() {
       return;
     }
 
+    if (staffResult.error) {
+      alert(staffResult.error.message);
+      setLoading(false);
+      return;
+    }
+
     setClients((clientsResult.data || []) as ClientRow[]);
     setPackages((packagesResult.data || []) as SessionPackageRow[]);
     setPurchases((purchasesResult.data || []) as PurchaseRow[]);
+    setStaffProfiles((staffResult.data || []) as StaffProfileRow[]);
     setLoading(false);
   }
 
@@ -272,6 +302,16 @@ export default function TrainerClientsPage() {
     setSortKey(nextKey);
     setSortDirection("asc");
   }
+
+  const staffNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+
+    staffProfiles.forEach((staff) => {
+      map.set(staff.id, staff.full_name || staff.email || "Unnamed Staff");
+    });
+
+    return map;
+  }, [staffProfiles]);
 
   const tableRows = useMemo<ClientTableRow[]>(() => {
     return clients.map((client) => {
@@ -296,6 +336,12 @@ export default function TrainerClientsPage() {
         id: client.id,
         clientCode: client.client_code || "-",
         name: client.full_name || "-",
+        assignedTrainer: client.assigned_trainer_id
+          ? staffNameMap.get(client.assigned_trainer_id) || "Unknown PT"
+          : "Not assigned",
+        assignedNutritionCoach: client.assigned_nutrition_coach_id
+          ? staffNameMap.get(client.assigned_nutrition_coach_id) || "Unknown NC"
+          : "Not assigned",
         purchaseDate:
           latestPurchase?.created_at || latestPackage?.created_at || null,
         startDate: latestPackage?.starts_at || latestPackage?.created_at || null,
@@ -314,7 +360,7 @@ export default function TrainerClientsPage() {
         ),
       };
     });
-  }, [clients, packages, purchases]);
+  }, [clients, packages, purchases, staffNameMap]);
 
   const filteredAndSortedRows = useMemo(() => {
     const searchText = search.trim().toLowerCase();
@@ -325,6 +371,8 @@ export default function TrainerClientsPage() {
       return [
         row.clientCode,
         row.name,
+        row.assignedTrainer,
+        row.assignedNutritionCoach,
         row.status,
         row.packageName,
         row.purchaseType,
@@ -582,7 +630,7 @@ export default function TrainerClientsPage() {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1450px] table-fixed border-collapse text-left text-xs">
+                <table className="w-full min-w-[1790px] table-fixed border-collapse text-left text-xs">
                   <thead>
                     <tr className="bg-yellow-400 text-black">
                       {columns.map((column) => (

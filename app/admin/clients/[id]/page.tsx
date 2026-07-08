@@ -32,6 +32,8 @@ type ClientDetail = {
   client_source: string | null;
   client_source_other: string | null;
   sales_person_id: string | null;
+  assigned_trainer_id: string | null;
+  assigned_nutrition_coach_id: string | null;
   created_at: string | null;
 };
 
@@ -274,6 +276,14 @@ export default function AdminClientDetailPage() {
   const [selectedSalesPersonId, setSelectedSalesPersonId] = useState("");
   const [savingSalesPerson, setSavingSalesPerson] = useState(false);
 
+  const [trainerOptions, setTrainerOptions] = useState<TrainerProfile[]>([]);
+  const [nutritionCoachOptions, setNutritionCoachOptions] = useState<
+    TrainerProfile[]
+  >([]);
+  const [selectedTrainerId, setSelectedTrainerId] = useState("");
+  const [selectedNutritionCoachId, setSelectedNutritionCoachId] = useState("");
+  const [savingStaffAssignment, setSavingStaffAssignment] = useState(false);
+
   const [userRole, setUserRole] = useState<AppRole | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState(
@@ -354,6 +364,12 @@ export default function AdminClientDetailPage() {
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function scrollToStaffAssignmentSection() {
+    document
+      .getElementById("staff-assignment-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   function startRenewPackage() {
     setRenewPackageMode(true);
     window.setTimeout(scrollToPackageSection, 100);
@@ -429,7 +445,7 @@ export default function AdminClientDetailPage() {
         supabase
           .from("clients")
           .select(
-            "id, client_code, full_name, email, phone, gender, date_of_birth, qr_token, activation_code, status, client_note, client_source, client_source_other, sales_person_id, created_at"
+            "id, client_code, full_name, email, phone, gender, date_of_birth, qr_token, activation_code, status, client_note, client_source, client_source_other, sales_person_id, assigned_trainer_id, assigned_nutrition_coach_id, created_at"
           )
           .eq("id", clientId)
           .maybeSingle(),
@@ -499,8 +515,19 @@ export default function AdminClientDetailPage() {
     setClient(cleanClient);
     setPackages(cleanPackages);
     setPurchases(cleanPurchases);
-    setSalesPeople((salesPeopleResult.data || []) as TrainerProfile[]);
+    const cleanStaffPeople = (salesPeopleResult.data || []) as TrainerProfile[];
+
+    setSalesPeople(cleanStaffPeople);
+    setTrainerOptions(
+      cleanStaffPeople.filter((person) => person.role === "trainer")
+    );
+    setNutritionCoachOptions(
+      cleanStaffPeople.filter((person) => person.role === "nutrition_coach")
+    );
+
     setSelectedSalesPersonId(cleanClient.sales_person_id || "");
+    setSelectedTrainerId(cleanClient.assigned_trainer_id || "");
+    setSelectedNutritionCoachId(cleanClient.assigned_nutrition_coach_id || "");
 
     setEditClientCode(cleanClient.client_code || "");
     setEditName(cleanClient.full_name || "");
@@ -677,6 +704,37 @@ export default function AdminClientDetailPage() {
     alert("Sale person saved.");
     await fetchClientDetail();
     setSavingSalesPerson(false);
+  }
+
+  async function saveStaffAssignment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowBasicInfoEdit) {
+      alert("You do not have permission to assign staff.");
+      return;
+    }
+
+    setSavingStaffAssignment(true);
+
+    const { error } = await supabase
+      .from("clients")
+      .update({
+        assigned_trainer_id: selectedTrainerId || null,
+        assigned_nutrition_coach_id: selectedNutritionCoachId || null,
+      })
+      .eq("id", client.id);
+
+    if (error) {
+      alert(error.message);
+      setSavingStaffAssignment(false);
+      return;
+    }
+
+    alert("Trainer and Nutrition Coach assignment saved.");
+    await fetchClientDetail();
+    setSavingStaffAssignment(false);
   }
 
   async function saveUploadedPurchaseType(event: FormEvent<HTMLFormElement>) {
@@ -1292,6 +1350,14 @@ export default function AdminClientDetailPage() {
     (person) => person.id === client.sales_person_id
   );
 
+  const selectedTrainer = trainerOptions.find(
+    (person) => person.id === client.assigned_trainer_id
+  );
+
+  const selectedNutritionCoach = nutritionCoachOptions.find(
+    (person) => person.id === client.assigned_nutrition_coach_id
+  );
+
   const activePackageNumbers = getPackageNumbers(activePackage);
 
   return (
@@ -1362,6 +1428,16 @@ export default function AdminClientDetailPage() {
               {allowBasicInfoEdit && (
                 <button
                   type="button"
+                  onClick={scrollToStaffAssignmentSection}
+                  className="rounded-2xl bg-purple-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-purple-300"
+                >
+                  Assign PT / NC
+                </button>
+              )}
+
+              {allowBasicInfoEdit && (
+                <button
+                  type="button"
                   onClick={toggleClientStatus}
                   className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
                 >
@@ -1400,6 +1476,20 @@ export default function AdminClientDetailPage() {
                   Sale Person:{" "}
                   <span className="text-yellow-300">
                     {selectedSalesPerson?.full_name || "Not assigned"}
+                  </span>
+                </p>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Personal Trainer:{" "}
+                  <span className="text-purple-300">
+                    {selectedTrainer?.full_name || "Not assigned"}
+                  </span>
+                </p>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Nutrition Coach:{" "}
+                  <span className="text-green-300">
+                    {selectedNutritionCoach?.full_name || "Not assigned"}
                   </span>
                 </p>
               </div>
@@ -1484,6 +1574,111 @@ export default function AdminClientDetailPage() {
                 >
                   {savingSalesPerson ? "Saving..." : "Save Sale Person"}
                 </button>
+              )}
+            </form>
+          </section>
+
+          <section
+            id="staff-assignment-section"
+            className="mb-6 rounded-[2rem] border border-purple-500/30 bg-purple-500/10 p-6 shadow-2xl backdrop-blur"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-purple-300">
+                  Staff Assignment
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  Assign Personal Trainer & Nutrition Coach
+                </h2>
+
+                <p className="mt-2 text-sm font-normal text-gray-300">
+                  This controls who is responsible for training and nutrition
+                  support. Staff will see these names in Client Management.
+                </p>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-2xl border border-purple-400/20 bg-black/40 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Current PT
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-purple-300">
+                    {selectedTrainer?.full_name || "Not assigned"}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-green-400/20 bg-black/40 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Current NC
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-green-300">
+                    {selectedNutritionCoach?.full_name || "Not assigned"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <form
+              onSubmit={saveStaffAssignment}
+              className="mt-5 grid gap-4 md:grid-cols-2"
+            >
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-purple-300">
+                  Personal Trainer
+                </span>
+
+                <select
+                  value={selectedTrainerId}
+                  onChange={(event) => setSelectedTrainerId(event.target.value)}
+                  disabled={!allowBasicInfoEdit}
+                  className="w-full rounded-2xl border border-purple-400 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-purple-300 disabled:opacity-70"
+                >
+                  <option value="">No personal trainer</option>
+
+                  {trainerOptions.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.full_name || "Unnamed Trainer"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-green-300">
+                  Nutrition Coach
+                </span>
+
+                <select
+                  value={selectedNutritionCoachId}
+                  onChange={(event) =>
+                    setSelectedNutritionCoachId(event.target.value)
+                  }
+                  disabled={!allowBasicInfoEdit}
+                  className="w-full rounded-2xl border border-green-400 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-green-300 disabled:opacity-70"
+                >
+                  <option value="">No nutrition coach</option>
+
+                  {nutritionCoachOptions.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.full_name || "Unnamed Nutrition Coach"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {allowBasicInfoEdit && (
+                <div className="md:col-span-2">
+                  <button
+                    type="submit"
+                    disabled={savingStaffAssignment}
+                    className="rounded-2xl bg-purple-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-purple-300 disabled:opacity-60"
+                  >
+                    {savingStaffAssignment
+                      ? "Saving..."
+                      : "Save PT / NC Assignment"}
+                  </button>
+                </div>
               )}
             </form>
           </section>

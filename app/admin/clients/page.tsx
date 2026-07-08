@@ -21,6 +21,8 @@ type ClientRow = {
   status: string | null;
   client_source: string | null;
   client_source_other: string | null;
+  assigned_trainer_id: string | null;
+  assigned_nutrition_coach_id: string | null;
   created_at: string | null;
 };
 
@@ -52,12 +54,21 @@ type PurchaseRow = {
   created_at: string | null;
 };
 
+type StaffProfileRow = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  role: string | null;
+};
+
 type ClientTableRow = {
   id: string;
   clientCode: string;
   purchaseDate: string | null;
   expireDate: string | null;
   name: string;
+  assignedTrainer: string;
+  assignedNutritionCoach: string;
   totalSessions: number;
   usedSessions: number;
   remainingSessions: number;
@@ -75,6 +86,8 @@ type SortKey =
   | "purchaseDate"
   | "expireDate"
   | "name"
+  | "assignedTrainer"
+  | "assignedNutritionCoach"
   | "totalSessions"
   | "usedSessions"
   | "remainingSessions"
@@ -116,6 +129,8 @@ const columns: Column[] = [
   { key: "purchaseDate", label: "Ngày mua", width: "w-[115px]" },
   { key: "expireDate", label: "Ngày hết hạn", width: "w-[125px]" },
   { key: "name", label: "Tên khách hàng", width: "w-[210px]" },
+  { key: "assignedTrainer", label: "PT", width: "w-[170px]" },
+  { key: "assignedNutritionCoach", label: "NC", width: "w-[170px]" },
   {
     key: "totalSessions",
     label: "Số buổi",
@@ -362,6 +377,7 @@ export default function AdminClientsPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [packages, setPackages] = useState<SessionPackageRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
+  const [staffProfiles, setStaffProfiles] = useState<StaffProfileRow[]>([]);
 
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("clientCode");
@@ -380,28 +396,35 @@ export default function AdminClientsPage() {
   async function fetchClientsPageData() {
     setLoading(true);
 
-    const [clientsResult, packagesResult, purchasesResult] = await Promise.all([
-      supabase
-        .from("clients")
-        .select(
-          "id, client_code, full_name, status, client_source, client_source_other, created_at"
-        )
-        .order("client_code", { ascending: true }),
+    const [clientsResult, packagesResult, purchasesResult, staffResult] =
+      await Promise.all([
+        supabase
+          .from("clients")
+          .select(
+            "id, client_code, full_name, status, client_source, client_source_other, assigned_trainer_id, assigned_nutrition_coach_id, created_at"
+          )
+          .order("client_code", { ascending: true }),
 
-      supabase
-        .from("session_packages")
-        .select(
-          "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
-        )
-        .order("created_at", { ascending: false }),
+        supabase
+          .from("session_packages")
+          .select(
+            "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
+          )
+          .order("created_at", { ascending: false }),
 
-      supabase
-        .from("client_purchases")
-        .select(
-          "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
-        )
-        .order("created_at", { ascending: false }),
-    ]);
+        supabase
+          .from("client_purchases")
+          .select(
+            "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
+          )
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("profiles")
+          .select("id, full_name, email, role")
+          .in("role", ["trainer", "nutrition_coach"])
+          .order("full_name", { ascending: true }),
+      ]);
 
     if (clientsResult.error) {
       alert(clientsResult.error.message);
@@ -421,9 +444,16 @@ export default function AdminClientsPage() {
       return;
     }
 
+    if (staffResult.error) {
+      alert(staffResult.error.message);
+      setLoading(false);
+      return;
+    }
+
     setClients((clientsResult.data || []) as ClientRow[]);
     setPackages((packagesResult.data || []) as SessionPackageRow[]);
     setPurchases((purchasesResult.data || []) as PurchaseRow[]);
+    setStaffProfiles((staffResult.data || []) as StaffProfileRow[]);
     setLoading(false);
   }
 
@@ -529,6 +559,16 @@ export default function AdminClientsPage() {
     setSortDirection("asc");
   }
 
+  const staffNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+
+    staffProfiles.forEach((staff) => {
+      map.set(staff.id, staff.full_name || staff.email || "Unnamed Staff");
+    });
+
+    return map;
+  }, [staffProfiles]);
+
   const tableRows = useMemo<ClientTableRow[]>(() => {
     return clients.map((client) => {
       const clientPackages = packages.filter(
@@ -583,6 +623,12 @@ export default function AdminClientsPage() {
           latestPurchase?.created_at || latestPackage?.created_at || null,
         expireDate: latestPackage?.expires_at || null,
         name: client.full_name || "-",
+        assignedTrainer: client.assigned_trainer_id
+          ? staffNameMap.get(client.assigned_trainer_id) || "Unknown PT"
+          : "Not assigned",
+        assignedNutritionCoach: client.assigned_nutrition_coach_id
+          ? staffNameMap.get(client.assigned_nutrition_coach_id) || "Unknown NC"
+          : "Not assigned",
         totalSessions,
         usedSessions,
         remainingSessions,
@@ -601,7 +647,7 @@ export default function AdminClientsPage() {
         ),
       };
     });
-  }, [clients, packages, purchases]);
+  }, [clients, packages, purchases, staffNameMap]);
 
   const filteredAndSortedRows = useMemo(() => {
     const searchText = search.trim().toLowerCase();
@@ -614,6 +660,8 @@ export default function AdminClientsPage() {
         formatDate(row.purchaseDate),
         formatDate(row.expireDate),
         row.name,
+        row.assignedTrainer,
+        row.assignedNutritionCoach,
         String(row.totalSessions),
         String(row.usedSessions),
         String(row.remainingSessions),
@@ -773,8 +821,8 @@ export default function AdminClientsPage() {
                 </h1>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Shows Số buổi, Buổi còn lại, Công nợ còn lại, and client
-                  status.
+                  Shows Số buổi, Buổi còn lại, Công nợ còn lại, assigned PT,
+                  assigned NC, and client status.
                 </p>
 
                 <p className="mt-3 inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-normal text-yellow-300">
@@ -866,7 +914,7 @@ export default function AdminClientsPage() {
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search mã khách hàng, tên khách, số buổi, công nợ, nguồn khách..."
+                  placeholder="Search mã khách hàng, tên khách, PT, NC, số buổi, công nợ, nguồn khách..."
                   className="w-full rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none placeholder:text-gray-500 focus:border-yellow-400"
                 />
               </div>
@@ -929,7 +977,7 @@ export default function AdminClientsPage() {
               </div>
 
               <div className="fxa-scrollbar overflow-x-auto">
-                <table className="w-full min-w-[1840px] table-fixed border-collapse text-left text-xs">
+                <table className="w-full min-w-[2180px] table-fixed border-collapse text-left text-xs">
                   <thead>
                     <tr className="bg-yellow-400 text-black">
                       {columns.map((column) => (
@@ -991,6 +1039,20 @@ export default function AdminClientsPage() {
 
                           if (column.key === "name") {
                             extraClass = "text-white";
+                          }
+
+                          if (column.key === "assignedTrainer") {
+                            extraClass =
+                              row.assignedTrainer === "Not assigned"
+                                ? "text-gray-500"
+                                : "text-purple-300";
+                          }
+
+                          if (column.key === "assignedNutritionCoach") {
+                            extraClass =
+                              row.assignedNutritionCoach === "Not assigned"
+                                ? "text-gray-500"
+                                : "text-green-300";
                           }
 
                           if (column.key === "totalSessions") {
