@@ -139,6 +139,10 @@ function formatDateInput(value: string | null | undefined) {
   return date.toISOString().slice(0, 10);
 }
 
+function getTodayInputDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function formatMoney(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "-";
@@ -185,7 +189,7 @@ function getDaysUntil(value: string | null) {
 
 function getDebtNotice(
   balanceDue: number | null | undefined,
-  deadline: string | null
+  deadline: string | null,
 ) {
   const cleanBalance = Number(balanceDue || 0);
 
@@ -287,7 +291,7 @@ export default function AdminClientDetailPage() {
   const [userRole, setUserRole] = useState<AppRole | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState(
-    "Checking client access..."
+    "Checking client access...",
   );
   const [loading, setLoading] = useState(true);
 
@@ -333,6 +337,15 @@ export default function AdminClientDetailPage() {
   const [newDebtNote, setNewDebtNote] = useState("");
   const [addingDebt, setAddingDebt] = useState(false);
   const [completingDebtId, setCompletingDebtId] = useState<string | null>(null);
+  const [debtPaymentAmounts, setDebtPaymentAmounts] = useState<
+    Record<string, string>
+  >({});
+  const [debtPaymentDates, setDebtPaymentDates] = useState<
+    Record<string, string>
+  >({});
+  const [debtFixAddsRevenue, setDebtFixAddsRevenue] = useState(true);
+  const [debtFixRevenueDate, setDebtFixRevenueDate] =
+    useState(getTodayInputDate());
 
   const roleLabel = getRoleDisplayName(userRole);
   const allowBasicInfoEdit = canEditClientBasicInfo(userRole);
@@ -379,7 +392,7 @@ export default function AdminClientDetailPage() {
     const { data: historyData, error: historyError } = await supabase
       .from("session_history")
       .select(
-        "id, trainer_id, status, message, trainer_note, remaining_after, created_at"
+        "id, trainer_id, status, message, trainer_note, remaining_after, created_at",
       )
       .eq("client_id", clientId)
       .order("created_at", { ascending: false })
@@ -400,8 +413,8 @@ export default function AdminClientDetailPage() {
       new Set(
         rawHistory
           .map((log) => log.trainer_id)
-          .filter((trainerId): trainerId is string => Boolean(trainerId))
-      )
+          .filter((trainerId): trainerId is string => Boolean(trainerId)),
+      ),
     );
 
     if (trainerIds.length === 0) {
@@ -409,7 +422,7 @@ export default function AdminClientDetailPage() {
         rawHistory.map((log) => ({
           ...log,
           trainer_name: "Admin / Manual",
-        }))
+        })),
       );
       return;
     }
@@ -423,7 +436,7 @@ export default function AdminClientDetailPage() {
       ((trainerProfiles || []) as TrainerProfile[]).map((profile) => [
         profile.id,
         profile.full_name || "Unknown Trainer",
-      ])
+      ]),
     );
 
     setSessionHistory(
@@ -433,7 +446,7 @@ export default function AdminClientDetailPage() {
           log.trainer_id && trainerNameMap.get(log.trainer_id)
             ? trainerNameMap.get(log.trainer_id)!
             : "Admin / Manual",
-      }))
+      })),
     );
   }
 
@@ -445,7 +458,7 @@ export default function AdminClientDetailPage() {
         supabase
           .from("clients")
           .select(
-            "id, client_code, full_name, email, phone, gender, date_of_birth, qr_token, activation_code, status, client_note, client_source, client_source_other, sales_person_id, assigned_trainer_id, assigned_nutrition_coach_id, created_at"
+            "id, client_code, full_name, email, phone, gender, date_of_birth, qr_token, activation_code, status, client_note, client_source, client_source_other, sales_person_id, assigned_trainer_id, assigned_nutrition_coach_id, created_at",
           )
           .eq("id", clientId)
           .maybeSingle(),
@@ -453,7 +466,7 @@ export default function AdminClientDetailPage() {
         supabase
           .from("session_packages")
           .select(
-            "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at"
+            "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at",
           )
           .eq("client_id", clientId)
           .order("created_at", { ascending: false }),
@@ -461,7 +474,7 @@ export default function AdminClientDetailPage() {
         supabase
           .from("client_purchases")
           .select(
-            "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
+            "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at",
           )
           .eq("client_id", clientId)
           .order("created_at", { ascending: false }),
@@ -509,8 +522,9 @@ export default function AdminClientDetailPage() {
 
     const latestPurchase = cleanPurchases[0] || null;
     const firstDebtPurchase =
-      cleanPurchases.find((purchase) => Number(purchase.balance_due || 0) > 0) ||
-      latestPurchase;
+      cleanPurchases.find(
+        (purchase) => Number(purchase.balance_due || 0) > 0,
+      ) || latestPurchase;
 
     setClient(cleanClient);
     setPackages(cleanPackages);
@@ -519,10 +533,10 @@ export default function AdminClientDetailPage() {
 
     setSalesPeople(cleanStaffPeople);
     setTrainerOptions(
-      cleanStaffPeople.filter((person) => person.role === "trainer")
+      cleanStaffPeople.filter((person) => person.role === "trainer"),
     );
     setNutritionCoachOptions(
-      cleanStaffPeople.filter((person) => person.role === "nutrition_coach")
+      cleanStaffPeople.filter((person) => person.role === "nutrition_coach"),
     );
 
     setSelectedSalesPersonId(cleanClient.sales_person_id || "");
@@ -553,7 +567,7 @@ export default function AdminClientDetailPage() {
       firstDebtPurchase?.balance_due !== null &&
         firstDebtPurchase?.balance_due !== undefined
         ? String(firstDebtPurchase.balance_due)
-        : ""
+        : "",
     );
     setDebtDeadline(formatDateInput(firstDebtPurchase?.debt_deadline || null));
 
@@ -773,7 +787,7 @@ export default function AdminClientDetailPage() {
       const { error } = await supabase.from("client_purchases").insert({
         client_id: client.id,
         plan_name: "Uploaded Purchase",
-        session_count: null,
+        session_count: 0,
         price: 0,
         amount_paid: 0,
         balance_due: 0,
@@ -814,7 +828,7 @@ export default function AdminClientDetailPage() {
 
     const numericAmountPaid = packageAmountPaid.trim()
       ? Number(packageAmountPaid)
-      : numericPackageValue ?? 0;
+      : (numericPackageValue ?? 0);
 
     if (
       addedSessions === null ||
@@ -988,7 +1002,7 @@ export default function AdminClientDetailPage() {
     if (actionType === "subtract") {
       if (amount > remainingSessions) {
         alert(
-          `Cannot subtract ${amount} sessions. Client only has ${remainingSessions} remaining.`
+          `Cannot subtract ${amount} sessions. Client only has ${remainingSessions} remaining.`,
         );
         return;
       }
@@ -1005,7 +1019,7 @@ export default function AdminClientDetailPage() {
     }
 
     const confirmed = window.confirm(
-      `Confirm session update?\n\nBefore:\nTotal: ${totalSessions}\nUsed: ${usedSessions}\nRemaining: ${remainingSessions}\n\nAfter:\nTotal: ${nextTotalSessions}\nUsed: ${nextUsedSessions}\nRemaining: ${nextRemainingSessions}`
+      `Confirm session update?\n\nBefore:\nTotal: ${totalSessions}\nUsed: ${usedSessions}\nRemaining: ${remainingSessions}\n\nAfter:\nTotal: ${nextTotalSessions}\nUsed: ${nextUsedSessions}\nRemaining: ${nextRemainingSessions}`,
     );
 
     if (!confirmed) return;
@@ -1061,13 +1075,13 @@ export default function AdminClientDetailPage() {
     const { error } = await supabase.from("client_purchases").insert({
       client_id: client.id,
       plan_name: newDebtNote.trim() || "Manual Debt",
-      session_count: null,
-      price: 0,
+      session_count: 0,
+      price: numericDebtAmount,
       amount_paid: 0,
       balance_due: numericDebtAmount,
       debt_deadline: newDebtDeadline,
-      purchase_type: null,
-      status: "paid",
+      purchase_type: "renew",
+      status: "confirmed",
       created_at: new Date().toISOString(),
     });
 
@@ -1087,8 +1101,10 @@ export default function AdminClientDetailPage() {
   }
 
   async function completeDebtRecord(purchase: ClientPurchase) {
+    if (!client) return;
+
     if (!allowDebtEdit) {
-      alert("Only admins can complete debt records.");
+      alert("Only admins can record debt payments.");
       return;
     }
 
@@ -1099,32 +1115,115 @@ export default function AdminClientDetailPage() {
       return;
     }
 
+    const paymentAmountText =
+      debtPaymentAmounts[purchase.id] ?? String(currentBalance);
+
+    const paymentAmount = Number(paymentAmountText);
+
+    if (Number.isNaN(paymentAmount) || paymentAmount <= 0) {
+      alert("Payment amount must be greater than 0.");
+      return;
+    }
+
+    if (paymentAmount > currentBalance) {
+      alert(
+        `Payment cannot be greater than current debt balance: ${formatMoney(
+          currentBalance,
+        )}`,
+      );
+      return;
+    }
+
+    const paymentDate = debtPaymentDates[purchase.id] || getTodayInputDate();
+
+    if (!paymentDate) {
+      alert("Payment date is required.");
+      return;
+    }
+
+    const newBalance = Math.max(currentBalance - paymentAmount, 0);
+    const currentPaid = Number(purchase.amount_paid || 0);
+    const newPaidAmount = currentPaid + paymentAmount;
+
     const confirmed = window.confirm(
-      `Mark this debt as complete? Amount: ${formatMoney(currentBalance)}`
+      `Record debt payment?
+
+Client: ${client.full_name}
+Payment: ${formatMoney(paymentAmount)}
+Current Debt: ${formatMoney(currentBalance)}
+New Debt Balance: ${formatMoney(newBalance)}
+
+This will also add income to Revenue.`,
     );
 
     if (!confirmed) return;
 
     setCompletingDebtId(purchase.id);
 
-    const currentPaid = Number(purchase.amount_paid || 0);
+    const { data: userData } = await supabase.auth.getUser();
 
-    const { error } = await supabase
+    const { error: purchaseUpdateError } = await supabase
       .from("client_purchases")
       .update({
-        amount_paid: currentPaid + currentBalance,
-        balance_due: 0,
+        amount_paid: newPaidAmount,
+        balance_due: newBalance,
+        debt_deadline: newBalance > 0 ? purchase.debt_deadline : null,
         status: "paid",
       })
       .eq("id", purchase.id);
 
-    if (error) {
-      alert(error.message);
+    if (purchaseUpdateError) {
+      alert(purchaseUpdateError.message);
       setCompletingDebtId(null);
       return;
     }
 
-    alert("Debt marked as complete.");
+    const { error: incomeInsertError } = await supabase
+      .from("business_transactions")
+      .insert({
+        transaction_type: "income",
+        source: "debt_payment",
+        title: `Debt payment - ${client.full_name}`,
+        amount: paymentAmount,
+        notes: [
+          `Client: ${client.full_name}`,
+          `Client Code: ${client.client_code || "-"}`,
+          `Debt Record: ${purchase.plan_name || "Manual Debt"}`,
+          `Original Balance: ${formatMoney(currentBalance)}`,
+          `Payment Received: ${formatMoney(paymentAmount)}`,
+          `Remaining Balance: ${formatMoney(newBalance)}`,
+        ].join(" | "),
+        created_by: userData.user?.id || null,
+        transaction_date: paymentDate,
+      });
+
+    if (incomeInsertError) {
+      alert(
+        `Debt balance was updated, but income was not recorded: ${incomeInsertError.message}`,
+      );
+      setCompletingDebtId(null);
+      await fetchClientDetail();
+      return;
+    }
+
+    setDebtPaymentAmounts((current) => {
+      const next = { ...current };
+      delete next[purchase.id];
+      return next;
+    });
+
+    setDebtPaymentDates((current) => {
+      const next = { ...current };
+      delete next[purchase.id];
+      return next;
+    });
+
+    alert(
+      newBalance <= 0
+        ? "Debt payment recorded. Debt is now complete. Revenue income was added."
+        : "Partial debt payment recorded. Revenue income was added.",
+    );
+
     await fetchClientDetail();
     setCompletingDebtId(null);
   }
@@ -1156,16 +1255,56 @@ export default function AdminClientDetailPage() {
       return;
     }
 
+    if (debtFixAddsRevenue && !debtFixRevenueDate) {
+      alert("Revenue date is required when adding the debt fix to Revenue.");
+      return;
+    }
+
+    const oldDebtAmount = debtPurchase
+      ? Number(debtPurchase.balance_due || 0)
+      : 0;
+    const debtReductionAmount = debtPurchase
+      ? Math.max(oldDebtAmount - numericDebtAmount, 0)
+      : 0;
+    const shouldAddRevenue = debtFixAddsRevenue && debtReductionAmount > 0;
+    const nextPaidAmount = shouldAddRevenue
+      ? Number(debtPurchase?.amount_paid || 0) + debtReductionAmount
+      : Number(debtPurchase?.amount_paid || 0);
+
+    const confirmed = window.confirm(
+      shouldAddRevenue
+        ? `Save debt fix and add revenue?
+
+Client: ${client.full_name}
+Old Debt: ${formatMoney(oldDebtAmount)}
+New Debt: ${formatMoney(numericDebtAmount)}
+Revenue Added: ${formatMoney(debtReductionAmount)}
+
+This will create an Income transaction on the Revenue page.`
+        : `Save debt correction?
+
+Client: ${client.full_name}
+Old Debt: ${formatMoney(oldDebtAmount)}
+New Debt: ${formatMoney(numericDebtAmount)}
+
+No revenue transaction will be created.`,
+    );
+
+    if (!confirmed) return;
+
     setSavingDebt(true);
 
     if (debtPurchase) {
+      const purchaseUpdatePayload = {
+        amount_paid: nextPaidAmount,
+        balance_due: numericDebtAmount,
+        debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
+        status: "paid",
+      };
+
       const { error } = await supabase
         .from("client_purchases")
-        .update({
-          balance_due: numericDebtAmount,
-          debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
-          status: "paid",
-        })
+        .update(purchaseUpdatePayload)
         .eq("id", debtPurchase.id);
 
       if (error) {
@@ -1173,17 +1312,49 @@ export default function AdminClientDetailPage() {
         setSavingDebt(false);
         return;
       }
+
+      if (shouldAddRevenue) {
+        const { data: userData } = await supabase.auth.getUser();
+
+        const { error: incomeInsertError } = await supabase
+          .from("business_transactions")
+          .insert({
+            transaction_type: "income",
+            source: "debt_payment",
+            title: `Debt fix payment - ${client.full_name}`,
+            amount: debtReductionAmount,
+            notes: [
+              `Client: ${client.full_name}`,
+              `Client Code: ${client.client_code || "-"}`,
+              `Debt Record: ${debtPurchase.plan_name || "Manual Debt"}`,
+              `Old Debt Balance: ${formatMoney(oldDebtAmount)}`,
+              `New Debt Balance: ${formatMoney(numericDebtAmount)}`,
+              `Revenue Added From Debt Fix: ${formatMoney(debtReductionAmount)}`,
+            ].join(" | "),
+            created_by: userData.user?.id || null,
+            transaction_date: debtFixRevenueDate,
+          });
+
+        if (incomeInsertError) {
+          alert(
+            `Debt was updated, but revenue was not recorded: ${incomeInsertError.message}`,
+          );
+          setSavingDebt(false);
+          await fetchClientDetail();
+          return;
+        }
+      }
     } else {
       const { error } = await supabase.from("client_purchases").insert({
         client_id: client.id,
         plan_name: "Manual Debt",
-        session_count: null,
-        price: 0,
+        session_count: 0,
+        price: numericDebtAmount,
         amount_paid: 0,
         balance_due: numericDebtAmount,
         debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
-        purchase_type: null,
-        status: "paid",
+        purchase_type: "renew",
+        status: "confirmed",
         created_at: new Date().toISOString(),
       });
 
@@ -1194,7 +1365,11 @@ export default function AdminClientDetailPage() {
       }
     }
 
-    alert("Debt details saved.");
+    alert(
+      shouldAddRevenue
+        ? "Debt fix saved and revenue income was added."
+        : "Debt details saved.",
+    );
     await fetchClientDetail();
     setSavingDebt(false);
   }
@@ -1313,7 +1488,7 @@ export default function AdminClientDetailPage() {
   const latestPurchase = purchases[0] || null;
 
   const activeDebtPurchases = purchases.filter(
-    (purchase) => Number(purchase.balance_due || 0) > 0
+    (purchase) => Number(purchase.balance_due || 0) > 0,
   );
 
   const completedDebtPurchases = purchases.filter((purchase) => {
@@ -1331,31 +1506,39 @@ export default function AdminClientDetailPage() {
 
   const totalClientDebt = activeDebtPurchases.reduce(
     (sum, purchase) => sum + Number(purchase.balance_due || 0),
-    0
+    0,
   );
 
   const totalCompletedDebt = completedDebtPurchases.reduce(
     (sum, purchase) => sum + Number(purchase.amount_paid || 0),
-    0
+    0,
   );
 
   const debtPurchase = activeDebtPurchases[0] || latestPurchase;
+  const currentDebtBalanceForFix = Number(debtPurchase?.balance_due || 0);
+  const nextDebtBalanceForFix = debtAmount.trim() ? Number(debtAmount) : 0;
+  const debtFixRevenueAmount =
+    !Number.isNaN(nextDebtBalanceForFix) &&
+    currentDebtBalanceForFix > nextDebtBalanceForFix
+      ? currentDebtBalanceForFix - nextDebtBalanceForFix
+      : 0;
+  const debtFixWillAddRevenue = debtFixAddsRevenue && debtFixRevenueAmount > 0;
 
   const debtNotice = getDebtNotice(
     totalClientDebt,
-    debtPurchase?.debt_deadline || null
+    debtPurchase?.debt_deadline || null,
   );
 
   const selectedSalesPerson = salesPeople.find(
-    (person) => person.id === client.sales_person_id
+    (person) => person.id === client.sales_person_id,
   );
 
   const selectedTrainer = trainerOptions.find(
-    (person) => person.id === client.assigned_trainer_id
+    (person) => person.id === client.assigned_trainer_id,
   );
 
   const selectedNutritionCoach = nutritionCoachOptions.find(
-    (person) => person.id === client.assigned_nutrition_coach_id
+    (person) => person.id === client.assigned_nutrition_coach_id,
   );
 
   const activePackageNumbers = getPackageNumbers(activePackage);
@@ -1497,7 +1680,7 @@ export default function AdminClientDetailPage() {
               <div className="flex flex-col items-start gap-2 md:items-end">
                 <span
                   className={`w-fit rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-wide ${getStatusClass(
-                    client.status
+                    client.status,
                   )}`}
                 >
                   {client.status || "-"}
@@ -1872,9 +2055,7 @@ export default function AdminClientDetailPage() {
 
               <p className="mt-3 text-xs text-gray-400">
                 Activation Code:{" "}
-                <span className="text-yellow-300">
-                  {activationCode || "-"}
-                </span>
+                <span className="text-yellow-300">{activationCode || "-"}</span>
               </p>
             </section>
           </section>
@@ -1942,8 +2123,8 @@ export default function AdminClientDetailPage() {
 
                 <p className="mt-2 text-sm font-normal leading-6 text-gray-300">
                   Use Add Sessions for renew corrections, Subtract Sessions for
-                  manual deduction, and Fix Remaining Sessions when the number is
-                  wrong and you need to set the exact remaining balance.
+                  manual deduction, and Fix Remaining Sessions when the number
+                  is wrong and you need to set the exact remaining balance.
                 </p>
               </div>
 
@@ -1969,7 +2150,9 @@ export default function AdminClientDetailPage() {
                   min="0"
                   step="1"
                   value={sessionAdjustValue}
-                  onChange={(event) => setSessionAdjustValue(event.target.value)}
+                  onChange={(event) =>
+                    setSessionAdjustValue(event.target.value)
+                  }
                   disabled={!allowPackageEdit}
                   placeholder="Example: 5"
                   className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-cyan-300 disabled:opacity-70"
@@ -2063,8 +2246,8 @@ export default function AdminClientDetailPage() {
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Renew package adds sessions on top of the client&apos;s current
-                  remaining sessions. It keeps used sessions the same.
+                  Renew package adds sessions on top of the client&apos;s
+                  current remaining sessions. It keeps used sessions the same.
                 </p>
               </div>
 
@@ -2368,65 +2551,173 @@ export default function AdminClientDetailPage() {
               )}
             </form>
 
-            <div className="mt-5 rounded-3xl border border-white/10 bg-black/35 p-5">
-              <h3 className="text-lg font-semibold text-white">
-                Active Debt Records
-              </h3>
+            <div className="mt-5 rounded-3xl border border-red-400/30 bg-black/45 p-5">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-white">
+                    Active Debt Records
+                  </h3>
+
+                  <p className="mt-1 text-sm text-gray-400">
+                    Use <span className="text-green-300">Record Payment</span>{" "}
+                    only when the client actually pays debt. This reduces debt
+                    and adds income to the Revenue page.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Total Active Debt
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-red-300">
+                    {formatMoney(totalClientDebt)}
+                  </p>
+                </div>
+              </div>
 
               {activeDebtPurchases.length === 0 ? (
-                <p className="mt-3 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
+                <p className="mt-4 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
                   No active debt records.
                 </p>
               ) : (
-                <div className="mt-4 space-y-2">
-                  {activeDebtPurchases.map((purchase) => (
-                    <div
-                      key={purchase.id}
-                      className="grid gap-3 rounded-2xl border border-red-400/20 bg-red-400/10 p-4 md:grid-cols-[1fr_auto_auto_auto]"
-                    >
-                      <div>
-                        <p className="font-semibold text-white">
-                          {purchase.plan_name || "Manual Debt"}
-                        </p>
-                        <p className="mt-1 text-xs text-gray-400">
-                          Added {formatDate(purchase.created_at)}
-                        </p>
-                      </div>
+                <div className="mt-4 space-y-4">
+                  {activeDebtPurchases.map((purchase) => {
+                    const currentBalance = Number(purchase.balance_due || 0);
+                    const paymentAmountValue =
+                      debtPaymentAmounts[purchase.id] ?? String(currentBalance);
+                    const paymentDateValue =
+                      debtPaymentDates[purchase.id] || getTodayInputDate();
 
-                      <div className="text-left md:text-right">
-                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                          Deadline
-                        </p>
-                        <p className="mt-1 text-sm text-yellow-300">
-                          {formatDate(purchase.debt_deadline)}
-                        </p>
-                      </div>
+                    return (
+                      <div
+                        key={purchase.id}
+                        className="rounded-3xl border border-red-400/25 bg-red-400/10 p-5"
+                      >
+                        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr_0.8fr]">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                              Debt Record
+                            </p>
 
-                      <div className="text-left md:text-right">
-                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                          Balance
-                        </p>
-                        <p className="mt-1 text-lg font-semibold text-red-300">
-                          {formatMoney(purchase.balance_due)}
-                        </p>
-                      </div>
+                            <h4 className="mt-2 text-xl font-semibold text-white">
+                              {purchase.plan_name || "Manual Debt"}
+                            </h4>
 
-                      {allowDebtEdit && (
-                        <div className="flex items-center justify-start md:justify-end">
-                          <button
-                            type="button"
-                            onClick={() => completeDebtRecord(purchase)}
-                            disabled={completingDebtId === purchase.id}
-                            className="rounded-xl bg-green-400 px-4 py-2 text-xs font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
-                          >
-                            {completingDebtId === purchase.id
-                              ? "Saving..."
-                              : "Complete"}
-                          </button>
+                            <p className="mt-2 text-xs text-gray-400">
+                              Added {formatDate(purchase.created_at)}
+                            </p>
+
+                            <p className="mt-2 text-sm text-gray-300">
+                              Deadline:{" "}
+                              <span className="text-yellow-300">
+                                {formatDate(purchase.debt_deadline)}
+                              </span>
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl border border-red-400/20 bg-black/40 p-4">
+                            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                              Current Debt
+                            </p>
+                            <p className="mt-2 text-3xl font-semibold text-red-300">
+                              {formatMoney(currentBalance)}
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl border border-green-400/20 bg-green-400/10 p-4">
+                            <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                              Paid So Far
+                            </p>
+                            <p className="mt-2 text-3xl font-semibold text-green-300">
+                              {formatMoney(purchase.amount_paid)}
+                            </p>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  ))}
+
+                        {allowDebtEdit && (
+                          <div className="mt-5 rounded-3xl border border-green-400/25 bg-black/45 p-5">
+                            <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                              Record Debt Payment
+                            </p>
+
+                            <p className="mt-2 text-sm leading-6 text-gray-400">
+                              This is for money actually received from the
+                              client. It will add an income transaction to
+                              Revenue with source{" "}
+                              <span className="text-green-300">
+                                Debt Payment
+                              </span>
+                              .
+                            </p>
+
+                            <div className="mt-4 grid gap-4 md:grid-cols-[1fr_1fr_auto]">
+                              <label>
+                                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                  Payment Amount
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={currentBalance}
+                                  step="0.01"
+                                  value={paymentAmountValue}
+                                  onChange={(event) =>
+                                    setDebtPaymentAmounts((current) => ({
+                                      ...current,
+                                      [purchase.id]: event.target.value,
+                                    }))
+                                  }
+                                  className="w-full rounded-2xl border border-green-400/35 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-green-300"
+                                />
+                              </label>
+
+                              <label>
+                                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                  Payment Date
+                                </span>
+                                <input
+                                  type="date"
+                                  value={paymentDateValue}
+                                  onChange={(event) =>
+                                    setDebtPaymentDates((current) => ({
+                                      ...current,
+                                      [purchase.id]: event.target.value,
+                                    }))
+                                  }
+                                  className="w-full rounded-2xl border border-green-400/35 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-green-300"
+                                />
+                              </label>
+
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() => completeDebtRecord(purchase)}
+                                  disabled={completingDebtId === purchase.id}
+                                  className="w-full rounded-2xl bg-green-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-60 md:w-auto"
+                                >
+                                  {completingDebtId === purchase.id
+                                    ? "Recording..."
+                                    : "Record Payment"}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="mt-4 rounded-2xl border border-yellow-400/25 bg-yellow-400/10 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-widest text-yellow-300">
+                                Important
+                              </p>
+                              <p className="mt-2 text-sm leading-6 text-yellow-100/80">
+                                Do not use this to correct wrong debt numbers.
+                                Use the correction section below for that. This
+                                button means real money was collected and must
+                                appear in Revenue.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2486,10 +2777,17 @@ export default function AdminClientDetailPage() {
             </div>
 
             <form onSubmit={saveDebtDetails} className="mt-5">
-              <p className="mb-4 text-sm text-gray-300">
-                Edit the first active debt record below. Use Add Debt above for
-                multiple separate debt records.
-              </p>
+              <div className="mb-4 rounded-2xl border border-cyan-400/25 bg-cyan-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                  Debt Fix + Revenue Option
+                </p>
+
+                <p className="mt-2 text-sm leading-6 text-gray-300">
+                  Lowering the debt amount can be treated as a debt payment and
+                  added to Revenue. Increasing the debt amount only updates the
+                  debt balance and does not add income.
+                </p>
+              </div>
 
               <div className="grid gap-4 md:grid-cols-3">
                 <label>
@@ -2535,13 +2833,77 @@ export default function AdminClientDetailPage() {
               </div>
 
               {allowDebtEdit && (
-                <button
-                  type="submit"
-                  disabled={savingDebt}
-                  className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
-                >
-                  {savingDebt ? "Saving..." : "Save First Debt"}
-                </button>
+                <div className="mt-5 rounded-3xl border border-yellow-400/25 bg-yellow-400/10 p-5">
+                  <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr_0.9fr]">
+                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-black/40 p-4">
+                      <input
+                        type="checkbox"
+                        checked={debtFixAddsRevenue}
+                        onChange={(event) =>
+                          setDebtFixAddsRevenue(event.target.checked)
+                        }
+                        className="mt-1 h-4 w-4 accent-yellow-400"
+                      />
+
+                      <span>
+                        <span className="block text-xs font-semibold uppercase tracking-widest text-yellow-300">
+                          Add Debt Reduction to Revenue
+                        </span>
+                        <span className="mt-2 block text-sm leading-6 text-gray-300">
+                          When the new debt amount is lower than the current
+                          debt, the difference will be recorded as income.
+                        </span>
+                      </span>
+                    </label>
+
+                    <label>
+                      <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                        Revenue Date
+                      </span>
+                      <input
+                        type="date"
+                        value={debtFixRevenueDate}
+                        onChange={(event) =>
+                          setDebtFixRevenueDate(event.target.value)
+                        }
+                        disabled={!debtFixAddsRevenue}
+                        className="w-full rounded-2xl border border-yellow-400/35 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-50"
+                      />
+                    </label>
+
+                    <div className="rounded-2xl border border-green-400/25 bg-green-400/10 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                        Revenue Preview
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-green-300">
+                        {formatMoney(
+                          debtFixWillAddRevenue ? debtFixRevenueAmount : 0,
+                        )}
+                      </p>
+                      <p className="mt-2 text-xs text-gray-400">
+                        Old debt {formatMoney(currentDebtBalanceForFix)} → new
+                        debt{" "}
+                        {formatMoney(
+                          Number.isNaN(nextDebtBalanceForFix)
+                            ? 0
+                            : nextDebtBalanceForFix,
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={savingDebt}
+                    className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                  >
+                    {savingDebt
+                      ? "Saving..."
+                      : debtFixWillAddRevenue
+                        ? "Save Debt + Add Revenue"
+                        : "Save Debt Fix"}
+                  </button>
+                </div>
               )}
             </form>
           </section>
