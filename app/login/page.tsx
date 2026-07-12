@@ -1,10 +1,38 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 import { getDashboardPathForRole, getRoleDisplayName } from "../../lib/role";
+
+const MOTIVATION_QUOTES = [
+  "Discipline beats motivation when motivation disappears.",
+  "Show up today. Your future body is watching.",
+  "One focused session can change the whole week.",
+  "Strong habits build strong people.",
+  "Progress is earned one rep, one meal, one choice at a time.",
+  "Do the simple things consistently.",
+  "You do not need perfect. You need consistent.",
+  "Train with purpose. Track with honesty.",
+  "The body follows what the mind repeats.",
+  "Every check-in is a chance to reset.",
+  "Better standards create better results.",
+  "Your next level is built by today's small actions.",
+  "Consistency is the cleanest form of confidence.",
+  "One more good choice. Then repeat.",
+  "Results come from standards, not excuses.",
+];
+
+function getDailyQuote() {
+  const today = new Date();
+  const dailyKey =
+    today.getFullYear() * 10000 +
+    (today.getMonth() + 1) * 100 +
+    today.getDate();
+
+  return MOTIVATION_QUOTES[dailyKey % MOTIVATION_QUOTES.length];
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -15,6 +43,14 @@ export default function LoginPage() {
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [dailyQuote] = useState(() => getDailyQuote());
+
+  useEffect(() => {
+    router.prefetch("/client/login");
+    router.prefetch("/client/activate");
+    router.prefetch("/trainer/scan");
+    router.prefetch("/admin");
+  }, [router]);
 
   async function handleStaffLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -71,7 +107,6 @@ export default function LoginPage() {
     }
 
     router.replace(destination);
-    router.refresh();
   }
 
   return (
@@ -81,76 +116,17 @@ export default function LoginPage() {
         body {
           background: #fff8df;
         }
-
-        @keyframes fade-up {
-          from {
-            opacity: 0;
-            transform: translateY(16px);
-          }
-
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        .fade-up {
-          animation: fade-up 0.5s ease both;
-        }
-
-        @keyframes float-slow {
-          0%,
-          100% {
-            transform: translateY(0);
-          }
-
-          50% {
-            transform: translateY(-10px);
-          }
-        }
-
-        .float-slow {
-          animation: float-slow 4.5s ease-in-out infinite;
-        }
-
-        @keyframes shine {
-          from {
-            transform: translateX(-120%) skewX(-12deg);
-          }
-
-          to {
-            transform: translateX(220%) skewX(-12deg);
-          }
-        }
-
-        .shine::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          width: 45%;
-          background: linear-gradient(
-            90deg,
-            transparent,
-            rgba(255, 255, 255, 0.45),
-            transparent
-          );
-          animation: shine 4s ease-in-out infinite;
-        }
       `}</style>
 
       <div className="pointer-events-none fixed inset-0">
-        <div className="absolute -left-36 -top-36 h-[430px] w-[430px] rounded-full bg-yellow-300/55 blur-[100px]" />
-        <div className="absolute right-[-120px] top-24 h-[430px] w-[430px] rounded-full bg-amber-200/55 blur-[110px]" />
-        <div className="absolute bottom-[-180px] left-1/3 h-[440px] w-[440px] rounded-full bg-white/70 blur-[110px]" />
-
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(24,24,27,0.045)_1px,transparent_1px),linear-gradient(90deg,rgba(24,24,27,0.045)_1px,transparent_1px)] bg-[size:42px_42px]" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(255,248,223,0.58)_72%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.36),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(255,255,255,0.78),transparent_34%),linear-gradient(135deg,#fff8df,#fff3c4_45%,#fffdf2)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(24,24,27,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(24,24,27,0.035)_1px,transparent_1px)] bg-[size:46px_46px]" />
       </div>
 
       <div className="relative z-10 flex min-h-screen flex-col px-4 py-5 sm:px-6">
-        <header className="fade-up mx-auto flex w-full max-w-6xl items-center justify-between rounded-[1.75rem] border border-zinc-900/10 bg-white/75 px-4 py-3 shadow-[0_18px_70px_rgba(24,24,27,0.1)] backdrop-blur-xl sm:px-5">
+        <header className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-[1.75rem] border border-zinc-900/10 bg-white/85 px-4 py-3 shadow-[0_14px_45px_rgba(24,24,27,0.08)] sm:px-5">
           <Link href="/" className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-black text-sm font-black tracking-tight text-yellow-300 shadow-lg shadow-yellow-500/20">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-black text-sm font-black tracking-tight text-yellow-300 shadow-md">
               FXA
             </div>
 
@@ -170,9 +146,9 @@ export default function LoginPage() {
           </div>
         </header>
 
-        <section className="mx-auto grid w-full max-w-6xl flex-1 items-center gap-8 py-8 lg:grid-cols-[1fr_470px] lg:py-12">
-          <div className="fade-up hidden lg:block">
-            <div className="inline-flex items-center gap-2 rounded-full border border-zinc-900/10 bg-white/70 px-4 py-2 shadow-sm backdrop-blur">
+        <section className="mx-auto grid w-full max-w-6xl flex-1 items-center gap-8 py-8 lg:grid-cols-[1fr_470px] lg:py-10">
+          <div className="hidden lg:block">
+            <div className="inline-flex items-center gap-2 rounded-full border border-zinc-900/10 bg-white/80 px-4 py-2 shadow-sm">
               <span className="rounded-full bg-yellow-300 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-950">
                 Toronto
               </span>
@@ -193,8 +169,25 @@ export default function LoginPage() {
               confidence.
             </p>
 
+            <div className="mt-6 max-w-xl rounded-[1.6rem] border border-yellow-500/35 bg-yellow-100/75 p-5 shadow-[0_10px_30px_rgba(24,24,27,0.06)]">
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-black text-xl text-yellow-300">
+                  ⚡
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.22em] text-yellow-700">
+                    Daily Motivation
+                  </p>
+                  <p className="mt-2 text-lg font-black leading-7 text-zinc-950">
+                    “{dailyQuote}”
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <div className="mt-8 grid max-w-xl grid-cols-3 gap-4">
-              <div className="rounded-[1.7rem] border border-zinc-900/10 bg-white/75 p-5 shadow-[0_16px_45px_rgba(24,24,27,0.08)] backdrop-blur">
+              <div className="rounded-[1.7rem] border border-zinc-900/10 bg-white/85 p-5 shadow-[0_12px_35px_rgba(24,24,27,0.07)]">
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-yellow-300 text-xl">
                   📲
                 </div>
@@ -206,7 +199,7 @@ export default function LoginPage() {
                 </p>
               </div>
 
-              <div className="rounded-[1.7rem] border border-zinc-900/10 bg-white/75 p-5 shadow-[0_16px_45px_rgba(24,24,27,0.08)] backdrop-blur">
+              <div className="rounded-[1.7rem] border border-zinc-900/10 bg-white/85 p-5 shadow-[0_12px_35px_rgba(24,24,27,0.07)]">
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-black text-xl">
                   🏋️
                 </div>
@@ -216,7 +209,7 @@ export default function LoginPage() {
                 </p>
               </div>
 
-              <div className="rounded-[1.7rem] border border-zinc-900/10 bg-white/75 p-5 shadow-[0_16px_45px_rgba(24,24,27,0.08)] backdrop-blur">
+              <div className="rounded-[1.7rem] border border-zinc-900/10 bg-white/85 p-5 shadow-[0_12px_35px_rgba(24,24,27,0.07)]">
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-yellow-300 text-xl">
                   📊
                 </div>
@@ -239,16 +232,15 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <div className="fade-up mx-auto w-full max-w-md">
-            <div className="relative overflow-hidden rounded-[2.25rem] border border-zinc-900/10 bg-white shadow-[0_28px_90px_rgba(24,24,27,0.16)]">
+          <div className="mx-auto w-full max-w-md">
+            <div className="relative overflow-hidden rounded-[2.25rem] border border-zinc-900/10 bg-white shadow-[0_22px_65px_rgba(24,24,27,0.13)]">
               <div className="absolute inset-x-0 top-0 h-2 bg-gradient-to-r from-black via-yellow-300 to-black" />
-
-              <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-yellow-300/45 blur-3xl" />
-              <div className="absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-black/10 blur-3xl" />
+              <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-yellow-300/25" />
+              <div className="absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-black/5" />
 
               <div className="relative p-6 sm:p-7">
                 <div className="text-center">
-                  <div className="float-slow mx-auto flex h-20 w-20 items-center justify-center rounded-[1.75rem] bg-black text-xl font-black tracking-tight text-yellow-300 shadow-2xl shadow-yellow-500/20">
+                  <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-[1.75rem] bg-black text-xl font-black tracking-tight text-yellow-300 shadow-xl">
                     FXA
                   </div>
 
@@ -265,13 +257,23 @@ export default function LoginPage() {
                   </p>
                 </div>
 
+                <div className="mt-5 rounded-[1.35rem] border border-yellow-500/30 bg-yellow-50 px-4 py-3 text-center lg:hidden">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-yellow-700">
+                    Daily Motivation
+                  </p>
+                  <p className="mt-1 text-sm font-black leading-5 text-zinc-950">
+                    “{dailyQuote}”
+                  </p>
+                </div>
+
                 {!showStaffLogin ? (
                   <div className="mt-7 grid gap-3">
                     <Link
                       href="/client/login"
-                      className="shine relative overflow-hidden rounded-[1.5rem] border border-black bg-black p-5 text-white shadow-xl shadow-black/20 transition hover:-translate-y-0.5 hover:shadow-2xl active:scale-[0.98]"
+                      prefetch
+                      className="relative overflow-hidden rounded-[1.5rem] border border-black bg-black p-5 text-white shadow-xl shadow-black/15 transition hover:bg-zinc-900 active:scale-[0.99]"
                     >
-                      <div className="relative flex items-center gap-4">
+                      <div className="flex items-center gap-4">
                         <div className="flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl bg-yellow-300 text-2xl text-black">
                           👤
                         </div>
@@ -293,7 +295,7 @@ export default function LoginPage() {
                         setShowStaffLogin(true);
                         setMessage("");
                       }}
-                      className="rounded-[1.5rem] border border-yellow-400/60 bg-yellow-300/80 p-5 text-left text-zinc-950 shadow-lg shadow-yellow-500/10 transition hover:-translate-y-0.5 hover:bg-yellow-300 hover:shadow-xl active:scale-[0.98]"
+                      className="rounded-[1.5rem] border border-yellow-400/60 bg-yellow-300/90 p-5 text-left text-zinc-950 shadow-lg shadow-yellow-500/10 transition hover:bg-yellow-300 active:scale-[0.99]"
                     >
                       <div className="flex items-center gap-4">
                         <div className="flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl bg-black text-2xl text-yellow-300">
@@ -314,7 +316,8 @@ export default function LoginPage() {
                     <div className="mt-2 border-t border-zinc-900/10 pt-4">
                       <Link
                         href="/client/activate"
-                        className="block rounded-2xl border border-zinc-900/10 bg-zinc-50 px-4 py-3 text-center shadow-sm transition hover:border-yellow-400/50 hover:bg-yellow-50 active:scale-[0.98]"
+                        prefetch
+                        className="block rounded-2xl border border-zinc-900/10 bg-zinc-50 px-4 py-3 text-center shadow-sm transition hover:border-yellow-400/50 hover:bg-yellow-50 active:scale-[0.99]"
                       >
                         <p className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-950">
                           First-Time Client?
@@ -390,7 +393,7 @@ export default function LoginPage() {
                     <button
                       type="submit"
                       disabled={loading}
-                      className="mt-5 w-full rounded-2xl bg-black px-5 py-4 text-sm font-black uppercase tracking-wide text-yellow-300 shadow-xl shadow-black/15 transition hover:-translate-y-0.5 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-60"
+                      className="mt-5 w-full rounded-2xl bg-black px-5 py-4 text-sm font-black uppercase tracking-wide text-yellow-300 shadow-xl shadow-black/15 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {loading ? "Signing in..." : "Staff Sign In"}
                     </button>
@@ -405,7 +408,7 @@ export default function LoginPage() {
           </div>
         </section>
 
-        <footer className="fade-up mx-auto w-full max-w-6xl border-t border-zinc-900/10 py-5 text-center">
+        <footer className="mx-auto w-full max-w-6xl border-t border-zinc-900/10 py-5 text-center">
           <p className="text-[11px] font-medium text-zinc-500">
             © 2026 FXA FITNESS · All rights reserved.
           </p>
