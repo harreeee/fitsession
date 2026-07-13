@@ -177,7 +177,7 @@ export default function LoginPage() {
 
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.22em] text-yellow-700">
-                    Daily Motivation
+                    Quote of the Day
                   </p>
                   <p className="mt-2 text-lg font-black leading-7 text-zinc-950">
                     “{dailyQuote}”

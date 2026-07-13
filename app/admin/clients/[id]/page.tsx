@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { supabase } from "../../../../lib/supabaseClient";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -82,7 +82,7 @@ type TrainerProfile = {
   role?: string | null;
 };
 
-type SessionAdjustAction = "add" | "subtract" | "fix";
+type SessionAdjustAction = "add" | "subtract" | "fixRemaining" | "fixTotal";
 
 const CLIENT_SOURCE_OPTIONS = [
   { value: "", label: "Select source" },
@@ -171,6 +171,7 @@ function getPurchaseTypeLabel(value: string | null) {
   if (value === "renew") return "Renew";
   if (value === "renewal") return "Renew";
   if (value === "paid") return "Paid";
+  if (value === "debt") return "Debt";
   return "-";
 }
 
@@ -262,7 +263,34 @@ function getPackageNumbers(packageRow: SessionPackage | null) {
   };
 }
 
-export default function AdminClientDetailPage() {
+function getCleanPurchaseType(purchase: ClientPurchase) {
+  return (purchase.purchase_type || "").toLowerCase();
+}
+
+function isPackagePurchase(purchase: ClientPurchase) {
+  const type = getCleanPurchaseType(purchase);
+  const sessionCount = Number(purchase.session_count || 0);
+
+  return (
+    (type === "new" || type === "renew" || type === "renewal") &&
+    sessionCount > 0
+  );
+}
+
+function isDebtPurchase(purchase: ClientPurchase) {
+  const type = getCleanPurchaseType(purchase);
+  const balanceDue = Number(purchase.balance_due || 0);
+  const sessionCount = Number(purchase.session_count || 0);
+  const planName = (purchase.plan_name || "").toLowerCase();
+
+  return (
+    type === "debt" ||
+    balanceDue > 0 ||
+    (sessionCount === 0 && planName.includes("debt"))
+  );
+}
+
+function AdminClientDetailPageContent() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -331,6 +359,9 @@ export default function AdminClientDetailPage() {
   const [debtAmount, setDebtAmount] = useState("");
   const [debtDeadline, setDebtDeadline] = useState("");
   const [savingDebt, setSavingDebt] = useState(false);
+  const [selectedDebtFixId, setSelectedDebtFixId] = useState<string | null>(
+    null,
+  );
 
   const [newDebtAmount, setNewDebtAmount] = useState("");
   const [newDebtDeadline, setNewDebtDeadline] = useState("");
@@ -523,8 +554,10 @@ export default function AdminClientDetailPage() {
     const latestPurchase = cleanPurchases[0] || null;
     const firstDebtPurchase =
       cleanPurchases.find(
-        (purchase) => Number(purchase.balance_due || 0) > 0,
-      ) || latestPurchase;
+        (purchase) => isDebtPurchase(purchase) && Number(purchase.balance_due || 0) > 0,
+      ) ||
+      cleanPurchases.find((purchase) => isDebtPurchase(purchase)) ||
+      null;
 
     setClient(cleanClient);
     setPackages(cleanPackages);
@@ -992,14 +1025,18 @@ export default function AdminClientDetailPage() {
     let nextTotalSessions = totalSessions;
     let nextUsedSessions = usedSessions;
     let nextRemainingSessions = remainingSessions;
+    let actionLabel = "Update Sessions";
 
     if (actionType === "add") {
+      actionLabel = "Add Sessions";
       nextTotalSessions = totalSessions + amount;
       nextUsedSessions = usedSessions;
       nextRemainingSessions = remainingSessions + amount;
     }
 
     if (actionType === "subtract") {
+      actionLabel = "Subtract Sessions";
+
       if (amount > remainingSessions) {
         alert(
           `Cannot subtract ${amount} sessions. Client only has ${remainingSessions} remaining.`,
@@ -1012,14 +1049,38 @@ export default function AdminClientDetailPage() {
       nextRemainingSessions = remainingSessions - amount;
     }
 
-    if (actionType === "fix") {
+    if (actionType === "fixRemaining") {
+      actionLabel = "Fix Remaining Sessions";
+
+      if (amount > totalSessions) {
+        alert(
+          `Remaining sessions cannot be higher than total sessions.\n\nCurrent Total: ${totalSessions}\nYou entered Remaining: ${amount}\n\nUse Fix Total first if the total session number is wrong.`,
+        );
+        return;
+      }
+
+      nextTotalSessions = totalSessions;
       nextRemainingSessions = amount;
+      nextUsedSessions = Math.max(totalSessions - amount, 0);
+    }
+
+    if (actionType === "fixTotal") {
+      actionLabel = "Fix Total Sessions";
+
+      if (amount < usedSessions) {
+        alert(
+          `Total sessions cannot be lower than used sessions. Used sessions is currently ${usedSessions}.`,
+        );
+        return;
+      }
+
+      nextTotalSessions = amount;
       nextUsedSessions = usedSessions;
-      nextTotalSessions = usedSessions + amount;
+      nextRemainingSessions = Math.max(amount - usedSessions, 0);
     }
 
     const confirmed = window.confirm(
-      `Confirm session update?\n\nBefore:\nTotal: ${totalSessions}\nUsed: ${usedSessions}\nRemaining: ${remainingSessions}\n\nAfter:\nTotal: ${nextTotalSessions}\nUsed: ${nextUsedSessions}\nRemaining: ${nextRemainingSessions}`,
+      `${actionLabel}?\n\nBefore:\nTotal: ${totalSessions}\nUsed: ${usedSessions}\nRemaining: ${remainingSessions}\n\nAfter:\nTotal: ${nextTotalSessions}\nUsed: ${nextUsedSessions}\nRemaining: ${nextRemainingSessions}`,
     );
 
     if (!confirmed) return;
@@ -1048,6 +1109,20 @@ export default function AdminClientDetailPage() {
     setSessionAdjustAction(null);
   }
 
+  function startFixExistingDebt(purchase: ClientPurchase) {
+    setSelectedDebtFixId(purchase.id);
+    setDebtAmount(String(Number(purchase.balance_due || 0)));
+    setDebtDeadline(formatDateInput(purchase.debt_deadline));
+    setDebtFixAddsRevenue(true);
+    setDebtFixRevenueDate(getTodayInputDate());
+
+    window.setTimeout(() => {
+      document
+        .getElementById("debt-fix-section")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  }
+
   async function addDebtRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1074,13 +1149,15 @@ export default function AdminClientDetailPage() {
 
     const { error } = await supabase.from("client_purchases").insert({
       client_id: client.id,
-      plan_name: newDebtNote.trim() || "Manual Debt",
+      plan_name: newDebtNote.trim()
+        ? `Debt - ${newDebtNote.trim()}`
+        : "Debt - Manual Debt",
       session_count: 0,
       price: numericDebtAmount,
       amount_paid: 0,
       balance_due: numericDebtAmount,
       debt_deadline: newDebtDeadline,
-      purchase_type: "renew",
+      purchase_type: "debt",
       status: "confirmed",
       created_at: new Date().toISOString(),
     });
@@ -1100,7 +1177,10 @@ export default function AdminClientDetailPage() {
     setAddingDebt(false);
   }
 
-  async function completeDebtRecord(purchase: ClientPurchase) {
+  async function completeDebtRecord(
+    purchase: ClientPurchase,
+    forcedPaymentAmount?: number,
+  ) {
     if (!client) return;
 
     if (!allowDebtEdit) {
@@ -1116,7 +1196,9 @@ export default function AdminClientDetailPage() {
     }
 
     const paymentAmountText =
-      debtPaymentAmounts[purchase.id] ?? String(currentBalance);
+      forcedPaymentAmount !== undefined
+        ? String(forcedPaymentAmount)
+        : debtPaymentAmounts[purchase.id] ?? String(currentBalance);
 
     const paymentAmount = Number(paymentAmountText);
 
@@ -1144,16 +1226,16 @@ export default function AdminClientDetailPage() {
     const newBalance = Math.max(currentBalance - paymentAmount, 0);
     const currentPaid = Number(purchase.amount_paid || 0);
     const newPaidAmount = currentPaid + paymentAmount;
+    const isFullPayment = newBalance <= 0;
 
     const confirmed = window.confirm(
-      `Record debt payment?
-
-Client: ${client.full_name}
-Payment: ${formatMoney(paymentAmount)}
-Current Debt: ${formatMoney(currentBalance)}
-New Debt Balance: ${formatMoney(newBalance)}
-
-This will also add income to Revenue.`,
+      `${isFullPayment ? "Complete debt" : "Record debt payment"}?\n\nClient: ${
+        client.full_name
+      }\nPayment: ${formatMoney(paymentAmount)}\nCurrent Debt: ${formatMoney(
+        currentBalance,
+      )}\nNew Debt Balance: ${formatMoney(
+        newBalance,
+      )}\n\nThis will also add income to Revenue.`,
     );
 
     if (!confirmed) return;
@@ -1168,7 +1250,7 @@ This will also add income to Revenue.`,
         amount_paid: newPaidAmount,
         balance_due: newBalance,
         debt_deadline: newBalance > 0 ? purchase.debt_deadline : null,
-        status: "paid",
+        status: isFullPayment ? "paid" : "confirmed",
       })
       .eq("id", purchase.id);
 
@@ -1183,7 +1265,9 @@ This will also add income to Revenue.`,
       .insert({
         transaction_type: "income",
         source: "debt_payment",
-        title: `Debt payment - ${client.full_name}`,
+        title: `${isFullPayment ? "Completed debt" : "Debt payment"} - ${
+          client.full_name
+        }`,
         amount: paymentAmount,
         notes: [
           `Client: ${client.full_name}`,
@@ -1219,8 +1303,8 @@ This will also add income to Revenue.`,
     });
 
     alert(
-      newBalance <= 0
-        ? "Debt payment recorded. Debt is now complete. Revenue income was added."
+      isFullPayment
+        ? "Debt completed. Revenue income was added."
         : "Partial debt payment recorded. Revenue income was added.",
     );
 
@@ -1239,6 +1323,7 @@ This will also add income to Revenue.`,
     }
 
     const debtPurchase =
+      purchases.find((purchase) => purchase.id === selectedDebtFixId) ||
       purchases.find((purchase) => Number(purchase.balance_due || 0) > 0) ||
       purchases[0] ||
       null;
@@ -1273,21 +1358,18 @@ This will also add income to Revenue.`,
 
     const confirmed = window.confirm(
       shouldAddRevenue
-        ? `Save debt fix and add revenue?
-
-Client: ${client.full_name}
-Old Debt: ${formatMoney(oldDebtAmount)}
-New Debt: ${formatMoney(numericDebtAmount)}
-Revenue Added: ${formatMoney(debtReductionAmount)}
-
-This will create an Income transaction on the Revenue page.`
-        : `Save debt correction?
-
-Client: ${client.full_name}
-Old Debt: ${formatMoney(oldDebtAmount)}
-New Debt: ${formatMoney(numericDebtAmount)}
-
-No revenue transaction will be created.`,
+        ? `Save debt fix and add revenue?\n\nClient: ${client.full_name}\nDebt Record: ${
+            debtPurchase?.plan_name || "Manual Debt"
+          }\nOld Debt: ${formatMoney(oldDebtAmount)}\nNew Debt: ${formatMoney(
+            numericDebtAmount,
+          )}\nRevenue Added: ${formatMoney(
+            debtReductionAmount,
+          )}\n\nThis will create an Income transaction on the Revenue page.`
+        : `Save debt correction?\n\nClient: ${client.full_name}\nDebt Record: ${
+            debtPurchase?.plan_name || "Manual Debt"
+          }\nOld Debt: ${formatMoney(oldDebtAmount)}\nNew Debt: ${formatMoney(
+            numericDebtAmount,
+          )}\n\nNo revenue transaction will be created.`,
     );
 
     if (!confirmed) return;
@@ -1295,16 +1377,14 @@ No revenue transaction will be created.`,
     setSavingDebt(true);
 
     if (debtPurchase) {
-      const purchaseUpdatePayload = {
-        amount_paid: nextPaidAmount,
-        balance_due: numericDebtAmount,
-        debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
-        status: "paid",
-      };
-
       const { error } = await supabase
         .from("client_purchases")
-        .update(purchaseUpdatePayload)
+        .update({
+          amount_paid: nextPaidAmount,
+          balance_due: numericDebtAmount,
+          debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
+          status: numericDebtAmount <= 0 ? "paid" : "confirmed",
+        })
         .eq("id", debtPurchase.id);
 
       if (error) {
@@ -1347,13 +1427,13 @@ No revenue transaction will be created.`,
     } else {
       const { error } = await supabase.from("client_purchases").insert({
         client_id: client.id,
-        plan_name: "Manual Debt",
+        plan_name: "Debt - Manual Debt",
         session_count: 0,
         price: numericDebtAmount,
         amount_paid: 0,
         balance_due: numericDebtAmount,
         debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
-        purchase_type: "renew",
+        purchase_type: "debt",
         status: "confirmed",
         created_at: new Date().toISOString(),
       });
@@ -1370,6 +1450,8 @@ No revenue transaction will be created.`,
         ? "Debt fix saved and revenue income was added."
         : "Debt details saved.",
     );
+
+    setSelectedDebtFixId(null);
     await fetchClientDetail();
     setSavingDebt(false);
   }
@@ -1485,23 +1567,19 @@ No revenue transaction will be created.`,
   }
 
   const activePackage = packages[0] || null;
-  const latestPurchase = purchases[0] || null;
 
-  const activeDebtPurchases = purchases.filter(
+  const packagePurchases = purchases.filter(isPackagePurchase);
+  const debtPurchases = purchases.filter(isDebtPurchase);
+
+  const activeDebtPurchases = debtPurchases.filter(
     (purchase) => Number(purchase.balance_due || 0) > 0,
   );
 
-  const completedDebtPurchases = purchases.filter((purchase) => {
+  const completedDebtPurchases = debtPurchases.filter((purchase) => {
     const paidAmount = Number(purchase.amount_paid || 0);
     const balanceDue = Number(purchase.balance_due || 0);
-    const price = Number(purchase.price || 0);
-    const planName = (purchase.plan_name || "").toLowerCase();
 
-    return (
-      balanceDue <= 0 &&
-      paidAmount > 0 &&
-      (price === 0 || planName.includes("debt"))
-    );
+    return balanceDue <= 0 && paidAmount > 0;
   });
 
   const totalClientDebt = activeDebtPurchases.reduce(
@@ -1514,8 +1592,15 @@ No revenue transaction will be created.`,
     0,
   );
 
-  const debtPurchase = activeDebtPurchases[0] || latestPurchase;
-  const currentDebtBalanceForFix = Number(debtPurchase?.balance_due || 0);
+  const debtPurchase = activeDebtPurchases[0] || debtPurchases[0] || null;
+  const selectedDebtFixPurchase =
+    debtPurchases.find((purchase) => purchase.id === selectedDebtFixId) ||
+    debtPurchase ||
+    null;
+
+  const currentDebtBalanceForFix = Number(
+    selectedDebtFixPurchase?.balance_due || 0,
+  );
   const nextDebtBalanceForFix = debtAmount.trim() ? Number(debtAmount) : 0;
   const debtFixRevenueAmount =
     !Number.isNaN(nextDebtBalanceForFix) &&
@@ -1542,7 +1627,7 @@ No revenue transaction will be created.`,
   );
 
   const activePackageNumbers = getPackageNumbers(activePackage);
-
+  const purchaseHistory = packagePurchases;
   return (
     <main className="min-h-screen bg-black p-4 text-white md:p-6">
       <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
@@ -2118,13 +2203,14 @@ No revenue transaction will be created.`,
                 </p>
 
                 <h2 className="mt-2 text-2xl font-semibold text-white">
-                  Add / Subtract / Fix Sessions
+                  Add / Subtract / Fix Remaining / Fix Total
                 </h2>
 
                 <p className="mt-2 text-sm font-normal leading-6 text-gray-300">
-                  Use Add Sessions for renew corrections, Subtract Sessions for
-                  manual deduction, and Fix Remaining Sessions when the number
-                  is wrong and you need to set the exact remaining balance.
+                  Use this only when the package session numbers need manual
+                  correction. Fix Remaining changes the current balance. Fix
+                  Total changes the full package size while keeping used
+                  sessions unchanged.
                 </p>
               </div>
 
@@ -2140,7 +2226,7 @@ No revenue transaction will be created.`,
               </div>
             </div>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_2fr]">
+            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_2.5fr]">
               <label>
                 <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-cyan-300">
                   Session Number
@@ -2160,12 +2246,12 @@ No revenue transaction will be created.`,
               </label>
 
               {allowPackageEdit && (
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid gap-3 md:grid-cols-4">
                   <button
                     type="button"
                     onClick={() => adjustClientSessions("add")}
                     disabled={sessionAdjustAction !== null}
-                    className="rounded-2xl bg-green-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
+                    className="rounded-2xl bg-green-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
                   >
                     {sessionAdjustAction === "add"
                       ? "Adding..."
@@ -2176,7 +2262,7 @@ No revenue transaction will be created.`,
                     type="button"
                     onClick={() => adjustClientSessions("subtract")}
                     disabled={sessionAdjustAction !== null}
-                    className="rounded-2xl bg-red-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-red-300 disabled:opacity-60"
+                    className="rounded-2xl bg-red-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-red-300 disabled:opacity-60"
                   >
                     {sessionAdjustAction === "subtract"
                       ? "Subtracting..."
@@ -2185,19 +2271,30 @@ No revenue transaction will be created.`,
 
                   <button
                     type="button"
-                    onClick={() => adjustClientSessions("fix")}
+                    onClick={() => adjustClientSessions("fixRemaining")}
                     disabled={sessionAdjustAction !== null}
-                    className="rounded-2xl bg-cyan-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-cyan-300 disabled:opacity-60"
+                    className="rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-cyan-300 disabled:opacity-60"
                   >
-                    {sessionAdjustAction === "fix"
+                    {sessionAdjustAction === "fixRemaining"
                       ? "Fixing..."
                       : "Fix Remaining"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => adjustClientSessions("fixTotal")}
+                    disabled={sessionAdjustAction !== null}
+                    className="rounded-2xl bg-purple-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-purple-300 disabled:opacity-60"
+                  >
+                    {sessionAdjustAction === "fixTotal"
+                      ? "Fixing..."
+                      : "Fix Total"}
                   </button>
                 </div>
               )}
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
               <div className="rounded-2xl border border-green-400/20 bg-green-400/10 p-4">
                 <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
                   Add Sessions
@@ -2221,7 +2318,16 @@ No revenue transaction will be created.`,
                   Fix Remaining
                 </p>
                 <p className="mt-2 text-sm text-gray-300">
-                  Sets exact remaining. Total becomes used plus remaining.
+                  Sets exact remaining. Total stays the same.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-purple-400/20 bg-purple-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-purple-300">
+                  Fix Total
+                </p>
+                <p className="mt-2 text-sm text-gray-300">
+                  Sets exact total. Remaining becomes total minus used.
                 </p>
               </div>
             </div>
@@ -2450,207 +2556,202 @@ No revenue transaction will be created.`,
           >
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
-                <h2 className="text-2xl font-semibold text-white">
-                  Debt and Deadline
+                <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                  Debt Tools
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  Add Debt / Fix Existing Debt / Add Payment / Complete Debt
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-300">
-                  Add multiple debt records. Complete debt keeps the record on
-                  this page and removes it from active debt.
+                  Add debt when a client owes money. Use Add Payment when money
+                  is collected. Complete Debt records the full remaining balance
+                  as paid and adds the payment to Revenue.
                 </p>
               </div>
 
-              <span
-                className={`w-fit rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-wide ${debtNotice.className}`}
-              >
-                {debtNotice.label}
-              </span>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Active Debt
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-red-300">
+                    {formatMoney(totalClientDebt)}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-green-400/30 bg-green-400/10 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Completed Debt
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-green-300">
+                    {formatMoney(totalCompletedDebt)}
+                  </p>
+                </div>
+              </div>
             </div>
 
-            <form
-              onSubmit={addDebtRecord}
-              className="mt-5 rounded-3xl border border-red-400/30 bg-black/40 p-5"
-            >
-              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
-                    Add New Debt
-                  </p>
-
-                  <h3 className="mt-1 text-xl font-semibold text-white">
-                    Create Multiple Debt Records
-                  </h3>
-
-                  <p className="mt-2 text-sm font-normal text-gray-400">
-                    This adds a new debt row without adding package gross value.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
-                    Total Active Debt
-                  </p>
-                  <p className="mt-1 text-xl font-semibold text-red-300">
-                    {formatMoney(totalClientDebt)}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-5 grid gap-4 md:grid-cols-4">
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
-                    Debt Amount
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={newDebtAmount}
-                    onChange={(event) => setNewDebtAmount(event.target.value)}
-                    disabled={!allowDebtEdit}
-                    placeholder="Example: 300"
-                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
-                    Deadline
-                  </span>
-                  <input
-                    type="date"
-                    value={newDebtDeadline}
-                    onChange={(event) => setNewDebtDeadline(event.target.value)}
-                    disabled={!allowDebtEdit}
-                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
-                  />
-                </label>
-
-                <label className="md:col-span-2">
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
-                    Note / Debt Name
-                  </span>
-                  <input
-                    value={newDebtNote}
-                    onChange={(event) => setNewDebtNote(event.target.value)}
-                    disabled={!allowDebtEdit}
-                    placeholder="Example: Old package debt"
-                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
-                  />
-                </label>
-              </div>
-
-              {allowDebtEdit && (
-                <button
-                  type="submit"
-                  disabled={addingDebt}
-                  className="mt-5 rounded-2xl bg-red-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-red-300 disabled:opacity-60"
-                >
-                  {addingDebt ? "Adding..." : "Add Debt"}
-                </button>
-              )}
-            </form>
-
-            <div className="mt-5 rounded-3xl border border-red-400/30 bg-black/45 p-5">
-              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-white">
-                    Active Debt Records
-                  </h3>
-
-                  <p className="mt-1 text-sm text-gray-400">
-                    Use <span className="text-green-300">Record Payment</span>{" "}
-                    only when the client actually pays debt. This reduces debt
-                    and adds income to the Revenue page.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
-                    Total Active Debt
-                  </p>
-                  <p className="mt-1 text-xl font-semibold text-red-300">
-                    {formatMoney(totalClientDebt)}
-                  </p>
-                </div>
-              </div>
-
-              {activeDebtPurchases.length === 0 ? (
-                <p className="mt-4 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
-                  No active debt records.
+            <div className="mt-5 grid gap-5 xl:grid-cols-[0.95fr_1.45fr]">
+              <form
+                onSubmit={addDebtRecord}
+                className="rounded-3xl border border-red-400/30 bg-black/40 p-5"
+              >
+                <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                  Action 1
                 </p>
-              ) : (
-                <div className="mt-4 space-y-4">
-                  {activeDebtPurchases.map((purchase) => {
-                    const currentBalance = Number(purchase.balance_due || 0);
-                    const paymentAmountValue =
-                      debtPaymentAmounts[purchase.id] ?? String(currentBalance);
-                    const paymentDateValue =
-                      debtPaymentDates[purchase.id] || getTodayInputDate();
 
-                    return (
-                      <div
-                        key={purchase.id}
-                        className="rounded-3xl border border-red-400/25 bg-red-400/10 p-5"
-                      >
-                        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr_0.8fr]">
-                          <div>
-                            <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
-                              Debt Record
-                            </p>
+                <h3 className="mt-1 text-xl font-semibold text-white">
+                  Add Debt
+                </h3>
 
-                            <h4 className="mt-2 text-xl font-semibold text-white">
-                              {purchase.plan_name || "Manual Debt"}
-                            </h4>
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Creates a new debt record only. This does not add income until
+                  a payment is recorded.
+                </p>
 
-                            <p className="mt-2 text-xs text-gray-400">
-                              Added {formatDate(purchase.created_at)}
-                            </p>
+                <div className="mt-5 grid gap-4">
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                      Debt Amount
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newDebtAmount}
+                      onChange={(event) => setNewDebtAmount(event.target.value)}
+                      disabled={!allowDebtEdit}
+                      placeholder="Example: 300"
+                      className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
 
-                            <p className="mt-2 text-sm text-gray-300">
-                              Deadline:{" "}
-                              <span className="text-yellow-300">
-                                {formatDate(purchase.debt_deadline)}
-                              </span>
-                            </p>
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                      Deadline
+                    </span>
+                    <input
+                      type="date"
+                      value={newDebtDeadline}
+                      onChange={(event) => setNewDebtDeadline(event.target.value)}
+                      disabled={!allowDebtEdit}
+                      className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                      Note / Debt Name
+                    </span>
+                    <input
+                      value={newDebtNote}
+                      onChange={(event) => setNewDebtNote(event.target.value)}
+                      disabled={!allowDebtEdit}
+                      placeholder="Example: Old package debt"
+                      className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+                </div>
+
+                {allowDebtEdit && (
+                  <button
+                    type="submit"
+                    disabled={addingDebt}
+                    className="mt-5 w-full rounded-2xl bg-red-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-red-300 disabled:opacity-60"
+                  >
+                    {addingDebt ? "Adding..." : "Add Debt"}
+                  </button>
+                )}
+              </form>
+
+              <div className="rounded-3xl border border-red-400/30 bg-black/45 p-5">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                      Actions 2 / 3 / 4
+                    </p>
+                    <h3 className="mt-1 text-lg font-semibold text-white">
+                      Active Debt Records
+                    </h3>
+                    <p className="mt-1 text-sm text-gray-400">
+                      Fix existing debt for corrections. Add payment or complete
+                      debt when money is actually collected.
+                    </p>
+                  </div>
+
+                  <span
+                    className={`w-fit rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-wide ${debtNotice.className}`}
+                  >
+                    {debtNotice.label}
+                  </span>
+                </div>
+
+                {activeDebtPurchases.length === 0 ? (
+                  <p className="mt-4 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
+                    No active debt records.
+                  </p>
+                ) : (
+                  <div className="mt-4 space-y-4">
+                    {activeDebtPurchases.map((purchase) => {
+                      const currentBalance = Number(purchase.balance_due || 0);
+                      const paymentAmountValue =
+                        debtPaymentAmounts[purchase.id] ?? String(currentBalance);
+                      const paymentDateValue =
+                        debtPaymentDates[purchase.id] || getTodayInputDate();
+                      const isSelectedForFix = selectedDebtFixId === purchase.id;
+
+                      return (
+                        <div
+                          key={purchase.id}
+                          className={`rounded-3xl border p-5 ${
+                            isSelectedForFix
+                              ? "border-yellow-400/60 bg-yellow-400/10"
+                              : "border-red-400/25 bg-red-400/10"
+                          }`}
+                        >
+                          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr_0.8fr]">
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                                Debt Record
+                              </p>
+
+                              <h4 className="mt-2 text-xl font-semibold text-white">
+                                {purchase.plan_name || "Manual Debt"}
+                              </h4>
+
+                              <p className="mt-2 text-xs text-gray-400">
+                                Added {formatDate(purchase.created_at)}
+                              </p>
+
+                              <p className="mt-2 text-sm text-gray-300">
+                                Deadline:{" "}
+                                <span className="text-yellow-300">
+                                  {formatDate(purchase.debt_deadline)}
+                                </span>
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-red-400/20 bg-black/40 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                                Current Debt
+                              </p>
+                              <p className="mt-2 text-3xl font-semibold text-red-300">
+                                {formatMoney(currentBalance)}
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-green-400/20 bg-green-400/10 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Paid So Far
+                              </p>
+                              <p className="mt-2 text-3xl font-semibold text-green-300">
+                                {formatMoney(purchase.amount_paid)}
+                              </p>
+                            </div>
                           </div>
 
-                          <div className="rounded-2xl border border-red-400/20 bg-black/40 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                              Current Debt
-                            </p>
-                            <p className="mt-2 text-3xl font-semibold text-red-300">
-                              {formatMoney(currentBalance)}
-                            </p>
-                          </div>
-
-                          <div className="rounded-2xl border border-green-400/20 bg-green-400/10 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
-                              Paid So Far
-                            </p>
-                            <p className="mt-2 text-3xl font-semibold text-green-300">
-                              {formatMoney(purchase.amount_paid)}
-                            </p>
-                          </div>
-                        </div>
-
-                        {allowDebtEdit && (
-                          <div className="mt-5 rounded-3xl border border-green-400/25 bg-black/45 p-5">
-                            <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
-                              Record Debt Payment
-                            </p>
-
-                            <p className="mt-2 text-sm leading-6 text-gray-400">
-                              This is for money actually received from the
-                              client. It will add an income transaction to
-                              Revenue with source{" "}
-                              <span className="text-green-300">
-                                Debt Payment
-                              </span>
-                              .
-                            </p>
-
-                            <div className="mt-4 grid gap-4 md:grid-cols-[1fr_1fr_auto]">
+                          {allowDebtEdit && (
+                            <div className="mt-5 grid gap-4 rounded-3xl border border-white/10 bg-black/45 p-5 lg:grid-cols-[1fr_1fr_auto_auto_auto]">
                               <label>
                                 <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
                                   Payment Amount
@@ -2693,106 +2794,80 @@ No revenue transaction will be created.`,
                                   type="button"
                                   onClick={() => completeDebtRecord(purchase)}
                                   disabled={completingDebtId === purchase.id}
-                                  className="w-full rounded-2xl bg-green-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-60 md:w-auto"
+                                  className="w-full rounded-2xl bg-green-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {completingDebtId === purchase.id
                                     ? "Recording..."
-                                    : "Record Payment"}
+                                    : "Add Payment"}
+                                </button>
+                              </div>
+
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    completeDebtRecord(purchase, currentBalance)
+                                  }
+                                  disabled={completingDebtId === purchase.id}
+                                  className="w-full rounded-2xl bg-yellow-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  Complete Debt
+                                </button>
+                              </div>
+
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() => startFixExistingDebt(purchase)}
+                                  className="w-full rounded-2xl border border-cyan-400 px-4 py-3 text-sm font-semibold uppercase text-cyan-300 transition hover:bg-cyan-400 hover:text-black"
+                                >
+                                  Fix Existing
                                 </button>
                               </div>
                             </div>
-
-                            <div className="mt-4 rounded-2xl border border-yellow-400/25 bg-yellow-400/10 p-4">
-                              <p className="text-xs font-semibold uppercase tracking-widest text-yellow-300">
-                                Important
-                              </p>
-                              <p className="mt-2 text-sm leading-6 text-yellow-100/80">
-                                Do not use this to correct wrong debt numbers.
-                                Use the correction section below for that. This
-                                button means real money was collected and must
-                                appear in Revenue.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="mt-5 rounded-3xl border border-green-400/20 bg-green-400/10 p-5">
-              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <h3 className="text-lg font-semibold text-white">
-                  Completed Debt Records
-                </h3>
-
-                <p className="text-sm font-semibold text-green-300">
-                  Total Completed: {formatMoney(totalCompletedDebt)}
-                </p>
-              </div>
-
-              {completedDebtPurchases.length === 0 ? (
-                <p className="mt-3 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
-                  No completed debt records yet.
-                </p>
-              ) : (
-                <div className="mt-4 space-y-2">
-                  {completedDebtPurchases.map((purchase) => (
-                    <div
-                      key={purchase.id}
-                      className="grid gap-3 rounded-2xl border border-green-400/20 bg-black/35 p-4 md:grid-cols-[1fr_auto_auto]"
-                    >
-                      <div>
-                        <p className="font-semibold text-white">
-                          {purchase.plan_name || "Completed Debt"}
-                        </p>
-                        <p className="mt-1 text-xs text-gray-400">
-                          Original deadline {formatDate(purchase.debt_deadline)}
-                        </p>
-                      </div>
-
-                      <div className="text-left md:text-right">
-                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                          Paid Amount
-                        </p>
-                        <p className="mt-1 text-lg font-semibold text-green-300">
-                          {formatMoney(purchase.amount_paid)}
-                        </p>
-                      </div>
-
-                      <div className="text-left md:text-right">
-                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                          Balance
-                        </p>
-                        <p className="mt-1 text-sm font-semibold text-green-300">
-                          Complete
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+            <form
+              id="debt-fix-section"
+              onSubmit={saveDebtDetails}
+              className="mt-5 rounded-3xl border border-cyan-400/25 bg-cyan-400/10 p-5"
+            >
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                    Action 5
+                  </p>
+                  <h3 className="mt-1 text-lg font-semibold text-white">
+                    Fix Existing Debt
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-gray-300">
+                    Select a debt record above, then correct the amount or
+                    deadline here. Lowering the amount can be counted as a debt
+                    payment and added to Revenue.
+                  </p>
                 </div>
-              )}
-            </div>
 
-            <form onSubmit={saveDebtDetails} className="mt-5">
-              <div className="mb-4 rounded-2xl border border-cyan-400/25 bg-cyan-400/10 p-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">
-                  Debt Fix + Revenue Option
-                </p>
-
-                <p className="mt-2 text-sm leading-6 text-gray-300">
-                  Lowering the debt amount can be treated as a debt payment and
-                  added to Revenue. Increasing the debt amount only updates the
-                  debt balance and does not add income.
-                </p>
+                <div className="rounded-2xl border border-cyan-400/25 bg-black/40 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Selected
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-cyan-300">
+                    {selectedDebtFixPurchase?.plan_name || "First active debt"}
+                  </p>
+                </div>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="mt-5 grid gap-4 md:grid-cols-3">
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
-                    Edit Debt Amount
+                    New Debt Amount
                   </span>
                   <input
                     type="number"
@@ -2802,20 +2877,20 @@ No revenue transaction will be created.`,
                     onChange={(event) => setDebtAmount(event.target.value)}
                     disabled={!allowDebtEdit}
                     placeholder="0"
-                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
-                    Edit Debt Deadline
+                    New Deadline
                   </span>
                   <input
                     type="date"
                     value={debtDeadline}
                     onChange={(event) => setDebtDeadline(event.target.value)}
                     disabled={!allowDebtEdit}
-                    className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
                   />
                 </label>
 
@@ -2824,10 +2899,10 @@ No revenue transaction will be created.`,
                     Current Deadline
                   </p>
                   <p className="mt-2 text-sm font-normal text-white">
-                    {formatDate(debtPurchase?.debt_deadline || null)}
+                    {formatDate(selectedDebtFixPurchase?.debt_deadline || null)}
                   </p>
                   <p className="mt-2 text-xs font-normal text-gray-400">
-                    Notice appears when deadline is within 7 days or overdue.
+                    Active debt notices appear when due within 7 days or overdue.
                   </p>
                 </div>
               </div>
@@ -2906,67 +2981,148 @@ No revenue transaction will be created.`,
                 </div>
               )}
             </form>
-          </section>
 
-          <section className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
-            <h2 className="text-2xl font-semibold">Latest Purchase</h2>
+            <div className="mt-5 rounded-3xl border border-green-400/20 bg-green-400/10 p-5">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                    Debt History
+                  </p>
+                  <h3 className="mt-1 text-lg font-semibold text-white">
+                    Completed Debt Records
+                  </h3>
+                </div>
 
-            <div className="mt-5 grid gap-3 md:grid-cols-6">
-              <div className="rounded-2xl bg-black/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  Purchase Date
-                </p>
-                <p className="mt-2 font-normal text-white">
-                  {formatDate(latestPurchase?.created_at || null)}
+                <p className="text-sm font-semibold text-green-300">
+                  Total Completed: {formatMoney(totalCompletedDebt)}
                 </p>
               </div>
 
-              <div className="rounded-2xl bg-black/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  New / Renew
+              {completedDebtPurchases.length === 0 ? (
+                <p className="mt-3 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
+                  No completed debt records yet.
                 </p>
-                <p className="mt-2 font-normal text-yellow-300">
-                  {getPurchaseTypeLabel(latestPurchase?.purchase_type || null)}
-                </p>
-              </div>
+              ) : (
+                <div className="mt-4 space-y-2">
+                  {completedDebtPurchases.map((purchase) => (
+                    <div
+                      key={purchase.id}
+                      className="grid gap-3 rounded-2xl border border-green-400/20 bg-black/35 p-4 md:grid-cols-[1fr_auto_auto]"
+                    >
+                      <div>
+                        <p className="font-semibold text-white">
+                          {purchase.plan_name || "Completed Debt"}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-400">
+                          Original deadline {formatDate(purchase.debt_deadline)}
+                        </p>
+                      </div>
 
-              <div className="rounded-2xl bg-black/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  Sessions
-                </p>
-                <p className="mt-2 font-normal text-cyan-300">
-                  {latestPurchase?.session_count ?? "-"}
-                </p>
-              </div>
+                      <div className="text-left md:text-right">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                          Paid Amount
+                        </p>
+                        <p className="mt-1 text-lg font-semibold text-green-300">
+                          {formatMoney(purchase.amount_paid)}
+                        </p>
+                      </div>
 
-              <div className="rounded-2xl bg-black/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  Price
-                </p>
-                <p className="mt-2 font-normal text-green-300">
-                  {formatMoney(latestPurchase?.price)}
-                </p>
-              </div>
-
-              <div className="rounded-2xl bg-black/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  Paid
-                </p>
-                <p className="mt-2 font-normal text-green-300">
-                  {formatMoney(latestPurchase?.amount_paid)}
-                </p>
-              </div>
-
-              <div className="rounded-2xl bg-black/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                  Balance Due
-                </p>
-                <p className="mt-2 font-normal text-red-300">
-                  {formatMoney(latestPurchase?.balance_due)}
-                </p>
-              </div>
+                      <div className="text-left md:text-right">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                          Balance
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-green-300">
+                          Complete
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </section>
+
+          {purchaseHistory.length > 0 ? (
+            <section className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                    Purchase History
+                  </p>
+                  <h2 className="mt-1 text-2xl font-semibold">
+                    New / Renew Purchases Only
+                  </h2>
+                </div>
+
+                <p className="text-sm text-gray-400">
+                  Debt-only records are hidden here and shown in Debt History.
+                </p>
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {purchaseHistory.map((purchase) => (
+                  <div
+                    key={purchase.id}
+                    className="grid gap-3 rounded-2xl border border-white/10 bg-black/40 p-4 md:grid-cols-[1.2fr_0.7fr_0.7fr_0.8fr_0.8fr_0.8fr]"
+                  >
+                    <div>
+                      <p className="font-semibold text-white">
+                        {purchase.plan_name || "Package Purchase"}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-400">
+                        {formatDate(purchase.created_at)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Type
+                      </p>
+                      <p className="mt-1 text-sm text-yellow-300">
+                        {getPurchaseTypeLabel(purchase.purchase_type)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Sessions
+                      </p>
+                      <p className="mt-1 text-sm text-cyan-300">
+                        {purchase.session_count ?? "-"}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Price
+                      </p>
+                      <p className="mt-1 text-sm text-green-300">
+                        {formatMoney(purchase.price)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Paid
+                      </p>
+                      <p className="mt-1 text-sm text-green-300">
+                        {formatMoney(purchase.amount_paid)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Balance
+                      </p>
+                      <p className="mt-1 text-sm text-red-300">
+                        {formatMoney(purchase.balance_due)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
             <h2 className="text-2xl font-semibold">Recent Sessions</h2>
@@ -3029,5 +3185,23 @@ No revenue transaction will be created.`,
         </div>
       </div>
     </main>
+  );
+}
+
+export default function AdminClientDetailPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-black p-6 text-white">
+          <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+            <p className="text-sm font-semibold text-yellow-400">
+              Loading client detail...
+            </p>
+          </div>
+        </main>
+      }
+    >
+      <AdminClientDetailPageContent />
+    </Suspense>
   );
 }
