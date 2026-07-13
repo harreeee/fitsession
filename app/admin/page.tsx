@@ -672,6 +672,13 @@ export default function AdminDashboardPage() {
       adminOnly: false,
     },
     {
+      href: "/admin/clients/inactive",
+      label: "Inactive Clients",
+      icon: "🚫",
+      primary: false,
+      adminOnly: false,
+    },
+    {
       href: "/admin/revenue",
       label: isManager ? "View Revenue" : "Revenue",
       icon: "💰",
@@ -807,6 +814,13 @@ export default function AdminDashboardPage() {
               className="rounded-xl bg-yellow-400 px-4 py-2 text-xs font-bold text-black transition hover:bg-yellow-300 active:scale-[0.97]"
             >
               Client Directory
+            </Link>
+
+            <Link
+              href="/admin/clients/inactive"
+              className="hidden rounded-xl border border-rose-400/30 bg-rose-400/10 px-4 py-2 text-xs font-bold text-rose-300 transition hover:bg-rose-400 hover:text-black sm:inline-block"
+            >
+              Inactive
             </Link>
 
             <button

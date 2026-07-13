@@ -403,6 +403,7 @@ export default function AdminClientsPage() {
           .select(
             "id, client_code, full_name, status, client_source, client_source_other, assigned_trainer_id, assigned_nutrition_coach_id, created_at"
           )
+          .or("status.is.null,status.neq.inactive")
           .order("client_code", { ascending: true }),
 
         supabase
@@ -450,7 +451,11 @@ export default function AdminClientsPage() {
       return;
     }
 
-    setClients((clientsResult.data || []) as ClientRow[]);
+    const activeClientRows = ((clientsResult.data || []) as ClientRow[]).filter(
+      (client) => String(client.status || "").trim().toLowerCase() !== "inactive"
+    );
+
+    setClients(activeClientRows);
     setPackages((packagesResult.data || []) as SessionPackageRow[]);
     setPurchases((purchasesResult.data || []) as PurchaseRow[]);
     setStaffProfiles((staffResult.data || []) as StaffProfileRow[]);
@@ -570,7 +575,11 @@ export default function AdminClientsPage() {
   }, [staffProfiles]);
 
   const tableRows = useMemo<ClientTableRow[]>(() => {
-    return clients.map((client) => {
+    return clients
+      .filter(
+        (client) => String(client.status || "").trim().toLowerCase() !== "inactive"
+      )
+      .map((client) => {
       const clientPackages = packages.filter(
         (packageRow) => packageRow.client_id === client.id
       );
@@ -817,12 +826,11 @@ export default function AdminClientsPage() {
                 </p>
 
                 <h1 className="text-3xl font-semibold md:text-5xl">
-                  Client Directory
+                  Active Client Directory
                 </h1>
 
                 <p className="mt-2 text-sm font-normal text-gray-400">
-                  Shows Số buổi, Buổi còn lại, Công nợ còn lại, assigned PT,
-                  assigned NC, and client status.
+                  Shows active/current clients only. Inactive clients are moved to the separate Inactive Clients page.
                 </p>
 
                 <p className="mt-3 inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-normal text-yellow-300">
@@ -839,6 +847,13 @@ export default function AdminClientsPage() {
                     Add Client
                   </Link>
                 )}
+
+                <Link
+                  href="/admin/clients/inactive"
+                  className="rounded-xl border border-red-400 px-4 py-2 text-center text-xs font-semibold uppercase text-red-300 transition hover:bg-red-400 hover:text-black"
+                >
+                  Inactive Clients
+                </Link>
 
                 <Link
                   href="/admin"
@@ -860,7 +875,7 @@ export default function AdminClientsPage() {
           <section className="mb-4 grid gap-3 md:grid-cols-5">
             <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
               <p className="text-xs font-normal uppercase text-gray-400">
-                Tổng khách
+                Active Clients
               </p>
               <p className="mt-1 text-3xl font-semibold text-yellow-400">
                 {tableRows.length}
