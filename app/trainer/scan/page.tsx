@@ -67,10 +67,32 @@ const MOTIVATION_QUOTES = [
   "Great PTs create results, trust, and reasons to come back.",
 ];
 
+function normalizeScannerRole(role: string | null | undefined) {
+  const cleanRole = String(role || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (cleanRole === "nutritioncoach") return "nutrition_coach";
+  return cleanRole;
+}
+
+function canScanClients(role: string | null | undefined) {
+  const cleanRole = normalizeScannerRole(role);
+
+  return (
+    cleanRole === "trainer" ||
+    cleanRole === "nutrition_coach" ||
+    cleanRole === "admin"
+  );
+}
+
 function getRoleLabel(role: string) {
-  if (role === "nutrition_coach") return "Nutrition Coach";
-  if (role === "trainer") return "Trainer";
-  if (role === "admin") return "Admin";
+  const cleanRole = normalizeScannerRole(role);
+
+  if (cleanRole === "nutrition_coach") return "Nutrition Coach";
+  if (cleanRole === "trainer") return "Trainer";
+  if (cleanRole === "admin") return "Admin";
   return "Staff";
 }
 
@@ -674,6 +696,16 @@ export default function TrainerScanPage() {
     }
 
     const currentTrainerId = authData.user.id;
+    const cleanTrainerRole = normalizeScannerRole(trainerRole);
+
+    if (!canScanClients(cleanTrainerRole)) {
+      setResult({
+        type: "error",
+        message:
+          "This account cannot scan clients. Allowed roles: trainer, nutrition coach, or admin.",
+      });
+      return;
+    }
 
     const { data: clientData, error: clientError } = await supabase
       .from("clients")
@@ -765,6 +797,35 @@ export default function TrainerScanPage() {
     const newUsed = currentUsed + 1;
     const newRemaining = currentRemaining - 1;
 
+    const { error: updateError, count: updatedPackageCount } = await supabase
+      .from("session_packages")
+      .update(
+        {
+          used_sessions: newUsed,
+          remaining_sessions: newRemaining,
+          status: newRemaining <= 0 ? "completed" : "active",
+        },
+        { count: "exact" }
+      )
+      .eq("id", sessionPackage.id);
+
+    if (updateError) {
+      setResult({
+        type: "error",
+        message: `Package update failed, so the session was not recorded. ${updateError.message}. Check Supabase UPDATE policy for nutrition_coach on session_packages.`,
+      });
+      return;
+    }
+
+    if (updatedPackageCount === 0) {
+      setResult({
+        type: "error",
+        message:
+          "Package update failed because no session package row was updated. This usually means Supabase RLS is blocking this role. Allow trainer and nutrition_coach to update session_packages.",
+      });
+      return;
+    }
+
     let createdHistory: CreatedSessionHistoryRow | null = null;
 
     try {
@@ -775,24 +836,13 @@ export default function TrainerScanPage() {
         newRemaining,
       });
     } catch (error) {
-      setResult({ type: "error", message: getErrorMessage(error) });
-      return;
-    }
-
-    const { error: updateError } = await supabase
-      .from("session_packages")
-      .update({
-        used_sessions: newUsed,
-        remaining_sessions: newRemaining,
-        status: newRemaining <= 0 ? "completed" : "active",
-      })
-      .eq("id", sessionPackage.id);
-
-    if (updateError) {
       setResult({
         type: "error",
-        message: `Session was recorded, but package update failed: ${updateError.message}`,
+        message: `Session was deducted, but history was not saved: ${getErrorMessage(
+          error
+        )}`,
       });
+      await fetchTrainerStats(currentTrainerId);
       return;
     }
 
@@ -829,7 +879,9 @@ export default function TrainerScanPage() {
         return;
       }
 
-      if (role !== "trainer" && role !== "nutrition_coach" && role !== "admin") {
+      const cleanRole = normalizeScannerRole(role);
+
+      if (!canScanClients(cleanRole)) {
         setCheckingMessage("Redirecting to login...");
         await supabase.auth.signOut();
         router.push("/login");
@@ -837,7 +889,7 @@ export default function TrainerScanPage() {
       }
 
       setTrainerId(user.id);
-      setTrainerRole(role || "");
+      setTrainerRole(cleanRole);
 
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
