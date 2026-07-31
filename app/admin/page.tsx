@@ -7,8 +7,6 @@ import { supabase } from "../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
 
 type AdminRole = "admin" | "manager";
-type TransactionType = "income" | "expense" | "cash_adjustment";
-
 type ClientRow = {
   id: string;
   client_code: string | null;
@@ -38,17 +36,6 @@ type PurchaseRow = {
   purchase_type: string | null;
   status: string | null;
   created_at: string | null;
-};
-
-type BusinessTransactionRow = {
-  id: string;
-  transaction_type: TransactionType;
-  source: string;
-  title: string;
-  amount: number | string | null;
-  notes: string | null;
-  transaction_date: string;
-  created_at: string;
 };
 
 type ClientDebtSummary = {
@@ -187,27 +174,6 @@ function getRoleLabel(role: AdminRole | null) {
   return role === "manager" ? "Manager" : "Admin";
 }
 
-function getSourceLabel(value: string | null | undefined) {
-  if (!value) return "Manual";
-
-  const labels: Record<string, string> = {
-    package_sale: "Package Sale",
-    membership: "Membership",
-    personal_training: "Personal Training",
-    debt_payment: "Debt Payment",
-    merchandise: "Merchandise",
-    rent: "Rent",
-    payroll: "Payroll",
-    utilities: "Utilities",
-    marketing: "Marketing",
-    equipment: "Equipment",
-    manual: "Manual",
-    other: "Other",
-  };
-
-  return labels[value] || value;
-}
-
 function KpiCard({
   label,
   value,
@@ -271,48 +237,12 @@ function KpiCard({
   );
 }
 
-function FinCard({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: string;
-  sub: string;
-  tone: "revenue" | "expense" | "cash" | "profit" | "debt" | "neutral";
-}) {
-  const styles: Record<string, string> = {
-    revenue: "border-emerald-400/20 bg-emerald-400/[0.07] text-emerald-300",
-    expense: "border-rose-400/20 bg-rose-400/[0.07] text-rose-300",
-    cash: "border-yellow-400/25 bg-yellow-400/[0.10] text-yellow-300",
-    profit: "border-sky-400/20 bg-sky-400/[0.07] text-sky-300",
-    debt: "border-amber-400/20 bg-amber-400/[0.07] text-amber-300",
-    neutral: "border-white/[0.08] bg-white/[0.03] text-white",
-  };
-
-  return (
-    <div className={`rounded-2xl border p-5 ${styles[tone]}`}>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-zinc-500">
-        {label}
-      </p>
-
-      <p className="mt-2 text-2xl font-bold tabular-nums">{value}</p>
-
-      <p className="mt-1.5 text-xs leading-5 text-zinc-600">{sub}</p>
-    </div>
-  );
-}
-
 export default function AdminDashboardPage() {
   const router = useRouter();
 
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [packages, setPackages] = useState<SessionPackageRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
-  const [transactions, setTransactions] = useState<BusinessTransactionRow[]>(
-    []
-  );
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMsg, setCheckingMsg] = useState("Checking admin access...");
@@ -329,8 +259,7 @@ export default function AdminDashboardPage() {
   async function fetchDashboardData() {
     setLoading(true);
 
-    const [clientResult, packageResult, purchaseResult, transactionResult] =
-      await Promise.all([
+    const [clientResult, packageResult, purchaseResult] = await Promise.all([
         supabase
           .from("clients")
           .select("id, client_code, full_name, status, created_at")
@@ -348,14 +277,6 @@ export default function AdminDashboardPage() {
           .select(
             "id, client_id, plan_name, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
           )
-          .order("created_at", { ascending: false }),
-
-        supabase
-          .from("business_transactions")
-          .select(
-            "id, transaction_type, source, title, amount, notes, transaction_date, created_at"
-          )
-          .order("transaction_date", { ascending: false })
           .order("created_at", { ascending: false }),
       ]);
 
@@ -377,16 +298,10 @@ export default function AdminDashboardPage() {
       return;
     }
 
-    if (transactionResult.error) {
-      alert(transactionResult.error.message);
-      setLoading(false);
-      return;
-    }
 
     setClients((clientResult.data || []) as ClientRow[]);
     setPackages((packageResult.data || []) as SessionPackageRow[]);
     setPurchases((purchaseResult.data || []) as PurchaseRow[]);
-    setTransactions((transactionResult.data || []) as BusinessTransactionRow[]);
     setLoading(false);
   }
 
@@ -410,66 +325,6 @@ export default function AdminDashboardPage() {
       );
     }, 0);
 
-    /*
-      IMPORTANT:
-      Gross Package Value used to sum client_purchases.price.
-      That caused random/wrong numbers like $145,699.
-      We keep this value hidden as $0 until purchase pricing data is cleaned.
-    */
-    const grossPackageValue = 0;
-
-    const incomeTransactions = transactions.filter(
-      (transaction) => transaction.transaction_type === "income"
-    );
-
-    const expenseTransactions = transactions.filter(
-      (transaction) => transaction.transaction_type === "expense"
-    );
-
-    const adjustmentTransactions = transactions.filter(
-      (transaction) => transaction.transaction_type === "cash_adjustment"
-    );
-
-    const totalRevenue = incomeTransactions.reduce(
-      (sum, transaction) => sum + (toNumber(transaction.amount) ?? 0),
-      0
-    );
-
-    const totalExpenses = expenseTransactions.reduce(
-      (sum, transaction) => sum + (toNumber(transaction.amount) ?? 0),
-      0
-    );
-
-    const totalAdjustments = adjustmentTransactions.reduce(
-      (sum, transaction) => sum + (toNumber(transaction.amount) ?? 0),
-      0
-    );
-
-    const cashOnHand = totalRevenue + totalAdjustments - totalExpenses;
-    const netProfit = cashOnHand;
-
-    const averagePayment =
-      incomeTransactions.length > 0
-        ? totalRevenue / incomeTransactions.length
-        : 0;
-
-    const collectionRate = 0;
-
-    const totalDebtFromPurchases = purchases.reduce((sum, purchase) => {
-      const savedBalance = toNumber(purchase.balance_due);
-      const price = toNumber(purchase.price);
-      const paid = toNumber(purchase.amount_paid);
-
-      if (savedBalance !== null) {
-        return sum + Math.max(savedBalance, 0);
-      }
-
-      if (price !== null && paid !== null) {
-        return sum + Math.max(price - paid, 0);
-      }
-
-      return sum;
-    }, 0);
 
     const debtRows: ClientDebtSummary[] = clients
       .map((client) => {
@@ -563,35 +418,11 @@ export default function AdminDashboardPage() {
       0
     );
 
-    const recentIncome = [...incomeTransactions]
-      .sort(
-        (a, b) =>
-          getTime(b.transaction_date || b.created_at) -
-          getTime(a.transaction_date || a.created_at)
-      )
-      .slice(0, 5);
-
-    const recentExpense = [...expenseTransactions]
-      .sort(
-        (a, b) =>
-          getTime(b.transaction_date || b.created_at) -
-          getTime(a.transaction_date || a.created_at)
-      )
-      .slice(0, 5);
 
     return {
       activeClients,
       totalSessionsLeft,
-      grossPackageValue,
-      totalRevenue,
-      totalExpenses,
-      totalAdjustments,
-      cashOnHand,
-      netProfit,
-      averagePayment,
-      collectionRate,
       totalDebt,
-      totalDebtFromPurchases,
       overdueDebtAmount,
       dueSoonDebtAmount,
       debtRows,
@@ -600,10 +431,8 @@ export default function AdminDashboardPage() {
       dueTodayDebt,
       dueSoonDebt,
       noDeadlineDebt,
-      recentIncome,
-      recentExpense,
     };
-  }, [clients, packages, purchases, transactions]);
+  }, [clients, packages, purchases]);
 
   useEffect(() => {
     async function init() {
@@ -1007,154 +836,102 @@ export default function AdminDashboardPage() {
               />
             </section>
 
-            <section className="fu fu3 mb-6 overflow-hidden rounded-3xl border border-yellow-400/20 bg-[#0d0c08]">
-              <div className="flex items-center justify-between gap-4 border-b border-yellow-400/10 bg-yellow-400/[0.06] px-6 py-4">
+            <section className="fu fu3 mb-6 overflow-hidden rounded-3xl border border-amber-400/20 bg-[#0d0c08]">
+              <div className="flex flex-col gap-4 border-b border-amber-400/10 bg-amber-400/[0.06] px-6 py-5 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-yellow-400/70">
-                    Business Reports
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-amber-300/70">
+                    Warning Center
                   </p>
-
-                  <h2 className="mt-0.5 text-lg font-bold text-white">
-                    Financial Dashboard
+                  <h2 className="mt-1 text-xl font-bold text-white">
+                    Items That Need Attention
                   </h2>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Review overdue balances, upcoming payments, missing deadlines, and clients close to renewal.
+                  </p>
                 </div>
 
                 <Link
-                  href="/admin/revenue"
-                  className="shrink-0 rounded-xl bg-yellow-400 px-4 py-2 text-xs font-bold text-black transition hover:bg-yellow-300 active:scale-[0.97]"
+                  href="/admin/clients"
+                  className="shrink-0 rounded-xl bg-amber-400 px-4 py-2.5 text-xs font-bold text-black transition hover:bg-amber-300 active:scale-[0.97]"
                 >
-                  Open Revenue →
+                  Review Clients →
                 </Link>
               </div>
 
-              <div className="p-6">
-                <div className="mb-5 rounded-2xl border border-yellow-400/15 bg-yellow-400/[0.05] px-4 py-3">
-                  <p className="text-xs leading-5 text-yellow-100/60">
-                    Revenue, expenses, and cash on hand are from Revenue page
-                    transactions only. Client debt is tracked separately from
-                    unpaid purchase balances.
+              <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-5">
+                <div className="rounded-2xl border border-rose-400/25 bg-rose-400/[0.08] p-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                    Overdue
+                  </p>
+                  <p className="mt-2 text-3xl font-bold text-rose-300">
+                    {dash.overdueDebt.length}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    {formatMoney(dash.overdueDebtAmount)} past deadline
                   </p>
                 </div>
 
-                <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <FinCard
-                    label="Revenue Collected"
-                    value={formatMoney(dash.totalRevenue)}
-                    sub="Income on Revenue page"
-                    tone="revenue"
-                  />
-
-                  <FinCard
-                    label="Expenses"
-                    value={formatMoney(dash.totalExpenses)}
-                    sub="Expenses on Revenue page"
-                    tone="expense"
-                  />
-
-                  <FinCard
-                    label="Cash On Hand"
-                    value={formatMoney(dash.cashOnHand)}
-                    sub="Income + adjustments − expenses"
-                    tone="cash"
-                  />
-
-                  <FinCard
-                    label="Net Profit"
-                    value={formatMoney(dash.netProfit)}
-                    sub="Business transactions only"
-                    tone="profit"
-                  />
+                <div className="rounded-2xl border border-orange-400/25 bg-orange-400/[0.08] p-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                    Due Today
+                  </p>
+                  <p className="mt-2 text-3xl font-bold text-orange-300">
+                    {dash.dueTodayDebt.length}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    Payments to follow up today
+                  </p>
                 </div>
 
-                <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <FinCard
-                    label="Gross Package Value"
-                    value="$0"
-                    sub="Hidden until purchase values are cleaned"
-                    tone="neutral"
-                  />
-
-                  <FinCard
-                    label="Outstanding Debt"
-                    value={formatMoney(dash.totalDebtFromPurchases)}
-                    sub="Unpaid client balances"
-                    tone="debt"
-                  />
-
-                  <FinCard
-                    label="Collection Rate"
-                    value="0%"
-                    sub="Disabled while package value is hidden"
-                    tone="revenue"
-                  />
-
-                  <FinCard
-                    label="Average Payment"
-                    value={formatMoney(dash.averagePayment)}
-                    sub="Per income transaction"
-                    tone="neutral"
-                  />
+                <div className="rounded-2xl border border-amber-400/25 bg-amber-400/[0.08] p-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                    Due Soon
+                  </p>
+                  <p className="mt-2 text-3xl font-bold text-amber-300">
+                    {dash.dueSoonDebt.length}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    {formatMoney(dash.dueSoonDebtAmount)} due within 7 days
+                  </p>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-2xl border border-rose-400/20 bg-rose-400/[0.06] p-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      Overdue Money
-                    </p>
+                <div className="rounded-2xl border border-sky-400/25 bg-sky-400/[0.08] p-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                    No Deadline
+                  </p>
+                  <p className="mt-2 text-3xl font-bold text-sky-300">
+                    {dash.noDeadlineDebt.length}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    Debt records missing a due date
+                  </p>
+                </div>
 
-                    <p className="mt-2 text-2xl font-bold text-rose-300">
-                      {formatMoney(dash.overdueDebtAmount)}
-                    </p>
-
-                    <p className="mt-1 text-xs text-zinc-600">
-                      {dash.overdueDebt.length} overdue payment
-                      {dash.overdueDebt.length !== 1 ? "s" : ""}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      Due Soon Money
-                    </p>
-
-                    <p className="mt-2 text-2xl font-bold text-amber-300">
-                      {formatMoney(dash.dueSoonDebtAmount)}
-                    </p>
-
-                    <p className="mt-1 text-xs text-zinc-600">
-                      Due within 7 days
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-sky-400/20 bg-sky-400/[0.06] p-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      Cash Adjustments
-                    </p>
-
-                    <p className="mt-2 text-2xl font-bold text-sky-300">
-                      {formatMoney(dash.totalAdjustments)}
-                    </p>
-
-                    <p className="mt-1 text-xs text-zinc-600">
-                      Manual changes from Revenue
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      Purchase Records
-                    </p>
-
-                    <p className="mt-2 text-2xl font-bold text-white">
-                      {purchases.length}
-                    </p>
-
-                    <p className="mt-1 text-xs text-zinc-600">
-                      Total client purchase entries
-                    </p>
-                  </div>
+                <div className="rounded-2xl border border-yellow-400/25 bg-yellow-400/[0.08] p-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                    Near Renewal
+                  </p>
+                  <p className="mt-2 text-3xl font-bold text-yellow-300">
+                    {dash.lowSessionRows.length}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    Clients with 1–10 sessions left
+                  </p>
                 </div>
               </div>
+
+              {dash.overdueDebt.length === 0 &&
+              dash.dueTodayDebt.length === 0 &&
+              dash.dueSoonDebt.length === 0 &&
+              dash.noDeadlineDebt.length === 0 &&
+              dash.lowSessionRows.length === 0 ? (
+                <div className="mx-5 mb-5 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.07] p-5 text-center">
+                  <p className="font-semibold text-emerald-300">No urgent warnings</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Client payments and renewals are currently under control.
+                  </p>
+                </div>
+              ) : null}
             </section>
 
             <section className="fu fu4 mb-6 grid gap-5 lg:grid-cols-[1.4fr_1fr]">
@@ -1368,107 +1145,6 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className="fu fu5 grid gap-5 lg:grid-cols-2">
-              <div className="overflow-hidden rounded-3xl border border-white/[0.07] bg-white/[0.03]">
-                <div className="flex items-center gap-2 border-b border-emerald-400/10 bg-emerald-400/[0.05] px-6 py-4">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-400/15 text-sm">
-                    💵
-                  </span>
-
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-600">
-                      Recent money in
-                    </p>
-
-                    <h2 className="text-base font-bold text-white">
-                      Latest Income
-                    </h2>
-                  </div>
-                </div>
-
-                <div className="p-5">
-                  {dash.recentIncome.length === 0 ? (
-                    <p className="rounded-2xl border border-white/[0.06] bg-black/20 p-5 text-sm text-zinc-500">
-                      No income entered on the Revenue page yet.
-                    </p>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {dash.recentIncome.map((transaction) => (
-                        <div
-                          key={transaction.id}
-                          className="flex items-center justify-between gap-4 rounded-2xl border border-white/[0.06] bg-black/25 px-4 py-3 transition hover:bg-black/35"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-white">
-                              {transaction.title || "Income"}
-                            </p>
-
-                            <p className="text-xs text-zinc-600">
-                              {getSourceLabel(transaction.source)} ·{" "}
-                              {formatDate(transaction.transaction_date)}
-                            </p>
-                          </div>
-
-                          <p className="shrink-0 font-bold text-emerald-300">
-                            +{formatMoney(toNumber(transaction.amount) ?? 0)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="overflow-hidden rounded-3xl border border-white/[0.07] bg-white/[0.03]">
-                <div className="flex items-center gap-2 border-b border-rose-400/10 bg-rose-400/[0.05] px-6 py-4">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-400/15 text-sm">
-                    🧾
-                  </span>
-
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-600">
-                      Recent money out
-                    </p>
-
-                    <h2 className="text-base font-bold text-white">
-                      Latest Expenses
-                    </h2>
-                  </div>
-                </div>
-
-                <div className="p-5">
-                  {dash.recentExpense.length === 0 ? (
-                    <p className="rounded-2xl border border-white/[0.06] bg-black/20 p-5 text-sm text-zinc-500">
-                      No expenses entered on the Revenue page yet.
-                    </p>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {dash.recentExpense.map((transaction) => (
-                        <div
-                          key={transaction.id}
-                          className="flex items-center justify-between gap-4 rounded-2xl border border-white/[0.06] bg-black/25 px-4 py-3 transition hover:bg-black/35"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-white">
-                              {transaction.title || "Expense"}
-                            </p>
-
-                            <p className="text-xs text-zinc-600">
-                              {getSourceLabel(transaction.source)} ·{" "}
-                              {formatDate(transaction.transaction_date)}
-                            </p>
-                          </div>
-
-                          <p className="shrink-0 font-bold text-rose-300">
-                            −{formatMoney(toNumber(transaction.amount) ?? 0)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
           </>
         )}
       </div>
