@@ -65,9 +65,12 @@ type ClientPurchase = {
   created_at: string | null;
 };
 
+type SessionType = "training" | "nutrition_follow_up";
+
 type SessionHistory = {
   id: string;
   trainer_id: string | null;
+  session_type: SessionType | null;
   status: string;
   message: string | null;
   trainer_note: string | null;
@@ -137,6 +140,17 @@ function formatDateInput(value: string | null | undefined) {
   if (Number.isNaN(date.getTime())) return "";
 
   return date.toISOString().slice(0, 10);
+}
+
+function formatDateTimeInput(value: string | null | undefined) {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "";
+
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 16);
 }
 
 function getTodayInputDate() {
@@ -290,6 +304,39 @@ function isDebtPurchase(purchase: ClientPurchase) {
   );
 }
 
+function getNutritionFollowAllowance(
+  purchases: ClientPurchase[],
+  packages: SessionPackage[],
+) {
+  const purchasedSessions = purchases
+    .filter(isPackagePurchase)
+    .reduce(
+      (sum, purchase) => sum + Math.max(Number(purchase.session_count || 0), 0),
+      0,
+    );
+
+  const latestPackageTotal =
+    packages.length > 0
+      ? Math.max(Number(packages[0]?.total_sessions || 0), 0)
+      : 0;
+
+  return Math.floor(Math.max(purchasedSessions, latestPackageTotal) / 6);
+}
+
+function isCompletedTrainingSession(
+  status: string | null | undefined,
+  sessionType: SessionType | null | undefined,
+) {
+  return status === "success" && (sessionType || "training") === "training";
+}
+
+function isCompletedNutritionFollow(
+  status: string | null | undefined,
+  sessionType: SessionType | null | undefined,
+) {
+  return status === "success" && sessionType === "nutrition_follow_up";
+}
+
 function AdminClientDetailPageContent() {
   const params = useParams();
   const router = useRouter();
@@ -356,6 +403,18 @@ function AdminClientDetailPageContent() {
   const [sessionAdjustAction, setSessionAdjustAction] =
     useState<SessionAdjustAction | null>(null);
 
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editSessionTrainerId, setEditSessionTrainerId] = useState("");
+  const [editSessionType, setEditSessionType] =
+    useState<SessionType>("training");
+  const [editSessionStatus, setEditSessionStatus] = useState("success");
+  const [editSessionDateTime, setEditSessionDateTime] = useState("");
+  const [editSessionMessage, setEditSessionMessage] = useState("");
+  const [editSessionNote, setEditSessionNote] = useState("");
+  const [savingSessionHistoryId, setSavingSessionHistoryId] = useState<string | null>(null);
+  const [showCorrectedSessions, setShowCorrectedSessions] = useState(false);
+  const [nutritionFollowUsed, setNutritionFollowUsed] = useState(0);
+
   const [debtAmount, setDebtAmount] = useState("");
   const [debtDeadline, setDebtDeadline] = useState("");
   const [savingDebt, setSavingDebt] = useState(false);
@@ -420,22 +479,37 @@ function AdminClientDetailPageContent() {
   }
 
   async function fetchSessionHistory() {
-    const { data: historyData, error: historyError } = await supabase
-      .from("session_history")
-      .select(
-        "id, trainer_id, status, message, trainer_note, remaining_after, created_at",
-      )
-      .eq("client_id", clientId)
-      .order("created_at", { ascending: false })
-      .limit(20);
+    const [historyResult, nutritionCountResult] = await Promise.all([
+      supabase
+        .from("session_history")
+        .select(
+          "id, trainer_id, session_type, status, message, trainer_note, remaining_after, created_at",
+        )
+        .eq("client_id", clientId)
+        .order("created_at", { ascending: false })
+        .limit(100),
+      supabase
+        .from("session_history")
+        .select("id", { count: "exact", head: true })
+        .eq("client_id", clientId)
+        .eq("session_type", "nutrition_follow_up")
+        .eq("status", "success"),
+    ]);
 
-    if (historyError) {
-      console.error(historyError.message);
+    if (historyResult.error) {
+      console.error(historyResult.error.message);
       setSessionHistory([]);
       return;
     }
 
-    const rawHistory = (historyData || []) as Omit<
+    if (nutritionCountResult.error) {
+      console.error(nutritionCountResult.error.message);
+      setNutritionFollowUsed(0);
+    } else {
+      setNutritionFollowUsed(nutritionCountResult.count || 0);
+    }
+
+    const rawHistory = (historyResult.data || []) as Omit<
       SessionHistory,
       "trainer_name"
     >[];
@@ -452,27 +526,33 @@ function AdminClientDetailPageContent() {
       setSessionHistory(
         rawHistory.map((log) => ({
           ...log,
+          session_type: log.session_type || "training",
           trainer_name: "Admin / Manual",
         })),
       );
       return;
     }
 
-    const { data: trainerProfiles } = await supabase
+    const { data: trainerProfiles, error: trainerProfilesError } = await supabase
       .from("profiles")
       .select("id, full_name")
       .in("id", trainerIds);
 
+    if (trainerProfilesError) {
+      console.error(trainerProfilesError.message);
+    }
+
     const trainerNameMap = new Map(
       ((trainerProfiles || []) as TrainerProfile[]).map((profile) => [
         profile.id,
-        profile.full_name || "Unknown Trainer",
+        profile.full_name || "Unknown Staff",
       ]),
     );
 
     setSessionHistory(
       rawHistory.map((log) => ({
         ...log,
+        session_type: log.session_type || "training",
         trainer_name:
           log.trainer_id && trainerNameMap.get(log.trainer_id)
             ? trainerNameMap.get(log.trainer_id)!
@@ -1456,6 +1536,220 @@ function AdminClientDetailPageContent() {
     setSavingDebt(false);
   }
 
+  function startEditSessionHistory(log: SessionHistory) {
+    if (!isAdmin) {
+      alert("Only admins can edit session history.");
+      return;
+    }
+
+    setEditingSessionId(log.id);
+    setEditSessionTrainerId(log.trainer_id || "");
+    setEditSessionType(log.session_type || "training");
+    setEditSessionStatus(log.status || "success");
+    setEditSessionDateTime(formatDateTimeInput(log.created_at));
+    setEditSessionMessage(log.message || "");
+    setEditSessionNote(log.trainer_note || "");
+  }
+
+  function cancelEditSessionHistory() {
+    setEditingSessionId(null);
+    setEditSessionTrainerId("");
+    setEditSessionType("training");
+    setEditSessionStatus("success");
+    setEditSessionDateTime("");
+    setEditSessionMessage("");
+    setEditSessionNote("");
+  }
+
+  async function saveSessionHistoryEdit(log: SessionHistory) {
+    if (!isAdmin) {
+      alert("Only admins can edit session history.");
+      return;
+    }
+
+    if (!editSessionDateTime) {
+      alert("Session date and time are required.");
+      return;
+    }
+
+    const currentPackage = packages[0] || null;
+    const oldSessionType = log.session_type || "training";
+    const oldCountsAgainstTrainingPackage = isCompletedTrainingSession(
+      log.status,
+      oldSessionType,
+    );
+    const nextCountsAgainstTrainingPackage = isCompletedTrainingSession(
+      editSessionStatus,
+      editSessionType,
+    );
+    const trainingBalanceChanges =
+      oldCountsAgainstTrainingPackage !== nextCountsAgainstTrainingPackage;
+
+    const oldCountsAsNutrition = isCompletedNutritionFollow(
+      log.status,
+      oldSessionType,
+    );
+    const nextCountsAsNutrition = isCompletedNutritionFollow(
+      editSessionStatus,
+      editSessionType,
+    );
+
+    const nutritionAllowance = getNutritionFollowAllowance(purchases, packages);
+    const nutritionUsedWithoutCurrent =
+      nutritionFollowUsed - (oldCountsAsNutrition ? 1 : 0);
+
+    if (
+      nextCountsAsNutrition &&
+      !oldCountsAsNutrition &&
+      nutritionUsedWithoutCurrent >= nutritionAllowance
+    ) {
+      alert(
+        `No nutrition follow-up credit is available. This client has ${nutritionAllowance} allowed and ${nutritionFollowUsed} already completed.`,
+      );
+      return;
+    }
+
+    let previousPackageNumbers: ReturnType<typeof getPackageNumbers> | null =
+      null;
+    let nextRemainingAfter = log.remaining_after;
+
+    if (trainingBalanceChanges) {
+      if (!currentPackage) {
+        alert(
+          "No package was found. The training balance cannot be changed safely.",
+        );
+        return;
+      }
+
+      previousPackageNumbers = getPackageNumbers(currentPackage);
+      let nextUsed = previousPackageNumbers.usedSessions;
+      let nextRemaining = previousPackageNumbers.remainingSessions;
+
+      if (oldCountsAgainstTrainingPackage && !nextCountsAgainstTrainingPackage) {
+        nextUsed = Math.max(previousPackageNumbers.usedSessions - 1, 0);
+        nextRemaining = previousPackageNumbers.remainingSessions + 1;
+      }
+
+      if (!oldCountsAgainstTrainingPackage && nextCountsAgainstTrainingPackage) {
+        if (previousPackageNumbers.remainingSessions <= 0) {
+          alert(
+            "This client has no remaining training sessions. Add or fix sessions before marking this as a completed training session.",
+          );
+          return;
+        }
+
+        nextUsed = previousPackageNumbers.usedSessions + 1;
+        nextRemaining = previousPackageNumbers.remainingSessions - 1;
+      }
+
+      const confirmed = window.confirm(
+        oldCountsAgainstTrainingPackage &&
+          !nextCountsAgainstTrainingPackage
+          ? `This record will stop counting as a completed training session.\n\nOne training session will be returned.\nRemaining: ${previousPackageNumbers.remainingSessions} -> ${nextRemaining}`
+          : `This record will count as a completed training session.\n\nOne training session will be deducted.\nRemaining: ${previousPackageNumbers.remainingSessions} -> ${nextRemaining}`,
+      );
+
+      if (!confirmed) return;
+
+      setSavingSessionHistoryId(log.id);
+
+      const { data: updatedPackage, error: packageError } = await supabase
+        .from("session_packages")
+        .update({
+          used_sessions: nextUsed,
+          remaining_sessions: nextRemaining,
+          status: nextRemaining <= 0 ? "completed" : "active",
+        })
+        .eq("id", currentPackage.id)
+        .eq(
+          "remaining_sessions",
+          previousPackageNumbers.remainingSessions,
+        )
+        .eq("used_sessions", previousPackageNumbers.usedSessions)
+        .select("id")
+        .maybeSingle();
+
+      if (packageError) {
+        alert(packageError.message);
+        setSavingSessionHistoryId(null);
+        return;
+      }
+
+      if (!updatedPackage) {
+        alert(
+          "The package balance changed before this edit was saved. Reload the client and try again.",
+        );
+        setSavingSessionHistoryId(null);
+        await fetchClientDetail();
+        return;
+      }
+
+      nextRemainingAfter = nextRemaining;
+    } else {
+      setSavingSessionHistoryId(log.id);
+    }
+
+    if (
+      editSessionType === "nutrition_follow_up" &&
+      currentPackage &&
+      !trainingBalanceChanges
+    ) {
+      nextRemainingAfter = getPackageNumbers(currentPackage).remainingSessions;
+    }
+
+    const createdAtIso = new Date(editSessionDateTime).toISOString();
+
+    const { error: historyError } = await supabase
+      .from("session_history")
+      .update({
+        trainer_id: editSessionTrainerId || null,
+        session_type: editSessionType,
+        status: editSessionStatus,
+        created_at: createdAtIso,
+        message: editSessionMessage.trim() || null,
+        trainer_note: editSessionNote.trim() || null,
+        remaining_after: nextRemainingAfter,
+      })
+      .eq("id", log.id)
+      .eq("client_id", clientId);
+
+    if (historyError) {
+      if (
+        trainingBalanceChanges &&
+        currentPackage &&
+        previousPackageNumbers
+      ) {
+        await supabase
+          .from("session_packages")
+          .update({
+            used_sessions: previousPackageNumbers.usedSessions,
+            remaining_sessions: previousPackageNumbers.remainingSessions,
+            status:
+              previousPackageNumbers.remainingSessions <= 0
+                ? "completed"
+                : "active",
+          })
+          .eq("id", currentPackage.id);
+      }
+
+      alert(`Session history was not saved: ${historyError.message}`);
+      setSavingSessionHistoryId(null);
+      return;
+    }
+
+    alert(
+      editSessionType === "nutrition_follow_up"
+        ? "Nutrition follow-up updated. Training sessions were not deducted."
+        : editSessionStatus === "success"
+          ? "Training session updated."
+          : "Session corrected. The record no longer counts as a completed training session.",
+    );
+
+    cancelEditSessionHistory();
+    await fetchClientDetail();
+    setSavingSessionHistoryId(null);
+  }
+
   async function toggleClientStatus() {
     if (!client) return;
 
@@ -1628,6 +1922,18 @@ function AdminClientDetailPageContent() {
 
   const activePackageNumbers = getPackageNumbers(activePackage);
   const purchaseHistory = packagePurchases;
+  const nutritionFollowAllowance = getNutritionFollowAllowance(
+    purchases,
+    packages,
+  );
+  const nutritionFollowRemaining = Math.max(
+    nutritionFollowAllowance - nutritionFollowUsed,
+    0,
+  );
+  const visibleSessionHistory = showCorrectedSessions
+    ? sessionHistory
+    : sessionHistory.filter((log) => log.status === "success");
+
   return (
     <main className="min-h-screen bg-black p-4 text-white md:p-6">
       <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
@@ -2145,7 +2451,7 @@ function AdminClientDetailPageContent() {
             </section>
           </section>
 
-          <section className="mb-6 grid gap-4 md:grid-cols-5">
+          <section className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
             <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-2xl backdrop-blur">
               <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
                 Current Package Sessions
@@ -2170,6 +2476,18 @@ function AdminClientDetailPageContent() {
               </p>
               <p className="mt-3 text-4xl font-semibold text-yellow-400">
                 {activePackageNumbers.remainingSessions}
+              </p>
+            </div>
+
+            <div className="rounded-[2rem] border border-emerald-500/30 bg-emerald-500/10 p-5 text-center shadow-2xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                Nutrition Follow-ups
+              </p>
+              <p className="mt-3 text-4xl font-semibold text-emerald-300">
+                {nutritionFollowRemaining}
+              </p>
+              <p className="mt-2 text-xs text-gray-400">
+                {nutritionFollowUsed} used / {nutritionFollowAllowance} allowed
               </p>
             </div>
 
@@ -3125,60 +3443,279 @@ function AdminClientDetailPageContent() {
           ) : null}
 
           <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
-            <h2 className="text-2xl font-semibold">Recent Sessions</h2>
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                  Session History
+                </p>
+                <h2 className="mt-1 text-2xl font-semibold">Recent Sessions</h2>
+              </div>
 
-            {sessionHistory.length === 0 ? (
+              <div className="flex flex-col items-start gap-3 md:items-end">
+                <div className="rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">
+                  Nutrition follow-ups: {nutritionFollowUsed} used /{" "}
+                  {nutritionFollowAllowance} allowed /{" "}
+                  {nutritionFollowRemaining} remaining
+                </div>
+
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShowCorrectedSessions((current) => !current)
+                    }
+                    className="rounded-xl border border-white/20 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:border-yellow-400 hover:text-yellow-300"
+                  >
+                    {showCorrectedSessions
+                      ? "Hide Corrected Records"
+                      : "Show Corrected Records"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {visibleSessionHistory.length === 0 ? (
               <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm font-normal text-gray-400">
                 No session history yet.
               </p>
             ) : (
               <div className="mt-5 space-y-3">
-                {sessionHistory.map((log) => (
-                  <div
-                    key={log.id}
-                    className="rounded-2xl border border-white/10 bg-black/40 p-4"
-                  >
-                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                      <div>
-                        <p className="font-semibold text-yellow-400">
-                          {log.status}
-                        </p>
+                {visibleSessionHistory.map((log) => {
+                  const isEditing = editingSessionId === log.id;
 
-                        <p className="mt-1 text-sm font-normal text-gray-400">
-                          Trainer: {log.trainer_name}
-                        </p>
-                      </div>
+                  return (
+                    <div
+                      key={log.id}
+                      className={`rounded-2xl border p-4 ${
+                        isEditing
+                          ? "border-cyan-400/50 bg-cyan-400/10"
+                          : "border-white/10 bg-black/40"
+                      }`}
+                    >
+                      {isEditing ? (
+                        <div>
+                          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <h3 className="text-lg font-semibold text-cyan-300">
+                              Edit Session
+                            </h3>
+                            <p className="text-xs text-gray-400">Session ID: {log.id}</p>
+                          </div>
 
-                      <p className="text-sm font-normal text-gray-400">
-                        {formatDateTime(log.created_at)}
-                      </p>
+                          <div className="mt-4 grid gap-4 md:grid-cols-2">
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Date & Time
+                              </span>
+                              <input
+                                type="datetime-local"
+                                value={editSessionDateTime}
+                                onChange={(event) =>
+                                  setEditSessionDateTime(event.target.value)
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300"
+                              />
+                            </label>
+
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Trainer / Nutrition Coach
+                              </span>
+                              <select
+                                value={editSessionTrainerId}
+                                onChange={(event) =>
+                                  setEditSessionTrainerId(event.target.value)
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-white px-4 py-3 text-sm text-black outline-none focus:border-cyan-300"
+                              >
+                                <option value="">Admin / Manual</option>
+                                {salesPeople.map((person) => (
+                                  <option key={person.id} value={person.id}>
+                                    {person.full_name || "Unnamed Staff"}
+                                    {person.role === "nutrition_coach"
+                                      ? " (Nutrition Coach)"
+                                      : " (Trainer)"}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Session Type
+                              </span>
+                              <select
+                                value={editSessionType}
+                                onChange={(event) =>
+                                  setEditSessionType(
+                                    event.target.value as SessionType,
+                                  )
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-white px-4 py-3 text-sm text-black outline-none focus:border-cyan-300"
+                              >
+                                <option value="training">
+                                  Training Session
+                                </option>
+                                <option value="nutrition_follow_up">
+                                  Nutrition Follow-up
+                                </option>
+                              </select>
+                              <p className="mt-2 text-xs leading-5 text-gray-400">
+                                Nutrition follow-ups do not reduce training
+                                sessions.
+                              </p>
+                            </label>
+
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Status
+                              </span>
+                              <select
+                                value={editSessionStatus}
+                                onChange={(event) =>
+                                  setEditSessionStatus(event.target.value)
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-white px-4 py-3 text-sm text-black outline-none focus:border-cyan-300"
+                              >
+                                <option value="success">Completed</option>
+                                <option value="reversed">Reverse Duplicate</option>
+                                <option value="cancelled">Cancelled</option>
+                                <option value="failed">Failed</option>
+                              </select>
+                            </label>
+
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Message
+                              </span>
+                              <input
+                                value={editSessionMessage}
+                                onChange={(event) =>
+                                  setEditSessionMessage(event.target.value)
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300"
+                                placeholder="Optional system message"
+                              />
+                            </label>
+                          </div>
+
+                          <label className="mt-4 block">
+                            <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                              Session Note
+                            </span>
+                            <textarea
+                              value={editSessionNote}
+                              onChange={(event) =>
+                                setEditSessionNote(event.target.value)
+                              }
+                              className="min-h-28 w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300"
+                              placeholder="Optional trainer note"
+                            />
+                          </label>
+
+                          <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                            <button
+                              type="button"
+                              onClick={() => saveSessionHistoryEdit(log)}
+                              disabled={savingSessionHistoryId === log.id}
+                              className="rounded-2xl bg-cyan-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-cyan-300 disabled:opacity-60"
+                            >
+                              {savingSessionHistoryId === log.id
+                                ? "Saving..."
+                                : "Save Session"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={cancelEditSessionHistory}
+                              disabled={savingSessionHistoryId === log.id}
+                              className="rounded-2xl border border-white/20 px-5 py-3 text-sm font-semibold uppercase text-white transition hover:bg-white/10 disabled:opacity-60"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div>
+                              <div className="flex flex-wrap gap-2">
+                                <span
+                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${getStatusClass(
+                                    log.status,
+                                  )}`}
+                                >
+                                  {log.status === "success"
+                                    ? "Completed"
+                                    : log.status}
+                                </span>
+
+                                <span
+                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+                                    log.session_type === "nutrition_follow_up"
+                                      ? "bg-emerald-400/15 text-emerald-300"
+                                      : "bg-yellow-400/15 text-yellow-300"
+                                  }`}
+                                >
+                                  {log.session_type === "nutrition_follow_up"
+                                    ? "Nutrition Follow-up"
+                                    : "Training Session"}
+                                </span>
+                              </div>
+
+                              <p className="mt-2 text-sm text-gray-400">
+                                Staff: {log.trainer_name}
+                              </p>
+                            </div>
+
+                            <div className="flex flex-col items-start gap-3 md:items-end">
+                              <p className="text-sm text-gray-400">
+                                {formatDateTime(log.created_at)}
+                              </p>
+
+                              {isAdmin ? (
+                                <button
+                                  type="button"
+                                  onClick={() => startEditSessionHistory(log)}
+                                  className="rounded-xl border border-cyan-400 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-cyan-300 transition hover:bg-cyan-400 hover:text-black"
+                                >
+                                  Edit Session
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <p className="mt-3 text-sm text-gray-300">
+                            {log.session_type === "nutrition_follow_up"
+                              ? "Training Balance (unchanged): "
+                              : "Training Remaining After: "}
+                            <span className="font-semibold text-yellow-400">
+                              {log.remaining_after ?? "-"}
+                            </span>
+                          </p>
+
+                          {log.message ? (
+                            <p className="mt-2 text-sm text-gray-400">
+                              {log.message}
+                            </p>
+                          ) : null}
+
+                          {log.trainer_note ? (
+                            <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
+                              <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                                {log.session_type === "nutrition_follow_up"
+                                  ? "Nutrition Follow-up Note"
+                                  : "Training Note"}
+                              </p>
+                              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
+                                {log.trainer_note}
+                              </p>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
                     </div>
-
-                    <p className="mt-2 text-sm font-normal text-gray-300">
-                      Remaining After:{" "}
-                      <span className="text-yellow-400">
-                        {log.remaining_after ?? "-"}
-                      </span>
-                    </p>
-
-                    {log.message ? (
-                      <p className="mt-2 text-sm text-gray-400">
-                        {log.message}
-                      </p>
-                    ) : null}
-
-                    {log.trainer_note ? (
-                      <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
-                        <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
-                          Session Note
-                        </p>
-                        <p className="mt-2 whitespace-pre-wrap text-sm font-normal leading-6 text-yellow-100">
-                          {log.trainer_note}
-                        </p>
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

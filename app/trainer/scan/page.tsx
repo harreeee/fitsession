@@ -12,9 +12,12 @@ type ScanResult = {
   message: string;
 };
 
+type SessionType = "training" | "nutrition_follow_up";
+
 type TrainerHistoryLog = {
   id: string;
   client_id: string;
+  session_type: SessionType | null;
   status: string;
   message: string | null;
   trainer_note: string | null;
@@ -35,27 +38,15 @@ type TrainerProfile = {
   phone: string | null;
 };
 
-type ClientRow = {
-  id: string;
-  profile_id: string | null;
-  full_name: string;
-  email: string | null;
-  qr_token: string;
-  status: string | null;
-};
-
-type SessionPackageRow = {
-  id: string;
+type RecordSessionRpcRow = {
+  history_id: string;
   client_id: string;
-  total_sessions: number | null;
-  used_sessions: number | null;
-  remaining_sessions: number | null;
-  status: string | null;
-  created_at: string | null;
-};
-
-type CreatedSessionHistoryRow = {
-  id: string;
+  client_name: string;
+  session_type: SessionType;
+  remaining_after: number | null;
+  nutrition_allowed: number;
+  nutrition_used: number;
+  nutrition_remaining: number;
 };
 
 const MOTIVATION_QUOTES = [
@@ -173,15 +164,6 @@ function formatTime(value: string | null) {
   });
 }
 
-function toNumber(value: number | string | null | undefined) {
-  if (value === null || value === undefined || value === "") return null;
-
-  const numberValue = Number(value);
-  if (Number.isNaN(numberValue)) return null;
-
-  return numberValue;
-}
-
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
 
@@ -229,8 +211,13 @@ export default function TrainerScanPage() {
   const [editPassword, setEditPassword] = useState("");
 
   const [sessionsToday, setSessionsToday] = useState(0);
+  const [trainingSessionsToday, setTrainingSessionsToday] = useState(0);
+  const [nutritionFollowsToday, setNutritionFollowsToday] = useState(0);
   const [clientsToday, setClientsToday] = useState(0);
   const [lastScan, setLastScan] = useState<string | null>(null);
+  const [scanMode, setScanMode] = useState<SessionType>("training");
+  const [lastScannedType, setLastScannedType] =
+    useState<SessionType>("training");
 
   const [historyLogs, setHistoryLogs] = useState<TrainerHistoryLog[]>([]);
   const [clientMap, setClientMap] = useState<Map<string, ClientInfo>>(new Map());
@@ -282,7 +269,8 @@ export default function TrainerScanPage() {
       console.log("Scanner stop error:", error);
     } finally {
       scannerRef.current = null;
-      scanningLockRef.current = false;
+      // Keep the scan lock active until the current scan has fully finished.
+      // startScanner() resets it before a new camera session begins.
       setScannerStarted(false);
     }
   }
@@ -336,7 +324,7 @@ export default function TrainerScanPage() {
 
     const { data: todayLogs, error: todayLogsError } = await supabase
       .from("session_history")
-      .select("id, client_id, created_at, status")
+      .select("id, client_id, created_at, status, session_type")
       .eq("trainer_id", userId)
       .eq("status", "success")
       .gte("created_at", today.toISOString())
@@ -351,17 +339,31 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const logsToday = todayLogs || [];
+    const logsToday = (todayLogs || []) as Array<{
+      id: string;
+      client_id: string;
+      created_at: string;
+      status: string;
+      session_type: SessionType | null;
+    }>;
     const uniqueClients = new Set(logsToday.map((log) => log.client_id));
+    const trainingCount = logsToday.filter(
+      (log) => (log.session_type || "training") === "training",
+    ).length;
+    const nutritionCount = logsToday.filter(
+      (log) => log.session_type === "nutrition_follow_up",
+    ).length;
 
     setSessionsToday(logsToday.length);
+    setTrainingSessionsToday(trainingCount);
+    setNutritionFollowsToday(nutritionCount);
     setClientsToday(uniqueClients.size);
     setLastScan(logsToday[0]?.created_at || null);
 
     const { data: recentLogs, error: recentLogsError } = await supabase
       .from("session_history")
       .select(
-        "id, client_id, status, message, trainer_note, remaining_after, created_at"
+        "id, client_id, session_type, status, message, trainer_note, remaining_after, created_at"
       )
       .eq("trainer_id", userId)
       .order("created_at", { ascending: false })
@@ -519,8 +521,17 @@ export default function TrainerScanPage() {
           scanningLockRef.current = true;
 
           const qrToken = extractQrToken(decodedText);
-          await stopScanner();
-          await markSession(qrToken);
+
+          try {
+            await stopScanner();
+            await markSession(qrToken, scanMode);
+          } catch (error) {
+            console.error("Scan processing error:", error);
+            setResult({
+              type: "error",
+              message: getErrorMessage(error) || "Unable to process this scan.",
+            });
+          }
         },
         () => {}
       );
@@ -537,142 +548,7 @@ export default function TrainerScanPage() {
     }
   }
 
-  async function findSessionPackage(clientId: string) {
-    const { data: activePackage, error: activePackageError } = await supabase
-      .from("session_packages")
-      .select(
-        "id, client_id, total_sessions, used_sessions, remaining_sessions, status, created_at"
-      )
-      .eq("client_id", clientId)
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (activePackageError) throw activePackageError;
-    if (activePackage) return activePackage as SessionPackageRow;
-
-    const { data: latestPackage, error: latestPackageError } = await supabase
-      .from("session_packages")
-      .select(
-        "id, client_id, total_sessions, used_sessions, remaining_sessions, status, created_at"
-      )
-      .eq("client_id", clientId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (latestPackageError) throw latestPackageError;
-    return latestPackage as SessionPackageRow | null;
-  }
-
-  async function createHistoryRecord({
-    client,
-    sessionPackage,
-    currentTrainerId,
-    newRemaining,
-  }: {
-    client: ClientRow;
-    sessionPackage: SessionPackageRow;
-    currentTrainerId: string;
-    newRemaining: number;
-  }) {
-    const historyMessage = `Session scanned by ${
-      trainerName || trainerEmail || "staff"
-    }.`;
-
-    const fullInsert = await supabase
-      .from("session_history")
-      .insert({
-        client_id: client.id,
-        trainer_id: currentTrainerId,
-        package_id: sessionPackage.id,
-        status: "success",
-        message: historyMessage,
-        remaining_after: newRemaining,
-        trainer_note: null,
-      })
-      .select("id")
-      .single();
-
-    if (!fullInsert.error && fullInsert.data) {
-      return fullInsert.data as CreatedSessionHistoryRow;
-    }
-
-    console.error("session_history full insert failed:", fullInsert.error);
-
-    const withoutTrainerNote = await supabase
-      .from("session_history")
-      .insert({
-        client_id: client.id,
-        trainer_id: currentTrainerId,
-        package_id: sessionPackage.id,
-        status: "success",
-        message: historyMessage,
-        remaining_after: newRemaining,
-      })
-      .select("id")
-      .single();
-
-    if (!withoutTrainerNote.error && withoutTrainerNote.data) {
-      return withoutTrainerNote.data as CreatedSessionHistoryRow;
-    }
-
-    console.error(
-      "session_history without trainer_note failed:",
-      withoutTrainerNote.error
-    );
-
-    const withoutPackageId = await supabase
-      .from("session_history")
-      .insert({
-        client_id: client.id,
-        trainer_id: currentTrainerId,
-        status: "success",
-        message: historyMessage,
-        remaining_after: newRemaining,
-        trainer_note: null,
-      })
-      .select("id")
-      .single();
-
-    if (!withoutPackageId.error && withoutPackageId.data) {
-      return withoutPackageId.data as CreatedSessionHistoryRow;
-    }
-
-    console.error(
-      "session_history without package_id failed:",
-      withoutPackageId.error
-    );
-
-    const basicInsert = await supabase
-      .from("session_history")
-      .insert({
-        client_id: client.id,
-        trainer_id: currentTrainerId,
-        status: "success",
-        message: historyMessage,
-        remaining_after: newRemaining,
-      })
-      .select("id")
-      .single();
-
-    if (!basicInsert.error && basicInsert.data) {
-      return basicInsert.data as CreatedSessionHistoryRow;
-    }
-
-    console.error("session_history basic insert failed:", basicInsert.error);
-
-    throw new Error(
-      `Could not create history. ${
-        fullInsert.error?.message || "full insert failed"
-      } | ${withoutTrainerNote.error?.message || "without trainer_note failed"} | ${
-        withoutPackageId.error?.message || "without package_id failed"
-      } | ${basicInsert.error?.message || "basic insert failed"}`
-    );
-  }
-
-  async function markSession(qrToken: string) {
+  async function markSession(qrToken: string, sessionType: SessionType) {
     const cleanQrToken = qrToken.trim();
 
     setShowNoteBox(false);
@@ -685,17 +561,6 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const { data: authData, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !authData.user) {
-      setResult({
-        type: "error",
-        message: "Could not confirm login. Please log in again.",
-      });
-      return;
-    }
-
-    const currentTrainerId = authData.user.id;
     const cleanTrainerRole = normalizeScannerRole(trainerRole);
 
     if (!canScanClients(cleanTrainerRole)) {
@@ -707,156 +572,71 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const { data: clientData, error: clientError } = await supabase
-      .from("clients")
-      .select("id, profile_id, full_name, email, qr_token, status")
-      .eq("qr_token", cleanQrToken)
-      .maybeSingle();
-
-    if (clientError) {
+    if (
+      sessionType === "nutrition_follow_up" &&
+      cleanTrainerRole !== "nutrition_coach" &&
+      cleanTrainerRole !== "admin"
+    ) {
       setResult({
         type: "error",
-        message: `Client lookup error: ${clientError.message}`,
+        message:
+          "Only a Nutrition Coach or Admin can record a nutrition follow-up.",
       });
       return;
     }
-
-    const client = clientData as ClientRow | null;
-
-    if (!client) {
-      setResult({
-        type: "error",
-        message: `Invalid QR code. Scanned: ${cleanQrToken}`,
-      });
-      return;
-    }
-
-    if (client.status && client.status !== "active") {
-      setResult({ type: "error", message: "Client is inactive." });
-      return;
-    }
-
-    let sessionPackage: SessionPackageRow | null = null;
 
     try {
-      sessionPackage = await findSessionPackage(client.id);
-    } catch (error) {
-      setResult({
-        type: "error",
-        message: `Package lookup error: ${getErrorMessage(error)}`,
+      const { data, error } = await supabase.rpc("record_staff_session", {
+        p_qr_token: cleanQrToken,
+        p_session_type: sessionType,
       });
-      return;
-    }
 
-    if (!sessionPackage) {
-      setResult({
-        type: "error",
-        message:
-          "No package found for this client. Open the client profile and add/renew a session package first.",
-      });
-      return;
-    }
+      if (error) {
+        const lowerMessage = error.message.toLowerCase();
 
-    const currentUsed = toNumber(sessionPackage.used_sessions) ?? 0;
-    const totalSessions = toNumber(sessionPackage.total_sessions) ?? 0;
-    const currentRemaining =
-      toNumber(sessionPackage.remaining_sessions) ??
-      Math.max(totalSessions - currentUsed, 0);
+        if (
+          lowerMessage.includes("record_staff_session") ||
+          lowerMessage.includes("function") ||
+          lowerMessage.includes("schema cache")
+        ) {
+          throw new Error(
+            "The secure session function is not installed yet. Run the nutrition follow-up SQL migration in Supabase, then reload the app.",
+          );
+        }
 
-    if (currentRemaining <= 0) {
-      setResult({ type: "error", message: "No sessions remaining." });
-      return;
-    }
+        throw error;
+      }
 
-    const thirtyMinutesAgo = new Date();
-    thirtyMinutesAgo.setMinutes(thirtyMinutesAgo.getMinutes() - 30);
+      const rawRow = Array.isArray(data) ? data[0] : data;
+      const row = rawRow as RecordSessionRpcRow | null;
 
-    const { data: recentScan, error: recentScanError } = await supabase
-      .from("session_history")
-      .select("id")
-      .eq("client_id", client.id)
-      .eq("status", "success")
-      .gte("created_at", thirtyMinutesAgo.toISOString())
-      .limit(1)
-      .maybeSingle();
+      if (!row?.history_id) {
+        throw new Error("The session was not recorded. No result was returned.");
+      }
 
-    if (recentScanError) {
-      setResult({ type: "error", message: recentScanError.message });
-      return;
-    }
-
-    if (recentScan) {
-      setResult({
-        type: "error",
-        message:
-          "Duplicate scan detected. This client was already marked within the last 30 minutes.",
-      });
-      return;
-    }
-
-    const newUsed = currentUsed + 1;
-    const newRemaining = currentRemaining - 1;
-
-    const { error: updateError, count: updatedPackageCount } = await supabase
-      .from("session_packages")
-      .update(
-        {
-          used_sessions: newUsed,
-          remaining_sessions: newRemaining,
-          status: newRemaining <= 0 ? "completed" : "active",
-        },
-        { count: "exact" }
-      )
-      .eq("id", sessionPackage.id);
-
-    if (updateError) {
-      setResult({
-        type: "error",
-        message: `Package update failed, so the session was not recorded. ${updateError.message}. Check Supabase UPDATE policy for nutrition_coach on session_packages.`,
-      });
-      return;
-    }
-
-    if (updatedPackageCount === 0) {
-      setResult({
-        type: "error",
-        message:
-          "Package update failed because no session package row was updated. This usually means Supabase RLS is blocking this role. Allow trainer and nutrition_coach to update session_packages.",
-      });
-      return;
-    }
-
-    let createdHistory: CreatedSessionHistoryRow | null = null;
-
-    try {
-      createdHistory = await createHistoryRecord({
-        client,
-        sessionPackage,
-        currentTrainerId,
-        newRemaining,
-      });
-    } catch (error) {
-      setResult({
-        type: "error",
-        message: `Session was deducted, but history was not saved: ${getErrorMessage(
-          error
-        )}`,
-      });
-      await fetchTrainerStats(currentTrainerId);
-      return;
-    }
-
-    setResult({
-      type: "success",
-      message: `Success! ${client.full_name} now has ${newRemaining} sessions remaining.`,
-    });
-
-    if (createdHistory?.id) {
-      setLastScannedHistoryId(createdHistory.id);
+      setLastScannedHistoryId(row.history_id);
+      setLastScannedType(row.session_type || sessionType);
       setShowNoteBox(true);
-    }
 
-    await fetchTrainerStats(currentTrainerId);
+      if (row.session_type === "nutrition_follow_up") {
+        setResult({
+          type: "success",
+          message: `Nutrition follow-up recorded for ${row.client_name}. Training sessions were not deducted. Nutrition follow-ups used: ${row.nutrition_used}/${row.nutrition_allowed}. Remaining: ${row.nutrition_remaining}.`,
+        });
+      } else {
+        setResult({
+          type: "success",
+          message: `Training session recorded for ${row.client_name}. ${row.remaining_after ?? 0} training sessions remaining.`,
+        });
+      }
+
+      await fetchTrainerStats(trainerId);
+    } catch (error) {
+      setResult({
+        type: "error",
+        message: getErrorMessage(error) || "Unable to process this scan.",
+      });
+    }
   }
 
   useEffect(() => {
@@ -1050,10 +830,10 @@ export default function TrainerScanPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                 <div className="rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4 text-center">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Sessions
+                    Paid Sessions
                   </p>
                   <p className="mt-2 text-3xl font-black text-yellow-400">
                     {sessionsToday}
@@ -1063,22 +843,34 @@ export default function TrainerScanPage() {
 
                 <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4 text-center">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Clients
+                    Training
                   </p>
                   <p className="mt-2 text-3xl font-black text-cyan-300">
-                    {clientsToday}
+                    {trainingSessionsToday}
                   </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">unique</p>
+                  <p className="mt-1 text-[11px] text-zinc-500">sessions</p>
                 </div>
 
                 <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-center">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Last
+                    Nutrition
                   </p>
-                  <p className="mt-3 text-sm font-black text-emerald-300">
-                    {formatTime(lastScan)}
+                  <p className="mt-2 text-3xl font-black text-emerald-300">
+                    {nutritionFollowsToday}
                   </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">scan</p>
+                  <p className="mt-1 text-[11px] text-zinc-500">follow-ups</p>
+                </div>
+
+                <div className="rounded-2xl border border-purple-400/20 bg-purple-400/10 p-4 text-center">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+                    Clients
+                  </p>
+                  <p className="mt-2 text-3xl font-black text-purple-300">
+                    {clientsToday}
+                  </p>
+                  <p className="mt-1 text-[11px] text-zinc-500">
+                    last {formatTime(lastScan)}
+                  </p>
                 </div>
               </div>
             </div>
@@ -1138,9 +930,51 @@ export default function TrainerScanPage() {
                   Scan Client QR
                 </h2>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-400">
-                  One clean scan. One completed session. One step closer to the
-                  client&apos;s goal.
+                  Choose the service first, then scan the client QR code.
+                  Training deducts one training session. Nutrition follow-up
+                  uses one nutrition credit and does not reduce training sessions.
                 </p>
+
+                {(trainerRole === "nutrition_coach" ||
+                  trainerRole === "admin") && (
+                  <div className="mt-4 grid max-w-xl gap-3 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setScanMode("training")}
+                      disabled={scannerStarted}
+                      className={`rounded-2xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                        scanMode === "training"
+                          ? "border-yellow-400 bg-yellow-400 text-black"
+                          : "border-white/15 bg-black/30 text-white hover:border-yellow-400/60"
+                      }`}
+                    >
+                      <span className="block text-xs font-black uppercase tracking-widest">
+                        Training Session
+                      </span>
+                      <span className="mt-1 block text-xs opacity-75">
+                        Deduct 1 training session
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setScanMode("nutrition_follow_up")}
+                      disabled={scannerStarted}
+                      className={`rounded-2xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                        scanMode === "nutrition_follow_up"
+                          ? "border-emerald-300 bg-emerald-300 text-black"
+                          : "border-white/15 bg-black/30 text-white hover:border-emerald-300/60"
+                      }`}
+                    >
+                      <span className="block text-xs font-black uppercase tracking-widest">
+                        Nutrition Follow-up
+                      </span>
+                      <span className="mt-1 block text-xs opacity-75">
+                        1 follow-up for every 6 purchased sessions
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               <button
@@ -1152,7 +986,11 @@ export default function TrainerScanPage() {
                     : "bg-yellow-400 text-black hover:bg-yellow-300"
                 }`}
               >
-                {scannerStarted ? "Stop Scanner" : "Start Scanner"}
+                {scannerStarted
+                  ? "Stop Scanner"
+                  : scanMode === "nutrition_follow_up"
+                    ? "Scan Nutrition"
+                    : "Scan Training"}
               </button>
             </div>
 
@@ -1171,23 +1009,32 @@ export default function TrainerScanPage() {
               }`}
             >
               {result.message ||
-                "Ready to scan. Use the camera to scan a client QR code and mark a session."}
+                scanMode === "nutrition_follow_up"
+                  ? "Nutrition mode selected. Scan the client QR code. Training sessions will not be deducted."
+                  : "Training mode selected. Scan the client QR code to deduct one training session."}
             </div>
 
             {showNoteBox ? (
               <div className="mt-5 rounded-3xl border border-yellow-400/40 bg-black/75 p-5">
                 <h3 className="text-xl font-black text-yellow-400">
-                  Add Trainer Note
+                  {lastScannedType === "nutrition_follow_up"
+                    ? "Add Nutrition Follow-up Note"
+                    : "Add Training Note"}
                 </h3>
                 <p className="mt-2 text-sm leading-6 text-zinc-400">
-                  Make the next session easier: training focus, injury flags,
-                  client energy, or next-session plan.
+                  {lastScannedType === "nutrition_follow_up"
+                    ? "Record nutrition progress, adherence, measurements, and the next follow-up plan."
+                    : "Record training focus, injury flags, client energy, and the next-session plan."}
                 </p>
 
                 <textarea
                   value={trainerNote}
                   onChange={(event) => setTrainerNote(event.target.value)}
-                  placeholder="Example: Lower body today. Client had mild knee discomfort. Keep squat depth controlled next session."
+                  placeholder={
+                    lastScannedType === "nutrition_follow_up"
+                      ? "Example: Protein target reviewed. Client is averaging 3 meals. Follow up on hydration next week."
+                      : "Example: Lower body today. Client had mild knee discomfort. Keep squat depth controlled next session."
+                  }
                   className="mt-4 min-h-32 w-full rounded-2xl border border-yellow-500/30 bg-black/80 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
                 />
 
@@ -1362,9 +1209,22 @@ export default function TrainerScanPage() {
                   >
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div>
-                        <p className="text-lg font-black text-white">
-                          {client?.full_name || "Unknown Client"}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-lg font-black text-white">
+                            {client?.full_name || "Unknown Client"}
+                          </p>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${
+                              log.session_type === "nutrition_follow_up"
+                                ? "bg-emerald-400/15 text-emerald-300"
+                                : "bg-yellow-400/15 text-yellow-300"
+                            }`}
+                          >
+                            {log.session_type === "nutrition_follow_up"
+                              ? "Nutrition Follow-up"
+                              : "Training"}
+                          </span>
+                        </div>
                         <p className="mt-1 text-xs text-zinc-500">
                           {client?.email || "No client email"}
                         </p>
@@ -1383,13 +1243,20 @@ export default function TrainerScanPage() {
                     <div className="mt-4 grid gap-3 md:grid-cols-3">
                       <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
                         <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                          Remaining
+                          {log.session_type === "nutrition_follow_up"
+                            ? "Training Balance"
+                            : "Remaining"}
                         </p>
                         <p className="mt-1 text-xl font-black text-cyan-300">
                           {log.remaining_after === null
                             ? "N/A"
                             : log.remaining_after}
                         </p>
+                        {log.session_type === "nutrition_follow_up" ? (
+                          <p className="mt-1 text-[10px] text-zinc-500">
+                            unchanged
+                          </p>
+                        ) : null}
                       </div>
 
                       <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 md:col-span-2">
@@ -1405,7 +1272,9 @@ export default function TrainerScanPage() {
                     {log.trainer_note ? (
                       <div className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4">
                         <p className="text-xs font-bold uppercase tracking-widest text-yellow-400">
-                          Trainer Note
+                          {log.session_type === "nutrition_follow_up"
+                            ? "Nutrition Note"
+                            : "Training Note"}
                         </p>
                         <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
                           {log.trainer_note}
