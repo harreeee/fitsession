@@ -16,6 +16,7 @@ type AdminRole = "admin" | "manager";
 type TransactionType = "income" | "expense" | "cash_adjustment";
 type TabKey = "overview" | "journal" | "debt" | "ledger" | "profit_loss";
 type DebtView = "receivable" | "payable";
+type JournalEntryMode = "regular" | "pay_payable";
 
 type ReportGroup =
   | "sales_revenue"
@@ -62,7 +63,6 @@ type BusinessTransaction = {
   accounting_month: string | null;
   report_group: ReportGroup | null;
   counterparty: string | null;
-  document_no: string | null;
   payable_id: string | null;
   created_at: string;
 };
@@ -105,6 +105,24 @@ type ClientDebt = {
   clients: ClientRelation | ClientRelation[] | null;
 };
 
+type ReceivableEditDraft = {
+  planName: string;
+  balanceDue: string;
+  debtDeadline: string;
+  debtMonth: string;
+};
+
+type PayableEditDraft = {
+  accountingMonth: string;
+  payableType: PayableType;
+  expenseGroup: ExpenseGroup;
+  counterparty: string;
+  title: string;
+  totalAmount: string;
+  dueDate: string;
+  notes: string;
+};
+
 type ProfitLoss = {
   salesRevenue: number;
   revenueDeductions: number;
@@ -122,6 +140,8 @@ type ProfitLoss = {
   profitBeforeTax: number;
   incomeTaxCurrent: number;
   incomeTaxDeferred: number;
+  recordedIncomeTaxCurrent: number;
+  taxRate: number | null;
   netProfit: number;
   unclassifiedCount: number;
 };
@@ -253,23 +273,23 @@ const TABS: Array<{ key: TabKey; label: string; description: string }> = [
   },
   {
     key: "journal",
-    label: "Sổ nhật ký",
-    description: "Mọi khoản thực thu, thực chi và điều chỉnh",
+    label: "Nhật ký thu chi",
+    description: "Theo dõi tiền đã thu, đã chi và điều chỉnh",
   },
   {
     key: "debt",
-    label: "Sổ công nợ",
-    description: "Công nợ khách hàng và công nợ doanh nghiệp",
+    label: "Theo dõi công nợ",
+    description: "Khách hàng nợ mình và các khoản mình phải chi",
   },
   {
     key: "ledger",
-    label: "Sổ kế toán",
-    description: "Phân loại theo nhóm tài khoản quản trị",
+    label: "Tổng hợp kế toán",
+    description: "Tổng hợp doanh thu và chi phí theo nhóm",
   },
   {
     key: "profit_loss",
-    label: "Sổ lãi lỗ",
-    description: "Báo cáo kết quả hoạt động kinh doanh",
+    label: "Báo cáo lãi / lỗ",
+    description: "Xem doanh thu, chi phí và lợi nhuận",
   },
 ];
 
@@ -312,6 +332,13 @@ function toNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseOptionalTaxRate(value: string | null | undefined) {
+  if (value === null || value === undefined || value.trim() === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return null;
+  return parsed;
+}
+
 function money(value: unknown) {
   return toNumber(value).toLocaleString("en-CA", {
     style: "currency",
@@ -348,6 +375,13 @@ function getReportGroupLabel(group: ReportGroup | null | undefined) {
 
 function getPayableTypeLabel(value: PayableType) {
   return PAYABLE_TYPE_OPTIONS.find((option) => option.value === value)?.label || value;
+}
+
+function getPayableStatusLabel(status: BusinessPayable["status"]) {
+  if (status === "paid") return "Đã trả đủ";
+  if (status === "partial") return "Đã trả một phần";
+  if (status === "cancelled") return "Đã hủy";
+  return "Chưa trả";
 }
 
 function getTransactionAccountingMonth(transaction: BusinessTransaction) {
@@ -395,6 +429,7 @@ function buildProfitLoss(
   monthKey: string,
   transactions: BusinessTransaction[],
   payables: BusinessPayable[],
+  taxRate: number | null,
 ): ProfitLoss {
   const currentTransactions = transactions.filter(
     (transaction) => getTransactionAccountingMonth(transaction) === monthKey,
@@ -449,8 +484,12 @@ function buildProfitLoss(
     sums.admin_expense;
   const otherProfit = sums.other_income - sums.other_expense;
   const profitBeforeTax = operatingProfit + otherProfit;
-  const netProfit =
-    profitBeforeTax - sums.income_tax_current - sums.income_tax_deferred;
+  const recordedIncomeTaxCurrent = sums.income_tax_current;
+  const incomeTaxCurrent =
+    taxRate === null
+      ? recordedIncomeTaxCurrent
+      : Math.max(profitBeforeTax, 0) * (taxRate / 100);
+  const netProfit = profitBeforeTax - incomeTaxCurrent - sums.income_tax_deferred;
 
   return {
     salesRevenue: sums.sales_revenue,
@@ -467,8 +506,10 @@ function buildProfitLoss(
     otherExpense: sums.other_expense,
     otherProfit,
     profitBeforeTax,
-    incomeTaxCurrent: sums.income_tax_current,
+    incomeTaxCurrent,
     incomeTaxDeferred: sums.income_tax_deferred,
+    recordedIncomeTaxCurrent,
+    taxRate,
     netProfit,
     unclassifiedCount,
   };
@@ -587,7 +628,10 @@ function buildProfitLossRows(current: ProfitLoss, previous: ProfitLoss): ProfitL
       bold: true,
     },
     {
-      item: "15. Chi phí thuế TNDN hiện hành",
+      item:
+        current.taxRate === null
+          ? "15. Chi phí thuế TNDN hiện hành"
+          : `15. Thuế TNDN ước tính (${current.taxRate}%)`,
       code: "51",
       note: "VII.10",
       current: current.incomeTaxCurrent,
@@ -647,6 +691,7 @@ function buildPrintableIncomeStatement(
   selectedMonth: string,
   rows: ProfitLossRow[],
   unclassifiedCount: number,
+  taxRate: number | null,
 ) {
   const bodyRows = rows
     .map(
@@ -654,7 +699,6 @@ function buildPrintableIncomeStatement(
         <tr class="${row.bold ? "bold" : ""}">
           <td>${escapeHtml(row.item)}</td>
           <td class="center">${escapeHtml(row.code)}</td>
-          <td class="center">${escapeHtml(row.note)}</td>
           <td class="number">${escapeHtml(money(row.current))}</td>
           <td class="number">${escapeHtml(money(row.previous))}</td>
         </tr>
@@ -670,20 +714,18 @@ function buildPrintableIncomeStatement(
   <title>FXA FITNESS - Báo cáo kết quả hoạt động kinh doanh</title>
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 24px; font-family: Arial, "Segoe UI", "Noto Sans", sans-serif; color: #111; background: #f3f4f6; }
+    body { margin: 0; padding: 24px; font-family: "Times New Roman", Times, serif; font-size: 16px; line-height: 1.45; color: #111; background: #f3f4f6; }
     .sheet { max-width: 1180px; margin: 0 auto; background: #fff; border: 1px solid #bbb; }
     .title { padding: 16px 12px 4px; text-align: center; font-size: 24px; font-weight: 800; text-transform: uppercase; }
-    .subtitle { padding: 0 12px 12px; text-align: center; font-size: 18px; font-weight: 800; text-transform: uppercase; }
     .period { padding: 12px; text-align: center; font-size: 14px; font-style: italic; border-top: 1px solid #bbb; border-bottom: 1px solid #bbb; }
-    .meta { padding: 10px 12px; font-size: 12px; color: #444; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .meta { padding: 10px 12px; font-size: 14px; color: #444; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
     th, td { border: 1px solid #555; padding: 6px 7px; vertical-align: middle; }
     th { background: #d9d9d9; text-align: center; font-weight: 800; }
     .center { text-align: center; white-space: nowrap; }
     .number { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
     .bold td { font-weight: 800; }
-    .warning { margin: 12px; padding: 10px; border: 1px solid #d97706; background: #fffbeb; color: #92400e; font-size: 12px; }
-    .footer { padding: 12px; color: #555; font-size: 11px; line-height: 1.5; }
+    .warning { margin: 12px; padding: 10px; border: 1px solid #d97706; background: #fffbeb; color: #92400e; font-size: 14px; }
     @page { size: A4 landscape; margin: 10mm; }
     @media print {
       body { padding: 0; background: white; }
@@ -694,29 +736,26 @@ function buildPrintableIncomeStatement(
 <body>
   <main class="sheet">
     <div class="title">BÁO CÁO KẾT QUẢ HOẠT ĐỘNG KINH DOANH</div>
-    <div class="subtitle">INCOME STATEMENT</div>
     <div class="period">${escapeHtml(monthLabel(selectedMonth))}</div>
-    <div class="meta">Đơn vị tiền tệ: CAD · Báo cáo quản trị nội bộ FXA FITNESS</div>
+    <div class="meta">Đơn vị tiền tệ: CAD · ${
+      taxRate === null ? "Không dùng thuế suất ước tính" : `Thuế suất ước tính: ${taxRate}%`
+    }</div>
     <table>
       <thead>
         <tr>
-          <th style="width: 46%">Chỉ tiêu<br/>Item</th>
-          <th style="width: 9%">Mã số<br/>Code</th>
-          <th style="width: 12%">Thuyết minh<br/>Note</th>
-          <th style="width: 16.5%">Kỳ này<br/>Current period</th>
-          <th style="width: 16.5%">Kỳ trước<br/>Prior period</th>
+          <th style="width: 55%">Chỉ tiêu</th>
+          <th style="width: 10%">Mã số</th>
+          <th style="width: 17.5%">Kỳ này</th>
+          <th style="width: 17.5%">Kỳ trước</th>
         </tr>
       </thead>
       <tbody>${bodyRows}</tbody>
     </table>
     ${
       unclassifiedCount > 0
-        ? `<div class="warning">Cảnh báo: còn ${unclassifiedCount} giao dịch trong kỳ chưa được phân loại chính thức. Hệ thống đang dùng nhóm dự phòng để không làm mất số tiền, nhưng cần rà soát trước khi khóa sổ.</div>`
+        ? `<div class="warning">Còn ${unclassifiedCount} giao dịch chưa được chọn nhóm chính thức.</div>`
         : ""
     }
-    <div class="footer">
-      Nguyên tắc quản trị: doanh thu chỉ ghi nhận từ tiền thực thu trong business_transactions; chi phí công nợ được ghi nhận theo tháng hạch toán của business_payables. Khoản thanh toán công nợ chỉ ảnh hưởng tiền mặt và không ghi nhận chi phí lần thứ hai. Báo cáo này không thay thế báo cáo thuế hoặc báo cáo tài chính pháp định.
-    </div>
   </main>
 </body>
 </html>`;
@@ -790,6 +829,8 @@ export default function AdminRevenuePage() {
   const [journalTypeFilter, setJournalTypeFilter] = useState<"all" | TransactionType>("all");
   const [journalGroupFilter, setJournalGroupFilter] = useState<"all" | "unclassified" | ReportGroup>("all");
 
+  const [journalEntryMode, setJournalEntryMode] = useState<JournalEntryMode>("regular");
+  const [selectedJournalPayableId, setSelectedJournalPayableId] = useState("");
   const [transactionType, setTransactionType] = useState<TransactionType>("income");
   const [transactionSource, setTransactionSource] = useState("package_sale");
   const [transactionTitle, setTransactionTitle] = useState("");
@@ -798,7 +839,6 @@ export default function AdminRevenuePage() {
   const [transactionAccountingMonth, setTransactionAccountingMonth] = useState(DEFAULT_MONTH);
   const [transactionReportGroup, setTransactionReportGroup] = useState<ReportGroup>("sales_revenue");
   const [transactionCounterparty, setTransactionCounterparty] = useState("");
-  const [transactionDocumentNo, setTransactionDocumentNo] = useState("");
   const [transactionNotes, setTransactionNotes] = useState("");
 
   const [payableMonth, setPayableMonth] = useState(DEFAULT_MONTH);
@@ -812,11 +852,18 @@ export default function AdminRevenuePage() {
 
   const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
-  const [debtMonthDrafts, setDebtMonthDrafts] = useState<Record<string, string>>({});
   const [classificationDrafts, setClassificationDrafts] = useState<Record<string, ReportGroup>>({});
+
+  const [editingReceivableId, setEditingReceivableId] = useState<string | null>(null);
+  const [receivableEditDraft, setReceivableEditDraft] = useState<ReceivableEditDraft | null>(null);
+  const [editingPayableId, setEditingPayableId] = useState<string | null>(null);
+  const [payableEditDraft, setPayableEditDraft] = useState<PayableEditDraft | null>(null);
+  const [taxRates, setTaxRates] = useState<Record<string, string>>({});
 
   const isAdmin = currentRole === "admin";
   const previousMonth = previousMonthKey(selectedMonth);
+  const currentTaxRate = parseOptionalTaxRate(taxRates[selectedMonth]);
+  const previousTaxRate = parseOptionalTaxRate(taxRates[previousMonth]);
 
   async function fetchData() {
     setLoading(true);
@@ -826,7 +873,7 @@ export default function AdminRevenuePage() {
       supabase
         .from("business_transactions")
         .select(
-          "id, transaction_type, source, title, amount, notes, created_by, transaction_date, accounting_month, report_group, counterparty, document_no, payable_id, created_at",
+          "id, transaction_type, source, title, amount, notes, created_by, transaction_date, accounting_month, report_group, counterparty, payable_id, created_at",
         )
         .order("transaction_date", { ascending: false })
         .order("created_at", { ascending: false }),
@@ -879,10 +926,6 @@ export default function AdminRevenuePage() {
       ),
     );
 
-    setDebtMonthDrafts(
-      Object.fromEntries(nextDebts.map((row) => [row.id, getClientDebtMonth(row)])),
-    );
-
     setPaymentDates((current) => {
       const next = { ...current };
       for (const payable of nextPayables) {
@@ -893,6 +936,18 @@ export default function AdminRevenuePage() {
 
     setLoading(false);
   }
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("fxa_accounting_tax_rates");
+      if (saved) {
+        const parsed = JSON.parse(saved) as Record<string, string>;
+        setTaxRates(parsed);
+      }
+    } catch {
+      // Bỏ qua dữ liệu trình duyệt bị lỗi; báo cáo vẫn dùng thuế đã ghi nhận thực tế.
+    }
+  }, []);
 
   useEffect(() => {
     async function protectPage() {
@@ -928,6 +983,8 @@ export default function AdminRevenuePage() {
   }, [router]);
 
   useEffect(() => {
+    if (journalEntryMode === "pay_payable") return;
+
     if (transactionType === "income") {
       setTransactionReportGroup("sales_revenue");
       if (transactionSource === "payroll" || transactionSource === "rent") {
@@ -946,16 +1003,16 @@ export default function AdminRevenuePage() {
 
     setTransactionReportGroup("cash_only");
     setTransactionSource("manual");
-  }, [transactionType]);
+  }, [transactionType, journalEntryMode]);
 
   const currentProfitLoss = useMemo(
-    () => buildProfitLoss(selectedMonth, transactions, payables),
-    [selectedMonth, transactions, payables],
+    () => buildProfitLoss(selectedMonth, transactions, payables, currentTaxRate),
+    [selectedMonth, transactions, payables, currentTaxRate],
   );
 
   const previousProfitLoss = useMemo(
-    () => buildProfitLoss(previousMonth, transactions, payables),
-    [previousMonth, transactions, payables],
+    () => buildProfitLoss(previousMonth, transactions, payables, previousTaxRate),
+    [previousMonth, transactions, payables, previousTaxRate],
   );
 
   const profitLossRows = useMemo(
@@ -1000,7 +1057,6 @@ export default function AdminRevenuePage() {
           transaction.source,
           transaction.notes || "",
           transaction.counterparty || "",
-          transaction.document_no || "",
         ]
           .join(" ")
           .toLowerCase();
@@ -1028,6 +1084,17 @@ export default function AdminRevenuePage() {
         (payable) => normalizeMonthKey(payable.accounting_month) === selectedMonth,
       ),
     [payables, selectedMonth],
+  );
+
+  const openPayables = useMemo(
+    () =>
+      payables.filter(
+        (payable) =>
+          payable.status !== "paid" &&
+          payable.status !== "cancelled" &&
+          toNumber(payable.total_amount) > toNumber(payable.paid_amount),
+      ),
+    [payables],
   );
 
   const summary = useMemo(() => {
@@ -1140,16 +1207,96 @@ export default function AdminRevenuePage() {
     return groups.filter((group) => group.total !== 0);
   }, [selectedMonthJournal, selectedPayables]);
 
+  function updateTaxRate(value: string) {
+    if (!isAdmin) {
+      setMessage("Chỉ admin được nhập thuế suất ước tính.");
+      return;
+    }
+
+    if (value !== "") {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+        setMessage("Thuế suất phải từ 0% đến 100%, hoặc để trống.");
+        return;
+      }
+    }
+
+    const next = { ...taxRates };
+    if (value === "") delete next[selectedMonth];
+    else next[selectedMonth] = value;
+
+    setTaxRates(next);
+    window.localStorage.setItem("fxa_accounting_tax_rates", JSON.stringify(next));
+    setMessage(
+      value === ""
+        ? "Đã bỏ thuế suất ước tính."
+        : `Đã dùng thuế suất ước tính ${value}% cho ${monthLabel(selectedMonth)}.`,
+    );
+  }
+
   async function addTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
 
     if (!isAdmin) {
-      setMessage("Chỉ admin được thêm bút toán.");
+      setMessage("Chỉ admin được thêm giao dịch.");
       return;
     }
 
     const parsedAmount = Number(transactionAmount);
+
+    if (journalEntryMode === "pay_payable") {
+      const payable = payables.find((row) => row.id === selectedJournalPayableId);
+
+      if (!payable) {
+        setMessage("Hãy chọn khoản công nợ cần thanh toán.");
+        return;
+      }
+
+      const remaining = Math.max(
+        toNumber(payable.total_amount) - toNumber(payable.paid_amount),
+        0,
+      );
+
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        setMessage("Số tiền thanh toán phải lớn hơn 0.");
+        return;
+      }
+
+      if (parsedAmount > remaining) {
+        setMessage("Số tiền thanh toán lớn hơn số công nợ còn lại.");
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Thanh toán ${money(parsedAmount)} cho ${payable.counterparty}?\n\n` +
+          `Khoản này thuộc ${monthLabel(normalizeMonthKey(payable.accounting_month))}.\n` +
+          `Ngày trả tiền: ${formatDate(transactionDate)}.`,
+      );
+
+      if (!confirmed) return;
+
+      setSaving(true);
+      const { error } = await supabase.rpc("pay_business_payable", {
+        p_payable_id: payable.id,
+        p_amount: parsedAmount,
+        p_payment_date: transactionDate,
+        p_notes: null,
+      });
+
+      if (error) {
+        setMessage(error.message);
+        setSaving(false);
+        return;
+      }
+
+      setSelectedJournalPayableId("");
+      setTransactionAmount("");
+      setMessage("Đã thanh toán công nợ và ghi khoản chi vào Nhật ký thu chi.");
+      setSaving(false);
+      await fetchData();
+      return;
+    }
 
     if (!transactionTitle.trim()) {
       setMessage("Vui lòng nhập nội dung giao dịch.");
@@ -1162,7 +1309,7 @@ export default function AdminRevenuePage() {
     }
 
     if (transactionType !== "cash_adjustment" && parsedAmount < 0) {
-      setMessage("Thu và chi phải nhập số dương. Điều chỉnh tiền mặt có thể nhập âm.");
+      setMessage("Khoản thu và khoản chi nhập số dương. Điều chỉnh tiền mặt có thể nhập số âm.");
       return;
     }
 
@@ -1180,7 +1327,6 @@ export default function AdminRevenuePage() {
       accounting_month: monthStart(transactionAccountingMonth),
       report_group: transactionReportGroup,
       counterparty: transactionCounterparty.trim() || null,
-      document_no: transactionDocumentNo.trim() || null,
     });
 
     if (error) {
@@ -1192,9 +1338,8 @@ export default function AdminRevenuePage() {
     setTransactionTitle("");
     setTransactionAmount("");
     setTransactionCounterparty("");
-    setTransactionDocumentNo("");
     setTransactionNotes("");
-    setMessage("Đã ghi bút toán vào sổ nhật ký.");
+    setMessage("Đã lưu giao dịch.");
     setSaving(false);
     await fetchData();
   }
@@ -1248,7 +1393,7 @@ export default function AdminRevenuePage() {
     setPayableAmount("");
     setPayableDueDate("");
     setPayableNotes("");
-    setMessage("Đã ghi nhận công nợ phải trả theo tháng hạch toán.");
+    setMessage("Đã thêm khoản PHẢI TRẢ vào đúng tháng phát sinh.");
     setSaving(false);
     await fetchData();
   }
@@ -1304,35 +1449,177 @@ export default function AdminRevenuePage() {
     await fetchData();
   }
 
-  async function updateClientDebtMonth(debtId: string) {
-    if (!isAdmin) {
-      setMessage("Chỉ admin được gán tháng công nợ.");
+  function startReceivableEdit(debt: ClientDebt) {
+    if (!isAdmin) return;
+    setEditingReceivableId(debt.id);
+    setReceivableEditDraft({
+      planName: debt.plan_name || "Công nợ khách hàng",
+      balanceDue: String(toNumber(debt.balance_due)),
+      debtDeadline: debt.debt_deadline || "",
+      debtMonth: getClientDebtMonth(debt),
+    });
+    setMessage("");
+  }
+
+  function cancelReceivableEdit() {
+    setEditingReceivableId(null);
+    setReceivableEditDraft(null);
+  }
+
+  async function saveReceivableEdit() {
+    if (!isAdmin || !editingReceivableId || !receivableEditDraft) return;
+
+    const debt = clientDebts.find((item) => item.id === editingReceivableId);
+    if (!debt) {
+      setMessage("Không tìm thấy khoản phải thu cần sửa.");
       return;
     }
 
-    const monthKey = debtMonthDrafts[debtId];
-    if (!monthKey) {
-      setMessage("Vui lòng chọn tháng công nợ.");
+    const nextBalance = Number(receivableEditDraft.balanceDue);
+    if (!Number.isFinite(nextBalance) || nextBalance < 0) {
+      setMessage("Số tiền còn phải thu phải từ 0 trở lên.");
       return;
     }
 
+    if (!receivableEditDraft.debtMonth) {
+      setMessage("Vui lòng chọn tháng khoản phải thu thuộc về.");
+      return;
+    }
+
+    const balanceChanged = nextBalance !== toNumber(debt.balance_due);
+    if (balanceChanged) {
+      const confirmed = window.confirm(
+        "Bạn đang sửa trực tiếp số dư PHẢI THU. Thao tác này chỉ dùng để sửa sai số và không tạo giao dịch thu tiền. Nếu khách vừa thanh toán, hãy ghi nhận thanh toán tại trang chi tiết khách hàng. Tiếp tục?",
+      );
+      if (!confirmed) return;
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      plan_name: receivableEditDraft.planName.trim() || "Công nợ khách hàng",
+      balance_due: nextBalance,
+      debt_deadline: receivableEditDraft.debtDeadline || null,
+      debt_month: monthStart(receivableEditDraft.debtMonth),
+    };
+
+    const originalValue = toNumber(debt.price);
+    if (originalValue > 0 && nextBalance <= originalValue) {
+      updatePayload.amount_paid = Math.max(originalValue - nextBalance, 0);
+    }
+
+    setSaving(true);
     const { error } = await supabase
       .from("client_purchases")
-      .update({ debt_month: monthStart(monthKey) })
-      .eq("id", debtId);
+      .update(updatePayload)
+      .eq("id", editingReceivableId);
 
     if (error) {
       setMessage(error.message);
+      setSaving(false);
       return;
     }
 
-    setMessage("Đã cập nhật tháng công nợ khách hàng.");
+    setMessage("Đã cập nhật khoản PHẢI THU và tháng ghi nhận.");
+    cancelReceivableEdit();
+    setSaving(false);
+    await fetchData();
+  }
+
+  function startPayableEdit(payable: BusinessPayable) {
+    if (!isAdmin) return;
+    setEditingPayableId(payable.id);
+    setPayableEditDraft({
+      accountingMonth: normalizeMonthKey(payable.accounting_month),
+      payableType: payable.payable_type,
+      expenseGroup: payable.expense_group,
+      counterparty: payable.counterparty,
+      title: payable.title,
+      totalAmount: String(toNumber(payable.total_amount)),
+      dueDate: payable.due_date || "",
+      notes: payable.notes || "",
+    });
+    setMessage("");
+  }
+
+  function cancelPayableEdit() {
+    setEditingPayableId(null);
+    setPayableEditDraft(null);
+  }
+
+  async function savePayableEdit() {
+    if (!isAdmin || !editingPayableId || !payableEditDraft) return;
+
+    const payable = payables.find((item) => item.id === editingPayableId);
+    if (!payable) {
+      setMessage("Không tìm thấy khoản phải trả cần sửa.");
+      return;
+    }
+
+    const nextTotal = Number(payableEditDraft.totalAmount);
+    const alreadyPaid = toNumber(payable.paid_amount);
+
+    if (!payableEditDraft.counterparty.trim() || !payableEditDraft.title.trim()) {
+      setMessage("Vui lòng nhập người / đơn vị cần trả và nội dung khoản phải trả.");
+      return;
+    }
+
+    if (!Number.isFinite(nextTotal) || nextTotal <= 0) {
+      setMessage("Tổng khoản phải trả phải lớn hơn 0.");
+      return;
+    }
+
+    if (nextTotal < alreadyPaid) {
+      setMessage(`Không thể đặt tổng phải trả thấp hơn số đã trả ${money(alreadyPaid)}.`);
+      return;
+    }
+
+    if (!payableEditDraft.accountingMonth) {
+      setMessage("Vui lòng chọn tháng khoản phải trả thuộc về.");
+      return;
+    }
+
+    const oldMonth = normalizeMonthKey(payable.accounting_month);
+    if (oldMonth !== payableEditDraft.accountingMonth) {
+      const confirmed = window.confirm(
+        `Bạn đang chuyển khoản PHẢI TRẢ từ ${monthLabel(oldMonth)} sang ${monthLabel(payableEditDraft.accountingMonth)}. Chi phí sẽ được chuyển sang báo cáo của tháng mới. Tiếp tục?`,
+      );
+      if (!confirmed) return;
+    }
+
+    const nextStatus: BusinessPayable["status"] =
+      alreadyPaid >= nextTotal ? "paid" : alreadyPaid > 0 ? "partial" : "unpaid";
+
+    setSaving(true);
+    const { error } = await supabase
+      .from("business_payables")
+      .update({
+        accounting_month: monthStart(payableEditDraft.accountingMonth),
+        payable_type: payableEditDraft.payableType,
+        expense_group: payableEditDraft.expenseGroup,
+        counterparty: payableEditDraft.counterparty.trim(),
+        title: payableEditDraft.title.trim(),
+        total_amount: nextTotal,
+        due_date: payableEditDraft.dueDate || null,
+        notes: payableEditDraft.notes.trim() || null,
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", editingPayableId);
+
+    if (error) {
+      setMessage(error.message);
+      setSaving(false);
+      return;
+    }
+
+    setMessage("Đã cập nhật khoản PHẢI TRẢ và tháng ghi nhận chi phí.");
+    cancelPayableEdit();
+    setSaving(false);
     await fetchData();
   }
 
   async function saveTransactionClassification(transaction: BusinessTransaction) {
     if (!isAdmin) {
-      setMessage("Chỉ admin được phân loại bút toán.");
+      setMessage("Chỉ admin được phân loại giao dịch.");
       return;
     }
 
@@ -1369,7 +1656,7 @@ export default function AdminRevenuePage() {
     }
 
     const confirmed = window.confirm(
-      `Xóa bút toán "${transaction.title}"? Hành động này không thể hoàn tác.`,
+      `Xóa giao dịch "${transaction.title}"? Hành động này không thể hoàn tác.`,
     );
 
     if (!confirmed) return;
@@ -1384,7 +1671,7 @@ export default function AdminRevenuePage() {
       return;
     }
 
-    setMessage("Đã xóa bút toán.");
+    setMessage("Đã xóa giao dịch.");
     await fetchData();
   }
 
@@ -1423,6 +1710,7 @@ export default function AdminRevenuePage() {
       selectedMonth,
       profitLossRows,
       currentProfitLoss.unclassifiedCount,
+      currentTaxRate,
     );
 
     downloadText(
@@ -1441,15 +1729,22 @@ export default function AdminRevenuePage() {
       const workbook = XLSX.utils.book_new();
 
       const statementRows: Array<Array<string | number>> = [
-        ["BÁO CÁO KẾT QUẢ HOẠT ĐỘNG KINH DOANH", "", "", "", ""],
-        ["INCOME STATEMENT", "", "", "", ""],
-        [monthLabel(selectedMonth), "", "", "", ""],
-        ["Đơn vị tiền tệ: CAD - Báo cáo quản trị nội bộ", "", "", "", ""],
-        ["Chỉ tiêu / Item", "Mã số / Code", "Thuyết minh / Note", "Kỳ này / Current period", "Kỳ trước / Prior period"],
+        ["BÁO CÁO KẾT QUẢ HOẠT ĐỘNG KINH DOANH", "", "", ""],
+        [monthLabel(selectedMonth), "", "", ""],
+        [
+          `Đơn vị tiền tệ: CAD - ${
+            currentTaxRate === null
+              ? "Không dùng thuế suất ước tính"
+              : `Thuế suất ước tính: ${currentTaxRate}%`
+          }`,
+          "",
+          "",
+          "",
+        ],
+        ["Chỉ tiêu", "Mã số", "Kỳ này", "Kỳ trước"],
         ...profitLossRows.map((row) => [
           row.item,
           row.code,
-          row.note,
           row.current,
           row.previous,
         ]),
@@ -1457,21 +1752,19 @@ export default function AdminRevenuePage() {
 
       const statementSheet = XLSX.utils.aoa_to_sheet(statementRows);
       statementSheet["!merges"] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: 4 } },
-        { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
-        { s: { r: 3, c: 0 }, e: { r: 3, c: 4 } },
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } },
       ];
       statementSheet["!cols"] = [
         { wch: 66 },
         { wch: 14 },
-        { wch: 18 },
         { wch: 22 },
         { wch: 22 },
       ];
 
-      for (let row = 5; row < statementRows.length; row += 1) {
-        for (const column of [3, 4]) {
+      for (let row = 4; row < statementRows.length; row += 1) {
+        for (const column of [2, 3]) {
           const address = XLSX.utils.encode_cell({ r: row, c: column });
           if (statementSheet[address]) statementSheet[address].z = '#,##0.00;[Red]-#,##0.00';
         }
@@ -1481,11 +1774,10 @@ export default function AdminRevenuePage() {
 
       const journalRows = filteredJournal.map((transaction) => ({
         "Ngày thực thu/chi": transaction.transaction_date,
-        "Tháng hạch toán": getTransactionAccountingMonth(transaction),
+        "Tính vào tháng": getTransactionAccountingMonth(transaction),
         "Loại": transaction.transaction_type,
         "Nguồn": getSourceLabel(transaction.source),
         "Nhóm báo cáo": getReportGroupLabel(transaction.report_group || fallbackReportGroup(transaction)),
-        "Số chứng từ": transaction.document_no || "",
         "Đối tượng": transaction.counterparty || "",
         "Nội dung": transaction.title,
         "Số tiền": toNumber(transaction.amount),
@@ -1498,18 +1790,17 @@ export default function AdminRevenuePage() {
         { wch: 16 },
         { wch: 22 },
         { wch: 34 },
-        { wch: 16 },
         { wch: 24 },
         { wch: 38 },
         { wch: 16 },
         { wch: 40 },
       ];
-      XLSX.utils.book_append_sheet(workbook, journalSheet, "Sổ nhật ký");
+      XLSX.utils.book_append_sheet(workbook, journalSheet, "Nhật ký thu chi");
 
       const receivableRows = selectedClientDebts.map((debt) => {
         const client = getClientRelation(debt.clients);
         return {
-          "Tháng công nợ": getClientDebtMonth(debt),
+          "Tính vào tháng": getClientDebtMonth(debt),
           "Mã khách hàng": client?.client_code || "",
           "Khách hàng": client?.full_name || "Không rõ",
           "Nội dung": debt.plan_name || "Công nợ khách hàng",
@@ -1532,10 +1823,10 @@ export default function AdminRevenuePage() {
         { wch: 18 },
         { wch: 16 },
       ];
-      XLSX.utils.book_append_sheet(workbook, receivableSheet, "Công nợ phải thu");
+      XLSX.utils.book_append_sheet(workbook, receivableSheet, "PHẢI THU");
 
       const payableRows = selectedPayables.map((payable) => ({
-        "Tháng hạch toán": normalizeMonthKey(payable.accounting_month),
+        "Tháng ghi nhận": normalizeMonthKey(payable.accounting_month),
         "Loại": getPayableTypeLabel(payable.payable_type),
         "Đối tượng": payable.counterparty,
         "Nội dung": payable.title,
@@ -1564,14 +1855,14 @@ export default function AdminRevenuePage() {
         { wch: 16 },
         { wch: 40 },
       ];
-      XLSX.utils.book_append_sheet(workbook, payableSheet, "Công nợ phải trả");
+      XLSX.utils.book_append_sheet(workbook, payableSheet, "PHẢI TRẢ  PHẢI CHI");
 
       const ledgerSheet = XLSX.utils.json_to_sheet(
         ledgerGroups.map((group) => ({
           "Nhóm kế toán": group.label,
           "Từ sổ nhật ký": group.transactionTotal,
           "Từ công nợ phải trả": group.payableTotal,
-          "Tổng hạch toán": group.total,
+          "Tổng ghi nhận": group.total,
         })),
       );
       ledgerSheet["!cols"] = [
@@ -1580,7 +1871,7 @@ export default function AdminRevenuePage() {
         { wch: 24 },
         { wch: 20 },
       ];
-      XLSX.utils.book_append_sheet(workbook, ledgerSheet, "Sổ kế toán");
+      XLSX.utils.book_append_sheet(workbook, ledgerSheet, "Tổng hợp kế toán");
 
       XLSX.writeFile(workbook, `fxa-so-ke-toan-${selectedMonth}.xlsx`);
       setMessage("Đã xuất file Excel gồm báo cáo lãi lỗ, sổ nhật ký và công nợ.");
@@ -1598,7 +1889,41 @@ export default function AdminRevenuePage() {
   }
 
   return (
-    <main className="min-h-screen overflow-y-auto bg-black p-3 text-white md:p-5">
+    <main className="fxa-accounting-page min-h-screen overflow-y-auto bg-black p-3 text-white md:p-5">
+      <style jsx global>{`
+        .fxa-accounting-page,
+        .fxa-accounting-page input,
+        .fxa-accounting-page select,
+        .fxa-accounting-page textarea,
+        .fxa-accounting-page button,
+        .fxa-accounting-page table {
+          font-family: "Times New Roman", Times, serif;
+        }
+
+        .fxa-accounting-page {
+          font-size: 16px;
+          line-height: 1.5;
+        }
+
+        .fxa-accounting-page .text-xs,
+        .fxa-accounting-page [class*="text-[10px]"],
+        .fxa-accounting-page [class*="text-[11px]"] {
+          font-size: 14px !important;
+          line-height: 1.45 !important;
+        }
+
+        .fxa-accounting-page .text-sm {
+          font-size: 16px !important;
+          line-height: 1.5 !important;
+        }
+
+        .fxa-accounting-page input,
+        .fxa-accounting-page select,
+        .fxa-accounting-page textarea,
+        .fxa-accounting-page button {
+          font-size: 16px;
+        }
+      `}</style>
       <div className="min-h-screen rounded-3xl bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_30%),linear-gradient(135deg,_#050505,_#101010_45%,_#050505)] p-4 md:p-6">
         <div className="mx-auto max-w-[1500px]">
           <header className="rounded-3xl border border-yellow-500/25 bg-black/65 p-4 shadow-2xl md:p-6">
@@ -1608,11 +1933,10 @@ export default function AdminRevenuePage() {
                   FXA FITNESS · KẾ TOÁN QUẢN TRỊ
                 </p>
                 <h1 className="mt-2 text-3xl font-black tracking-tight md:text-5xl">
-                  Doanh thu & Sổ kế toán
+                  Quản lý thu chi & công nợ
                 </h1>
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-400">
-                  Luồng dữ liệu: Sổ nhật ký → Sổ công nợ / Sổ kế toán → Sổ lãi lỗ.
-                  Doanh thu chỉ lấy từ tiền thực thu; chi phí công nợ được ghi đúng tháng hạch toán.
+                  Theo dõi thu chi, công nợ và kết quả kinh doanh theo từng tháng.
                 </p>
               </div>
 
@@ -1657,7 +1981,7 @@ export default function AdminRevenuePage() {
           <section className="mt-4 flex flex-col gap-3 rounded-3xl border border-yellow-500/20 bg-white/[0.045] p-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-xs font-bold uppercase tracking-widest text-yellow-400">
-                Kỳ báo cáo
+                Tháng đang xem
               </p>
               <p className="mt-1 text-2xl font-black capitalize">{monthLabel(selectedMonth)}</p>
               <p className="mt-1 text-xs text-gray-500">
@@ -1756,22 +2080,22 @@ export default function AdminRevenuePage() {
                       tone={summary.cashNet >= 0 ? "yellow" : "red"}
                     />
                     <KpiCard
-                      label="Tiền mặt lũy kế hệ thống"
+                      label="Dòng tiền lũy kế"
                       value={money(summary.allCash)}
-                      helper="Tổng thu + điều chỉnh - tổng chi từ toàn bộ sổ nhật ký."
+                      helper="Tổng tiền đã thu, trừ tiền đã chi và cộng các điều chỉnh."
                       tone="blue"
                     />
                   </section>
 
                   <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <KpiCard
-                      label="Doanh thu hạch toán"
+                      label="Doanh thu ghi nhận"
                       value={money(currentProfitLoss.netRevenue)}
                       helper="Chỉ tiền thực thu được gán vào kỳ báo cáo."
                       tone="green"
                     />
                     <KpiCard
-                      label="Chi phí hạch toán"
+                      label="Chi phí ghi nhận"
                       value={money(
                         currentProfitLoss.costOfSales +
                           currentProfitLoss.financialExpense +
@@ -1787,22 +2111,22 @@ export default function AdminRevenuePage() {
                     <KpiCard
                       label="Lợi nhuận sau thuế"
                       value={money(currentProfitLoss.netProfit)}
-                      helper="Kết quả quản trị của tháng hạch toán."
+                      helper="Kết quả của tháng đang xem."
                       tone={currentProfitLoss.netProfit >= 0 ? "yellow" : "red"}
                     />
                     <KpiCard
-                      label="Giao dịch chưa phân loại"
+                      label="Giao dịch cần kiểm tra"
                       value={String(currentProfitLoss.unclassifiedCount)}
-                      helper="Cần rà soát trước khi khóa sổ và dùng báo cáo chính thức."
+                      helper="Cần chọn đúng nhóm trước khi xuất báo cáo cuối tháng."
                       tone={currentProfitLoss.unclassifiedCount > 0 ? "red" : "green"}
                     />
                   </section>
 
                   <section className="grid gap-4 xl:grid-cols-2">
-                    <SectionCard eyebrow="Công nợ phải thu" title="Khách hàng còn nợ">
+                    <SectionCard eyebrow="PHẢI THU" title="Khách hàng còn phải trả cho FXA">
                       <div className="grid gap-3 sm:grid-cols-2">
                         <KpiCard
-                          label={`Thuộc ${monthLabel(selectedMonth)}`}
+                          label={`Tính vào ${monthLabel(selectedMonth)}`}
                           value={money(summary.selectedReceivables)}
                           helper={`${selectedClientDebts.length} khoản công nợ`}
                           tone="yellow"
@@ -1816,10 +2140,10 @@ export default function AdminRevenuePage() {
                       </div>
                     </SectionCard>
 
-                    <SectionCard eyebrow="Công nợ phải trả" title="Lương, thuê, hoa hồng và nhà cung cấp">
+                    <SectionCard eyebrow="PHẢI TRẢ  PHẢI CHI" title="FXA còn phải trả cho nhân viên hoặc nhà cung cấp">
                       <div className="grid gap-3 sm:grid-cols-2">
                         <KpiCard
-                          label={`Thuộc ${monthLabel(selectedMonth)}`}
+                          label={`Tính vào ${monthLabel(selectedMonth)}`}
                           value={money(summary.selectedPayableBalance)}
                           helper={`${selectedPayables.length} khoản công nợ`}
                           tone="yellow"
@@ -1834,179 +2158,250 @@ export default function AdminRevenuePage() {
                     </SectionCard>
                   </section>
 
-                  <SectionCard eyebrow="Quy tắc kiểm soát" title="Cách hệ thống tránh sai số">
-                    <div className="grid gap-3 md:grid-cols-3">
-                      {[
-                        {
-                          title: "1. Không lấy giá trị hợp đồng làm doanh thu",
-                          text: "Doanh thu chỉ đến từ business_transactions loại income. Công nợ khách hàng chưa thu không được cộng vào doanh thu.",
-                        },
-                        {
-                          title: "2. Chi phí thuộc đúng tháng phát sinh",
-                          text: "Ví dụ lương tháng 7 được ghi vào business_payables tháng 7, dù tiền thực trả vào tháng 8.",
-                        },
-                        {
-                          title: "3. Không ghi chi phí hai lần",
-                          text: "Khi thanh toán công nợ, sổ nhật ký ghi thực chi cash_only; báo cáo lãi lỗ vẫn lấy chi phí từ công nợ gốc.",
-                        },
-                      ].map((item) => (
-                        <div key={item.title} className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                          <p className="font-bold text-yellow-300">{item.title}</p>
-                          <p className="mt-2 text-sm leading-6 text-gray-400">{item.text}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </SectionCard>
+
                 </div>
               ) : null}
 
               {activeTab === "journal" ? (
                 <div className="mt-4 space-y-4">
-                  <SectionCard eyebrow="Nhập liệu" title="Ghi sổ nhật ký">
+                  <SectionCard eyebrow="Nhật ký thu chi" title="Thêm khoản thu hoặc chi">
                     <form onSubmit={addTransaction} className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-                      <label className="grid gap-1 xl:col-span-1">
-                        <span className="text-xs font-bold text-gray-400">Loại giao dịch</span>
+                      <label className="grid gap-1 md:col-span-2 xl:col-span-2">
+                        <span className="text-xs font-bold text-gray-400">Bạn muốn ghi khoản nào?</span>
                         <select
-                          value={transactionType}
-                          onChange={(event) => setTransactionType(event.target.value as TransactionType)}
+                          value={journalEntryMode}
+                          onChange={(event) => {
+                            const mode = event.target.value as JournalEntryMode;
+                            setJournalEntryMode(mode);
+                            setMessage("");
+                            setTransactionAmount("");
+                            if (mode === "pay_payable") {
+                              setTransactionType("expense");
+                              setTransactionSource("payable_payment");
+                              setTransactionReportGroup("cash_only");
+                            } else {
+                              setSelectedJournalPayableId("");
+                              setTransactionType("income");
+                              setTransactionSource("package_sale");
+                              setTransactionReportGroup("sales_revenue");
+                            }
+                          }}
                           disabled={!isAdmin}
                           className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-sm text-black outline-none disabled:opacity-50"
                         >
-                          <option value="income">Thu tiền</option>
-                          <option value="expense">Chi tiền trực tiếp</option>
-                          <option value="cash_adjustment">Điều chỉnh tiền mặt</option>
+                          <option value="regular">Thu hoặc chi thông thường</option>
+                          <option value="pay_payable">Thanh toán khoản phải trả đã có</option>
                         </select>
                       </label>
 
-                      <label className="grid gap-1 xl:col-span-1">
-                        <span className="text-xs font-bold text-gray-400">Nguồn</span>
-                        <select
-                          value={transactionSource}
-                          onChange={(event) => setTransactionSource(event.target.value)}
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-sm text-black outline-none disabled:opacity-50"
-                        >
-                          {SOURCE_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      {journalEntryMode === "pay_payable" ? (
+                        <>
+                          <label className="grid gap-1 md:col-span-2 xl:col-span-4">
+                            <span className="text-xs font-bold text-gray-400">Chọn khoản phải trả</span>
+                            <select
+                              value={selectedJournalPayableId}
+                              onChange={(event) => {
+                                const payableId = event.target.value;
+                                setSelectedJournalPayableId(payableId);
+                                const payable = openPayables.find((row) => row.id === payableId);
+                                if (payable) {
+                                  const remaining = Math.max(
+                                    toNumber(payable.total_amount) - toNumber(payable.paid_amount),
+                                    0,
+                                  );
+                                  setTransactionAmount(remaining.toFixed(2));
+                                } else {
+                                  setTransactionAmount("");
+                                }
+                              }}
+                              disabled={!isAdmin || openPayables.length === 0}
+                              className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-sm text-black outline-none disabled:opacity-50"
+                            >
+                              <option value="">Chọn một khoản công nợ</option>
+                              {openPayables.map((payable) => {
+                                const remaining = Math.max(
+                                  toNumber(payable.total_amount) - toNumber(payable.paid_amount),
+                                  0,
+                                );
+                                return (
+                                  <option key={payable.id} value={payable.id}>
+                                    {payable.counterparty} — {payable.title} — còn {money(remaining)} — thuộc {monthLabel(normalizeMonthKey(payable.accounting_month))}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </label>
 
-                      <label className="grid gap-1 xl:col-span-2">
-                        <span className="text-xs font-bold text-gray-400">Nhóm lãi lỗ</span>
-                        <select
-                          value={transactionReportGroup}
-                          onChange={(event) => setTransactionReportGroup(event.target.value as ReportGroup)}
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-sm text-black outline-none disabled:opacity-50"
-                        >
-                          {REPORT_GROUP_OPTIONS.filter((option) =>
-                            option.transactionTypes.includes(transactionType),
-                          ).map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                          <label className="grid gap-1 xl:col-span-2">
+                            <span className="text-xs font-bold text-gray-400">Ngày trả tiền</span>
+                            <input
+                              type="date"
+                              value={transactionDate}
+                              onChange={(event) => setTransactionDate(event.target.value)}
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                            />
+                          </label>
 
-                      <label className="grid gap-1 xl:col-span-1">
-                        <span className="text-xs font-bold text-gray-400">Ngày thực thu / chi</span>
-                        <input
-                          type="date"
-                          value={transactionDate}
-                          onChange={(event) => setTransactionDate(event.target.value)}
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
-                        />
-                      </label>
+                          <label className="grid gap-1 xl:col-span-2">
+                            <span className="text-xs font-bold text-gray-400">Số tiền trả</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0.01"
+                              value={transactionAmount}
+                              onChange={(event) => setTransactionAmount(event.target.value)}
+                              placeholder="0.00"
+                              disabled={!isAdmin || !selectedJournalPayableId}
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                            />
+                          </label>
 
-                      <label className="grid gap-1 xl:col-span-1">
-                        <span className="text-xs font-bold text-gray-400">Tháng hạch toán</span>
-                        <input
-                          type="month"
-                          value={transactionAccountingMonth}
-                          onChange={(event) => setTransactionAccountingMonth(event.target.value)}
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
-                        />
-                      </label>
+                          <div className="flex items-end xl:col-span-2">
+                            <button
+                              disabled={!isAdmin || saving || !selectedJournalPayableId}
+                              className="w-full rounded-xl bg-yellow-400 px-4 py-3 text-sm font-black text-black transition hover:bg-yellow-300 disabled:opacity-50"
+                            >
+                              {saving ? "Đang lưu..." : "Thanh toán và ghi sổ"}
+                            </button>
+                          </div>
 
-                      <label className="grid gap-1 xl:col-span-2">
-                        <span className="text-xs font-bold text-gray-400">Nội dung</span>
-                        <input
-                          value={transactionTitle}
-                          onChange={(event) => setTransactionTitle(event.target.value)}
-                          placeholder="Ví dụ: Thu tiền gói 24 buổi - Nguyễn Văn A"
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
-                        />
-                      </label>
+                          {openPayables.length === 0 ? (
+                            <p className="md:col-span-2 xl:col-span-6 text-sm text-gray-400">Không có khoản phải trả nào đang chờ thanh toán.</p>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <label className="grid gap-1 xl:col-span-1">
+                            <span className="text-xs font-bold text-gray-400">Thu hay chi?</span>
+                            <select
+                              value={transactionType}
+                              onChange={(event) => setTransactionType(event.target.value as TransactionType)}
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-sm text-black outline-none disabled:opacity-50"
+                            >
+                              <option value="income">Thu tiền</option>
+                              <option value="expense">Chi tiền</option>
+                              <option value="cash_adjustment">Điều chỉnh tiền mặt</option>
+                            </select>
+                          </label>
 
-                      <label className="grid gap-1 xl:col-span-1">
-                        <span className="text-xs font-bold text-gray-400">Số tiền CAD</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={transactionAmount}
-                          onChange={(event) => setTransactionAmount(event.target.value)}
-                          placeholder="0.00"
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
-                        />
-                      </label>
+                          <label className="grid gap-1 xl:col-span-2">
+                            <span className="text-xs font-bold text-gray-400">Khoản tiền này là gì?</span>
+                            <select
+                              value={transactionSource}
+                              onChange={(event) => setTransactionSource(event.target.value)}
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-sm text-black outline-none disabled:opacity-50"
+                            >
+                              {SOURCE_OPTIONS.filter((option) => option.value !== "payable_payment").map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
 
-                      <label className="grid gap-1 xl:col-span-1">
-                        <span className="text-xs font-bold text-gray-400">Số chứng từ</span>
-                        <input
-                          value={transactionDocumentNo}
-                          onChange={(event) => setTransactionDocumentNo(event.target.value)}
-                          placeholder="INV-001"
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
-                        />
-                      </label>
+                          <label className="grid gap-1 xl:col-span-1">
+                            <span className="text-xs font-bold text-gray-400">Ngày thu / chi</span>
+                            <input
+                              type="date"
+                              value={transactionDate}
+                              onChange={(event) => setTransactionDate(event.target.value)}
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                            />
+                          </label>
 
-                      <label className="grid gap-1 xl:col-span-2">
-                        <span className="text-xs font-bold text-gray-400">Đối tượng</span>
-                        <input
-                          value={transactionCounterparty}
-                          onChange={(event) => setTransactionCounterparty(event.target.value)}
-                          placeholder="Khách hàng / nhân viên / nhà cung cấp"
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
-                        />
-                      </label>
+                          <label className="grid gap-1 xl:col-span-2">
+                            <span className="text-xs font-bold text-gray-400">Tính vào tháng nào?</span>
+                            <input
+                              type="month"
+                              value={transactionAccountingMonth}
+                              onChange={(event) => setTransactionAccountingMonth(event.target.value)}
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                            />
+                          </label>
 
-                      <label className="grid gap-1 xl:col-span-3">
-                        <span className="text-xs font-bold text-gray-400">Ghi chú</span>
-                        <input
-                          value={transactionNotes}
-                          onChange={(event) => setTransactionNotes(event.target.value)}
-                          placeholder="Phương thức thanh toán, diễn giải, tham chiếu..."
-                          disabled={!isAdmin}
-                          className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
-                        />
-                      </label>
+                          <label className="grid gap-1 xl:col-span-3">
+                            <span className="text-xs font-bold text-gray-400">Nội dung</span>
+                            <input
+                              value={transactionTitle}
+                              onChange={(event) => setTransactionTitle(event.target.value)}
+                              placeholder="Ví dụ: Thu tiền gói tập của Nguyễn Văn A"
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                            />
+                          </label>
 
-                      <div className="flex items-end xl:col-span-1">
-                        <button
-                          disabled={!isAdmin || saving}
-                          className="w-full rounded-xl bg-yellow-400 px-4 py-3 text-sm font-black uppercase text-black transition hover:bg-yellow-300 disabled:opacity-50"
-                        >
-                          {saving ? "Đang lưu..." : "Ghi sổ"}
-                        </button>
-                      </div>
+                          <label className="grid gap-1 xl:col-span-1">
+                            <span className="text-xs font-bold text-gray-400">Số tiền</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={transactionAmount}
+                              onChange={(event) => setTransactionAmount(event.target.value)}
+                              placeholder="0.00"
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                            />
+                          </label>
+
+                          <label className="grid gap-1 xl:col-span-2">
+                            <span className="text-xs font-bold text-gray-400">Người trả / người nhận</span>
+                            <input
+                              value={transactionCounterparty}
+                              onChange={(event) => setTransactionCounterparty(event.target.value)}
+                              placeholder="Tên khách hàng, nhân viên hoặc nhà cung cấp"
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                            />
+                          </label>
+
+                          <label className="grid gap-1 xl:col-span-3">
+                            <span className="text-xs font-bold text-gray-400">Tính vào nhóm nào?</span>
+                            <select
+                              value={transactionReportGroup}
+                              onChange={(event) => setTransactionReportGroup(event.target.value as ReportGroup)}
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-sm text-black outline-none disabled:opacity-50"
+                            >
+                              {REPORT_GROUP_OPTIONS.filter((option) =>
+                                option.transactionTypes.includes(transactionType),
+                              ).map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="grid gap-1 xl:col-span-2">
+                            <span className="text-xs font-bold text-gray-400">Ghi chú (không bắt buộc)</span>
+                            <input
+                              value={transactionNotes}
+                              onChange={(event) => setTransactionNotes(event.target.value)}
+                              placeholder="Có thể để trống"
+                              disabled={!isAdmin}
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                            />
+                          </label>
+
+                          <div className="flex items-end xl:col-span-1">
+                            <button
+                              disabled={!isAdmin || saving}
+                              className="w-full rounded-xl bg-yellow-400 px-4 py-3 text-sm font-black text-black transition hover:bg-yellow-300 disabled:opacity-50"
+                            >
+                              {saving ? "Đang lưu..." : "Lưu giao dịch"}
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </form>
-
-                    <p className="mt-3 text-xs leading-5 text-gray-500">
-                      Lương, tiền thuê, hoa hồng hoặc hóa đơn chưa trả nên nhập ở Sổ công nợ phải trả, không nhập chi trực tiếp tại đây.
-                    </p>
                   </SectionCard>
 
-                  <SectionCard eyebrow="Sổ nhật ký" title={`Bút toán thuộc ${monthLabel(selectedMonth)}`}>
+                  <SectionCard eyebrow="Nhật ký thu chi" title={`Thu chi của ${monthLabel(selectedMonth)}`}>
                     <div className="mb-4 grid gap-2 md:grid-cols-4">
                       <select
                         value={journalTypeFilter}
@@ -2038,27 +2433,27 @@ export default function AdminRevenuePage() {
                       <input
                         value={journalSearch}
                         onChange={(event) => setJournalSearch(event.target.value)}
-                        placeholder="Tìm nội dung, đối tượng, chứng từ..."
+                        placeholder="Tìm nội dung hoặc người / đơn vị..."
                         className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-2 text-sm text-white outline-none md:col-span-2"
                       />
                     </div>
 
                     {filteredJournal.length === 0 ? (
                       <p className="rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-gray-400">
-                        Không có bút toán phù hợp.
+                        Không có giao dịch phù hợp.
                       </p>
                     ) : (
                       <div className="max-h-[620px] overflow-auto rounded-2xl border border-white/10">
                         <table className="w-full min-w-[1320px] border-collapse text-left text-xs">
                           <thead className="sticky top-0 bg-yellow-400 text-black">
                             <tr>
-                              <th className="p-3">Ngày tiền</th>
-                              <th className="p-3">Tháng HT</th>
+                              <th className="p-3">Ngày thu / chi</th>
+                              <th className="p-3">Tính vào tháng</th>
                               <th className="p-3">Loại</th>
-                              <th className="p-3">Nguồn</th>
-                              <th className="p-3">Đối tượng / Chứng từ</th>
+                              <th className="p-3">Khoản thu / chi</th>
+                              <th className="p-3">Người trả / nhận</th>
                               <th className="p-3">Nội dung</th>
-                              <th className="p-3">Phân loại</th>
+                              <th className="p-3">Nhóm báo cáo</th>
                               <th className="p-3 text-right">Số tiền</th>
                               <th className="p-3 text-right">Thao tác</th>
                             </tr>
@@ -2098,7 +2493,6 @@ export default function AdminRevenuePage() {
                                   <td className="p-3 text-gray-300">{getSourceLabel(transaction.source)}</td>
                                   <td className="p-3">
                                     <p className="text-white">{transaction.counterparty || "-"}</p>
-                                    <p className="mt-1 text-[11px] text-gray-500">{transaction.document_no || "Không có chứng từ"}</p>
                                   </td>
                                   <td className="p-3">
                                     <p className="font-bold text-white">{transaction.title}</p>
@@ -2106,7 +2500,7 @@ export default function AdminRevenuePage() {
                                       <p className="mt-1 max-w-md text-[11px] leading-4 text-gray-500">{transaction.notes}</p>
                                     ) : null}
                                     {linkedPayable ? (
-                                      <p className="mt-1 text-[11px] font-bold text-blue-300">Thanh toán công nợ · chỉ ảnh hưởng tiền mặt</p>
+                                      <p className="mt-1 text-[11px] font-bold text-blue-300">Thanh toán khoản phải trả · chỉ cập nhật dòng tiền</p>
                                     ) : null}
                                   </td>
                                   <td className="p-3">
@@ -2128,7 +2522,7 @@ export default function AdminRevenuePage() {
                                       ))}
                                     </select>
                                     {!transaction.report_group ? (
-                                      <p className="mt-1 text-[10px] font-bold text-orange-300">Đang dùng phân loại dự phòng</p>
+                                      <p className="mt-1 text-[10px] font-bold text-orange-300">Chưa lưu nhóm chính thức</p>
                                     ) : null}
                                   </td>
                                   <td
@@ -2173,68 +2567,190 @@ export default function AdminRevenuePage() {
 
               {activeTab === "debt" ? (
                 <div className="mt-4 space-y-4">
-                  <div className="grid gap-2 rounded-3xl border border-yellow-500/20 bg-black/50 p-2 md:grid-cols-2">
+                  <div className="grid gap-3 rounded-3xl border border-yellow-500/20 bg-black/50 p-3 md:grid-cols-2">
                     <button
                       type="button"
                       onClick={() => setDebtView("receivable")}
-                      className={`rounded-2xl px-4 py-4 text-left ${
+                      className={`rounded-2xl px-5 py-4 text-left transition ${
                         debtView === "receivable" ? "bg-yellow-400 text-black" : "bg-white/[0.04]"
                       }`}
                     >
-                      <p className="font-black">Công nợ phải thu</p>
-                      <p className={`mt-1 text-xs ${debtView === "receivable" ? "text-black/65" : "text-gray-500"}`}>
-                        Khách hàng còn nợ tiền gói tập hoặc khoản thu khác
+                      <p className="font-black">PHẢI THU — Khách hàng nợ FXA</p>
+                      <p className={`mt-1 text-xs ${debtView === "receivable" ? "text-black/70" : "text-gray-400"}`}>
+                        Tiền khách hàng còn phải thanh toán cho phòng tập
                       </p>
                     </button>
                     <button
                       type="button"
                       onClick={() => setDebtView("payable")}
-                      className={`rounded-2xl px-4 py-4 text-left ${
+                      className={`rounded-2xl px-5 py-4 text-left transition ${
                         debtView === "payable" ? "bg-yellow-400 text-black" : "bg-white/[0.04]"
                       }`}
                     >
-                      <p className="font-black">Công nợ phải trả</p>
-                      <p className={`mt-1 text-xs ${debtView === "payable" ? "text-black/65" : "text-gray-500"}`}>
-                        Lương, hoa hồng, tiền thuê, nhà cung cấp và nghĩa vụ khác
+                      <p className="font-black">PHẢI TRẢ / PHẢI CHI — FXA nợ người khác</p>
+                      <p className={`mt-1 text-xs ${debtView === "payable" ? "text-black/70" : "text-gray-400"}`}>
+                        Lương, hoa hồng, tiền thuê, nhà cung cấp, thuế và khoản phải chi khác
                       </p>
                     </button>
                   </div>
 
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-3xl border border-green-400/25 bg-green-400/10 p-5">
+                      <p className="font-black text-green-200">PHẢI THU tính vào tháng nào?</p>
+                      <p className="mt-2 text-sm leading-6 text-green-100/80">
+                        Khoản phải thu nằm trong tháng đã chọn. Chỉ khi khách hàng trả tiền, khoản đó mới trở thành tiền đã thu.
+                      </p>
+                    </div>
+                    <div className="rounded-3xl border border-red-400/25 bg-red-400/10 p-5">
+                      <p className="font-black text-red-200">PHẢI TRẢ / PHẢI CHI tính vào tháng nào?</p>
+                      <p className="mt-2 text-sm leading-6 text-red-100/80">
+                        Khoản phải trả được tính vào tháng phát sinh. Ngày thanh toán chỉ ghi nhận tiền đã chi.
+                      </p>
+                    </div>
+                  </div>
+
                   {debtView === "receivable" ? (
-                    <SectionCard eyebrow="Sổ công nợ phải thu" title={`Công nợ khách hàng thuộc ${monthLabel(selectedMonth)}`}>
+                    <SectionCard
+                      eyebrow="PHẢI THU — KHÁCH HÀNG TRẢ CHO FXA"
+                      title={`Khoản phải thu được ghi nhận vào ${monthLabel(selectedMonth)}`}
+                    >
                       <div className="mb-4 grid gap-3 sm:grid-cols-3">
-                        <KpiCard label="Còn phải thu tháng" value={money(summary.selectedReceivables)} tone="yellow" />
-                        <KpiCard label="Số khoản trong tháng" value={String(selectedClientDebts.length)} tone="neutral" />
+                        <KpiCard label="Còn phải thu trong tháng" value={money(summary.selectedReceivables)} tone="yellow" />
+                        <KpiCard label="Số khoản phải thu" value={String(selectedClientDebts.length)} tone="neutral" />
                         <KpiCard label="Tổng phải thu toàn hệ thống" value={money(summary.allReceivables)} tone="blue" />
                       </div>
 
+                      {editingReceivableId && receivableEditDraft ? (
+                        <div className="mb-5 rounded-3xl border border-yellow-400/35 bg-yellow-400/10 p-5">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <p className="font-black text-yellow-200">Sửa khoản PHẢI THU</p>
+                              <p className="mt-1 text-sm text-yellow-100/75">
+                                Chỉ dùng để sửa sai số, nội dung, hạn trả hoặc tháng ghi nhận. Không dùng thay cho thao tác thu tiền.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={cancelReceivableEdit}
+                              className="rounded-xl border border-white/20 px-4 py-2 font-bold text-white hover:border-white/50"
+                            >
+                              Đóng
+                            </button>
+                          </div>
+
+                          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                            <label className="grid gap-1 xl:col-span-2">
+                              <span className="font-bold text-gray-300">Nội dung khoản phải thu</span>
+                              <input
+                                value={receivableEditDraft.planName}
+                                onChange={(event) =>
+                                  setReceivableEditDraft((current) =>
+                                    current ? { ...current, planName: event.target.value } : current,
+                                  )
+                                }
+                                className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white outline-none"
+                              />
+                            </label>
+                            <label className="grid gap-1">
+                              <span className="font-bold text-gray-300">Còn phải thu (CAD)</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={receivableEditDraft.balanceDue}
+                                onChange={(event) =>
+                                  setReceivableEditDraft((current) =>
+                                    current ? { ...current, balanceDue: event.target.value } : current,
+                                  )
+                                }
+                                className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white outline-none"
+                              />
+                            </label>
+                            <label className="grid gap-1">
+                              <span className="font-bold text-gray-300">Hạn khách thanh toán</span>
+                              <input
+                                type="date"
+                                value={receivableEditDraft.debtDeadline}
+                                onChange={(event) =>
+                                  setReceivableEditDraft((current) =>
+                                    current ? { ...current, debtDeadline: event.target.value } : current,
+                                  )
+                                }
+                                className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white outline-none"
+                              />
+                            </label>
+                            <label className="grid gap-1">
+                              <span className="font-bold text-gray-300">Tính vào báo cáo công nợ tháng</span>
+                              <input
+                                type="month"
+                                value={receivableEditDraft.debtMonth}
+                                onChange={(event) =>
+                                  setReceivableEditDraft((current) =>
+                                    current ? { ...current, debtMonth: event.target.value } : current,
+                                  )
+                                }
+                                className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white outline-none"
+                              />
+                            </label>
+                            <div className="flex items-end gap-2 xl:col-span-3 xl:justify-end">
+                              <button
+                                type="button"
+                                onClick={cancelReceivableEdit}
+                                className="rounded-xl border border-white/20 px-4 py-3 font-bold text-white"
+                              >
+                                Hủy
+                              </button>
+                              <button
+                                type="button"
+                                onClick={saveReceivableEdit}
+                                disabled={saving}
+                                className="rounded-xl bg-yellow-400 px-5 py-3 font-black text-black disabled:opacity-50"
+                              >
+                                {saving ? "Đang lưu..." : "Lưu khoản phải thu"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+
                       {selectedClientDebts.length === 0 ? (
                         <p className="rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-gray-400">
-                          Không có công nợ khách hàng thuộc tháng này.
+                          Không có khoản PHẢI THU được ghi nhận vào tháng này.
                         </p>
                       ) : (
                         <div className="overflow-auto rounded-2xl border border-white/10">
-                          <table className="w-full min-w-[1100px] border-collapse text-left text-sm">
+                          <table className="w-full min-w-[1200px] border-collapse text-left text-sm">
                             <thead className="bg-yellow-400 text-black">
                               <tr>
+                                <th className="p-3">Loại công nợ</th>
                                 <th className="p-3">Khách hàng</th>
                                 <th className="p-3">Nội dung</th>
                                 <th className="p-3 text-right">Đã thu</th>
-                                <th className="p-3 text-right">Còn nợ</th>
+                                <th className="p-3 text-right">Còn phải thu</th>
                                 <th className="p-3">Hạn thanh toán</th>
-                                <th className="p-3">Tháng công nợ</th>
+                                <th className="p-3">Tính vào tháng</th>
                                 <th className="p-3 text-right">Thao tác</th>
                               </tr>
                             </thead>
                             <tbody>
                               {selectedClientDebts.map((debt, index) => {
                                 const client = getClientRelation(debt.clients);
-                                const overdue = Boolean(debt.debt_deadline) && String(debt.debt_deadline) < todayInputDate();
+                                const overdue =
+                                  Boolean(debt.debt_deadline) &&
+                                  String(debt.debt_deadline) < todayInputDate();
+
                                 return (
                                   <tr
                                     key={debt.id}
-                                    className={`border-b border-white/10 ${index % 2 === 0 ? "bg-black/45" : "bg-white/[0.035]"}`}
+                                    className={`border-b border-white/10 ${
+                                      index % 2 === 0 ? "bg-black/45" : "bg-white/[0.035]"
+                                    }`}
                                   >
+                                    <td className="p-3">
+                                      <span className="rounded-full border border-green-400/35 bg-green-400/10 px-3 py-1 font-black text-green-200">
+                                        PHẢI THU
+                                      </span>
+                                    </td>
                                     <td className="p-3">
                                       <p className="font-bold text-white">{client?.full_name || "Không rõ khách hàng"}</p>
                                       <p className="mt-1 text-xs text-gray-500">{client?.client_code || debt.client_id}</p>
@@ -2247,28 +2763,27 @@ export default function AdminRevenuePage() {
                                       {overdue ? <p className="mt-1 text-xs">Quá hạn</p> : null}
                                     </td>
                                     <td className="p-3">
-                                      <input
-                                        type="month"
-                                        value={debtMonthDrafts[debt.id] || getClientDebtMonth(debt)}
-                                        onChange={(event) =>
-                                          setDebtMonthDrafts((current) => ({ ...current, [debt.id]: event.target.value }))
-                                        }
-                                        disabled={!isAdmin}
-                                        className="rounded-lg border border-yellow-500/25 bg-black/60 px-2 py-2 text-white disabled:opacity-60"
-                                      />
+                                      <p className="font-bold text-white">{monthLabel(getClientDebtMonth(debt))}</p>
+                                      <p className="mt-1 text-xs text-gray-500">Chỉ vào báo cáo công nợ, chưa phải doanh thu đã thu</p>
                                     </td>
                                     <td className="p-3 text-right">
-                                      {isAdmin ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => updateClientDebtMonth(debt.id)}
-                                          className="rounded-lg border border-yellow-400 px-3 py-2 text-xs font-bold text-yellow-300 hover:bg-yellow-400 hover:text-black"
+                                      <div className="flex justify-end gap-2">
+                                        {isAdmin ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => startReceivableEdit(debt)}
+                                            className="rounded-lg border border-yellow-400 px-3 py-2 font-bold text-yellow-300 hover:bg-yellow-400 hover:text-black"
+                                          >
+                                            Sửa
+                                          </button>
+                                        ) : null}
+                                        <Link
+                                          href={`/admin/clients/${debt.client_id}`}
+                                          className="rounded-lg border border-white/20 px-3 py-2 font-bold text-white hover:border-yellow-400 hover:text-yellow-300"
                                         >
-                                          Gán tháng
-                                        </button>
-                                      ) : (
-                                        <span className="text-xs text-gray-500">Chỉ xem</span>
-                                      )}
+                                          Mở khách hàng
+                                        </Link>
+                                      </div>
                                     </td>
                                   </tr>
                                 );
@@ -2278,16 +2793,16 @@ export default function AdminRevenuePage() {
                         </div>
                       )}
 
-                      <p className="mt-3 text-xs leading-5 text-gray-500">
-                        Thu tiền công nợ khách hàng vẫn thực hiện tại trang chi tiết khách hàng. Khi thu tiền, hệ thống tạo income source=debt_payment trong business_transactions.
-                      </p>
                     </SectionCard>
                   ) : (
                     <div className="space-y-4">
-                      <SectionCard eyebrow="Nhập công nợ phải trả" title="Ghi nhận nghĩa vụ theo tháng phát sinh">
+                      <SectionCard
+                        eyebrow="PHẢI TRẢ / PHẢI CHI — FXA TRẢ CHO NGƯỜI KHÁC"
+                        title="Thêm khoản doanh nghiệp phải chi"
+                      >
                         <form onSubmit={addPayable} className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
                           <label className="grid gap-1">
-                            <span className="text-xs font-bold text-gray-400">Tháng hạch toán</span>
+                            <span className="font-bold text-gray-300">Khoản này thuộc tháng nào?</span>
                             <input
                               type="month"
                               value={payableMonth}
@@ -2297,7 +2812,7 @@ export default function AdminRevenuePage() {
                             />
                           </label>
                           <label className="grid gap-1">
-                            <span className="text-xs font-bold text-gray-400">Loại công nợ</span>
+                            <span className="font-bold text-gray-300">Loại khoản phải trả</span>
                             <select
                               value={payableType}
                               onChange={(event) => setPayableType(event.target.value as PayableType)}
@@ -2310,7 +2825,7 @@ export default function AdminRevenuePage() {
                             </select>
                           </label>
                           <label className="grid gap-1 xl:col-span-2">
-                            <span className="text-xs font-bold text-gray-400">Nhóm chi phí</span>
+                            <span className="font-bold text-gray-300">Tính vào nhóm nào?</span>
                             <select
                               value={payableExpenseGroup}
                               onChange={(event) => setPayableExpenseGroup(event.target.value as ExpenseGroup)}
@@ -2323,7 +2838,7 @@ export default function AdminRevenuePage() {
                             </select>
                           </label>
                           <label className="grid gap-1 xl:col-span-2">
-                            <span className="text-xs font-bold text-gray-400">Đối tượng phải trả</span>
+                            <span className="font-bold text-gray-300">Trả cho ai?</span>
                             <input
                               value={payableCounterparty}
                               onChange={(event) => setPayableCounterparty(event.target.value)}
@@ -2333,7 +2848,7 @@ export default function AdminRevenuePage() {
                             />
                           </label>
                           <label className="grid gap-1 xl:col-span-3">
-                            <span className="text-xs font-bold text-gray-400">Nội dung công nợ</span>
+                            <span className="font-bold text-gray-300">Nội dung</span>
                             <input
                               value={payableTitle}
                               onChange={(event) => setPayableTitle(event.target.value)}
@@ -2343,7 +2858,7 @@ export default function AdminRevenuePage() {
                             />
                           </label>
                           <label className="grid gap-1">
-                            <span className="text-xs font-bold text-gray-400">Số tiền CAD</span>
+                            <span className="font-bold text-gray-300">Số tiền phải trả</span>
                             <input
                               type="number"
                               min="0"
@@ -2355,7 +2870,7 @@ export default function AdminRevenuePage() {
                             />
                           </label>
                           <label className="grid gap-1">
-                            <span className="text-xs font-bold text-gray-400">Hạn thanh toán</span>
+                            <span className="font-bold text-gray-300">Hạn thanh toán</span>
                             <input
                               type="date"
                               value={payableDueDate}
@@ -2365,11 +2880,11 @@ export default function AdminRevenuePage() {
                             />
                           </label>
                           <label className="grid gap-1 xl:col-span-4">
-                            <span className="text-xs font-bold text-gray-400">Ghi chú</span>
+                            <span className="font-bold text-gray-300">Ghi chú</span>
                             <input
                               value={payableNotes}
                               onChange={(event) => setPayableNotes(event.target.value)}
-                              placeholder="Căn cứ tính lương, kỳ thanh toán, hóa đơn..."
+                              placeholder="Có thể để trống"
                               disabled={!isAdmin}
                               className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white disabled:opacity-50"
                             />
@@ -2377,38 +2892,196 @@ export default function AdminRevenuePage() {
                           <div className="flex items-end xl:col-span-2">
                             <button
                               disabled={!isAdmin || saving}
-                              className="w-full rounded-xl bg-yellow-400 px-4 py-3 text-sm font-black uppercase text-black hover:bg-yellow-300 disabled:opacity-50"
+                              className="w-full rounded-xl bg-yellow-400 px-4 py-3 font-black uppercase text-black hover:bg-yellow-300 disabled:opacity-50"
                             >
-                              {saving ? "Đang lưu..." : "Ghi công nợ"}
+                              {saving ? "Đang lưu..." : "Thêm khoản phải trả"}
                             </button>
                           </div>
                         </form>
                       </SectionCard>
 
-                      <SectionCard eyebrow="Sổ công nợ phải trả" title={`Công nợ thuộc ${monthLabel(selectedMonth)}`}>
+                      <SectionCard
+                        eyebrow="PHẢI TRẢ / PHẢI CHI — CHI PHÍ THEO THÁNG PHÁT SINH"
+                        title={`Khoản phải trả được tính vào ${monthLabel(selectedMonth)}`}
+                      >
                         <div className="mb-4 grid gap-3 sm:grid-cols-3">
-                          <KpiCard label="Còn phải trả tháng" value={money(summary.selectedPayableBalance)} tone="yellow" />
-                          <KpiCard label="Số khoản trong tháng" value={String(selectedPayables.length)} tone="neutral" />
+                          <KpiCard label="Còn phải trả trong tháng" value={money(summary.selectedPayableBalance)} tone="yellow" />
+                          <KpiCard label="Số khoản phải trả" value={String(selectedPayables.length)} tone="neutral" />
                           <KpiCard label="Tổng phải trả toàn hệ thống" value={money(summary.allPayableBalance)} tone="blue" />
                         </div>
 
+                        {editingPayableId && payableEditDraft ? (
+                          <div className="mb-5 rounded-3xl border border-yellow-400/35 bg-yellow-400/10 p-5">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="font-black text-yellow-200">Sửa khoản PHẢI TRẢ / PHẢI CHI</p>
+                                <p className="mt-1 text-sm text-yellow-100/75">
+                                  Khi đổi tháng, toàn bộ chi phí của khoản này sẽ chuyển sang báo cáo lãi / lỗ của tháng mới.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={cancelPayableEdit}
+                                className="rounded-xl border border-white/20 px-4 py-2 font-bold text-white hover:border-white/50"
+                              >
+                                Đóng
+                              </button>
+                            </div>
+
+                            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                              <label className="grid gap-1">
+                                <span className="font-bold text-gray-300">Khoản này thuộc tháng nào?</span>
+                                <input
+                                  type="month"
+                                  value={payableEditDraft.accountingMonth}
+                                  onChange={(event) =>
+                                    setPayableEditDraft((current) =>
+                                      current ? { ...current, accountingMonth: event.target.value } : current,
+                                    )
+                                  }
+                                  className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                                />
+                              </label>
+                              <label className="grid gap-1">
+                                <span className="font-bold text-gray-300">Loại khoản</span>
+                                <select
+                                  value={payableEditDraft.payableType}
+                                  onChange={(event) =>
+                                    setPayableEditDraft((current) =>
+                                      current
+                                        ? { ...current, payableType: event.target.value as PayableType }
+                                        : current,
+                                    )
+                                  }
+                                  className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-black"
+                                >
+                                  {PAYABLE_TYPE_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="grid gap-1 xl:col-span-2">
+                                <span className="font-bold text-gray-300">Nhóm chi phí</span>
+                                <select
+                                  value={payableEditDraft.expenseGroup}
+                                  onChange={(event) =>
+                                    setPayableEditDraft((current) =>
+                                      current
+                                        ? { ...current, expenseGroup: event.target.value as ExpenseGroup }
+                                        : current,
+                                    )
+                                  }
+                                  className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-black"
+                                >
+                                  {EXPENSE_GROUP_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="grid gap-1 xl:col-span-2">
+                                <span className="font-bold text-gray-300">Trả cho ai?</span>
+                                <input
+                                  value={payableEditDraft.counterparty}
+                                  onChange={(event) =>
+                                    setPayableEditDraft((current) =>
+                                      current ? { ...current, counterparty: event.target.value } : current,
+                                    )
+                                  }
+                                  className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                                />
+                              </label>
+                              <label className="grid gap-1 xl:col-span-3">
+                                <span className="font-bold text-gray-300">Nội dung</span>
+                                <input
+                                  value={payableEditDraft.title}
+                                  onChange={(event) =>
+                                    setPayableEditDraft((current) =>
+                                      current ? { ...current, title: event.target.value } : current,
+                                    )
+                                  }
+                                  className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                                />
+                              </label>
+                              <label className="grid gap-1">
+                                <span className="font-bold text-gray-300">Số tiền phải trả</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={payableEditDraft.totalAmount}
+                                  onChange={(event) =>
+                                    setPayableEditDraft((current) =>
+                                      current ? { ...current, totalAmount: event.target.value } : current,
+                                    )
+                                  }
+                                  className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                                />
+                              </label>
+                              <label className="grid gap-1">
+                                <span className="font-bold text-gray-300">Hạn thanh toán</span>
+                                <input
+                                  type="date"
+                                  value={payableEditDraft.dueDate}
+                                  onChange={(event) =>
+                                    setPayableEditDraft((current) =>
+                                      current ? { ...current, dueDate: event.target.value } : current,
+                                    )
+                                  }
+                                  className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                                />
+                              </label>
+                              <label className="grid gap-1 xl:col-span-5">
+                                <span className="font-bold text-gray-300">Ghi chú</span>
+                                <input
+                                  value={payableEditDraft.notes}
+                                  onChange={(event) =>
+                                    setPayableEditDraft((current) =>
+                                      current ? { ...current, notes: event.target.value } : current,
+                                    )
+                                  }
+                                  className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                                />
+                              </label>
+                              <div className="flex items-end justify-end gap-2 xl:col-span-6">
+                                <button
+                                  type="button"
+                                  onClick={cancelPayableEdit}
+                                  className="rounded-xl border border-white/20 px-4 py-3 font-bold text-white"
+                                >
+                                  Hủy
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={savePayableEdit}
+                                  disabled={saving}
+                                  className="rounded-xl bg-yellow-400 px-5 py-3 font-black text-black disabled:opacity-50"
+                                >
+                                  {saving ? "Đang lưu..." : "Lưu khoản phải trả"}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+
                         {selectedPayables.length === 0 ? (
                           <p className="rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-gray-400">
-                            Không có công nợ phải trả thuộc tháng này.
+                            Không có khoản PHẢI TRẢ / PHẢI CHI được tính vào tháng này.
                           </p>
                         ) : (
                           <div className="overflow-auto rounded-2xl border border-white/10">
-                            <table className="w-full min-w-[1450px] border-collapse text-left text-xs">
+                            <table className="w-full min-w-[1680px] border-collapse text-left text-sm">
                               <thead className="bg-yellow-400 text-black">
                                 <tr>
-                                  <th className="p-3">Loại / Đối tượng</th>
+                                  <th className="p-3">Loại công nợ</th>
+                                  <th className="p-3">Người trả / nhận</th>
                                   <th className="p-3">Nội dung</th>
                                   <th className="p-3">Nhóm chi phí</th>
-                                  <th className="p-3 text-right">Tổng</th>
+                                  <th className="p-3 text-right">Tổng phải trả</th>
                                   <th className="p-3 text-right">Đã trả</th>
-                                  <th className="p-3 text-right">Còn lại</th>
+                                  <th className="p-3 text-right">Còn phải trả</th>
                                   <th className="p-3">Hạn trả</th>
-                                  <th className="p-3">Thanh toán</th>
+                                  <th className="p-3">Tính vào tháng</th>
+                                  <th className="p-3">Thanh toán thực tế</th>
                                   <th className="p-3 text-right">Thao tác</th>
                                 </tr>
                               </thead>
@@ -2426,15 +3099,20 @@ export default function AdminRevenuePage() {
                                   return (
                                     <tr
                                       key={payable.id}
-                                      className={`border-b border-white/10 ${index % 2 === 0 ? "bg-black/45" : "bg-white/[0.035]"}`}
+                                      className={`border-b border-white/10 ${
+                                        index % 2 === 0 ? "bg-black/45" : "bg-white/[0.035]"
+                                      }`}
                                     >
                                       <td className="p-3">
-                                        <p className="font-bold text-yellow-300">{getPayableTypeLabel(payable.payable_type)}</p>
-                                        <p className="mt-1 text-white">{payable.counterparty}</p>
+                                        <span className="rounded-full border border-red-400/35 bg-red-400/10 px-3 py-1 font-black text-red-200">
+                                          PHẢI TRẢ
+                                        </span>
+                                        <p className="mt-2 font-bold text-yellow-300">{getPayableTypeLabel(payable.payable_type)}</p>
                                       </td>
+                                      <td className="p-3 font-bold text-white">{payable.counterparty}</td>
                                       <td className="p-3">
                                         <p className="font-bold text-white">{payable.title}</p>
-                                        {payable.notes ? <p className="mt-1 max-w-sm text-[11px] text-gray-500">{payable.notes}</p> : null}
+                                        {payable.notes ? <p className="mt-1 max-w-sm text-xs text-gray-500">{payable.notes}</p> : null}
                                       </td>
                                       <td className="p-3 text-gray-300">{getReportGroupLabel(payable.expense_group)}</td>
                                       <td className="p-3 text-right text-white">{money(payable.total_amount)}</td>
@@ -2445,8 +3123,12 @@ export default function AdminRevenuePage() {
                                         {overdue ? <p className="mt-1">Quá hạn</p> : null}
                                       </td>
                                       <td className="p-3">
+                                        <p className="font-bold text-white">{monthLabel(normalizeMonthKey(payable.accounting_month))}</p>
+                                        <p className="mt-1 text-xs text-gray-500">Chi phí được tính vào tháng này</p>
+                                      </td>
+                                      <td className="p-3">
                                         {remaining > 0 && payable.status !== "cancelled" ? (
-                                          <div className="grid min-w-[330px] grid-cols-[1fr_1fr_auto] gap-2">
+                                          <div className="grid min-w-[340px] grid-cols-[1fr_1fr_auto] gap-2">
                                             <input
                                               type="number"
                                               min="0"
@@ -2454,7 +3136,10 @@ export default function AdminRevenuePage() {
                                               step="0.01"
                                               value={paymentAmounts[payable.id] || ""}
                                               onChange={(event) =>
-                                                setPaymentAmounts((current) => ({ ...current, [payable.id]: event.target.value }))
+                                                setPaymentAmounts((current) => ({
+                                                  ...current,
+                                                  [payable.id]: event.target.value,
+                                                }))
                                               }
                                               placeholder={remaining.toFixed(2)}
                                               disabled={!isAdmin}
@@ -2464,7 +3149,10 @@ export default function AdminRevenuePage() {
                                               type="date"
                                               value={paymentDates[payable.id] || todayInputDate()}
                                               onChange={(event) =>
-                                                setPaymentDates((current) => ({ ...current, [payable.id]: event.target.value }))
+                                                setPaymentDates((current) => ({
+                                                  ...current,
+                                                  [payable.id]: event.target.value,
+                                                }))
                                               }
                                               disabled={!isAdmin}
                                               className="rounded-lg border border-yellow-500/25 bg-black/60 px-2 py-2 text-white disabled:opacity-50"
@@ -2475,25 +3163,36 @@ export default function AdminRevenuePage() {
                                               disabled={!isAdmin || saving}
                                               className="rounded-lg bg-yellow-400 px-3 py-2 font-black text-black disabled:opacity-50"
                                             >
-                                              Trả
+                                              Trả tiền
                                             </button>
                                           </div>
                                         ) : (
-                                          <span className="font-bold text-green-300">Đã hoàn tất</span>
+                                          <span className="font-bold text-green-300">{getPayableStatusLabel(payable.status)}</span>
                                         )}
                                       </td>
                                       <td className="p-3 text-right">
-                                        {isAdmin && toNumber(payable.paid_amount) === 0 ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => deletePayable(payable)}
-                                            className="rounded-lg border border-red-400 px-3 py-2 font-bold text-red-300 hover:bg-red-400 hover:text-black"
-                                          >
-                                            Xóa
-                                          </button>
-                                        ) : (
-                                          <span className="text-gray-500">{payable.status}</span>
-                                        )}
+                                        <div className="flex justify-end gap-2">
+                                          {isAdmin ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => startPayableEdit(payable)}
+                                              className="rounded-lg border border-yellow-400 px-3 py-2 font-bold text-yellow-300 hover:bg-yellow-400 hover:text-black"
+                                            >
+                                              Sửa
+                                            </button>
+                                          ) : null}
+                                          {isAdmin && toNumber(payable.paid_amount) === 0 ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => deletePayable(payable)}
+                                              className="rounded-lg border border-red-400 px-3 py-2 font-bold text-red-300 hover:bg-red-400 hover:text-black"
+                                            >
+                                              Xóa
+                                            </button>
+                                          ) : (
+                                            <span className="self-center text-xs text-gray-500">{getPayableStatusLabel(payable.status)}</span>
+                                          )}
+                                        </div>
                                       </td>
                                     </tr>
                                   );
@@ -2525,10 +3224,10 @@ export default function AdminRevenuePage() {
                     <KpiCard label="Lợi nhuận sau thuế" value={money(currentProfitLoss.netProfit)} tone={currentProfitLoss.netProfit >= 0 ? "yellow" : "red"} />
                   </section>
 
-                  <SectionCard eyebrow="Sổ kế toán" title={`Tổng hợp nhóm hạch toán ${monthLabel(selectedMonth)}`}>
+                  <SectionCard eyebrow="Tổng hợp kế toán" title={`Tổng hợp doanh thu và chi phí ${monthLabel(selectedMonth)}`}>
                     {ledgerGroups.length === 0 ? (
                       <p className="rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-gray-400">
-                        Chưa có dữ liệu hạch toán trong tháng này.
+                        Chưa có doanh thu hoặc chi phí được ghi nhận trong tháng này.
                       </p>
                     ) : (
                       <div className="overflow-auto rounded-2xl border border-white/10">
@@ -2538,7 +3237,7 @@ export default function AdminRevenuePage() {
                               <th className="p-3">Nhóm kế toán</th>
                               <th className="p-3 text-right">Từ sổ nhật ký</th>
                               <th className="p-3 text-right">Từ công nợ phải trả</th>
-                              <th className="p-3 text-right">Tổng hạch toán</th>
+                              <th className="p-3 text-right">Tổng ghi nhận</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2562,15 +3261,15 @@ export default function AdminRevenuePage() {
                   {currentProfitLoss.unclassifiedCount > 0 ? (
                     <div className="rounded-3xl border border-orange-500/35 bg-orange-500/10 p-5">
                       <p className="font-black text-orange-300">
-                        Còn {currentProfitLoss.unclassifiedCount} bút toán chưa phân loại chính thức.
+                        Còn {currentProfitLoss.unclassifiedCount} giao dịch chưa phân loại chính thức.
                       </p>
-                      <p className="mt-2 text-sm leading-6 text-orange-100/80">
-                        Hệ thống đang dùng nhóm dự phòng để không làm mất số tiền. Vào Sổ nhật ký, lọc “Chưa phân loại”, chọn nhóm đúng và bấm “Lưu nhóm” trước khi xuất báo cáo cuối tháng.
+                      <p className="mt-2 text-sm text-orange-100/80">
+                        Hãy chọn lại nhóm trong Nhật ký thu chi trước khi xuất báo cáo.
                       </p>
                     </div>
                   ) : (
                     <div className="rounded-3xl border border-green-500/30 bg-green-500/10 p-5 text-green-200">
-                      Tất cả bút toán trong tháng đã có phân loại chính thức.
+                      Tất cả giao dịch trong tháng đã có phân loại chính thức.
                     </div>
                   )}
                 </div>
@@ -2578,6 +3277,31 @@ export default function AdminRevenuePage() {
 
               {activeTab === "profit_loss" ? (
                 <div className="mt-4 space-y-4">
+                  <details className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
+                    <summary className="cursor-pointer font-bold text-gray-200">Ước tính thuế (không bắt buộc)</summary>
+                    <div className="mt-4 grid gap-3 md:grid-cols-[220px_minmax(0,1fr)] md:items-end">
+                      <label className="grid gap-1">
+                        <span className="text-sm text-gray-400">Thuế suất (%)</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={taxRates[selectedMonth] || ""}
+                          onChange={(event) => updateTaxRate(event.target.value)}
+                          placeholder="Để trống"
+                          disabled={!isAdmin}
+                          className="rounded-xl border border-white/20 bg-black/60 px-4 py-3 text-white outline-none disabled:opacity-50"
+                        />
+                      </label>
+                      <p className="text-sm text-gray-400">
+                        {currentTaxRate === null
+                          ? `Đang dùng số thuế đã ghi nhận: ${money(currentProfitLoss.recordedIncomeTaxCurrent)}`
+                          : `Thuế ước tính: ${money(currentProfitLoss.incomeTaxCurrent)}`}
+                      </p>
+                    </div>
+                  </details>
+
                   <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <KpiCard label="Doanh thu thuần" value={money(currentProfitLoss.netRevenue)} tone="green" />
                     <KpiCard label="Lợi nhuận gộp" value={money(currentProfitLoss.grossProfit)} tone={currentProfitLoss.grossProfit >= 0 ? "yellow" : "red"} />
@@ -2587,14 +3311,13 @@ export default function AdminRevenuePage() {
 
                   <SectionCard eyebrow="Báo cáo kết quả hoạt động kinh doanh" title={`${monthLabel(selectedMonth)} so với ${monthLabel(previousMonth)}`}>
                     <div className="overflow-auto rounded-2xl border border-white/10 bg-white">
-                      <table className="w-full min-w-[1100px] border-collapse text-left text-xs text-black">
+                      <table className="w-full min-w-[900px] border-collapse text-left text-xs text-black">
                         <thead className="bg-gray-300">
                           <tr>
-                            <th className="border border-gray-600 p-3 text-center">Chỉ tiêu<br />Item</th>
-                            <th className="border border-gray-600 p-3 text-center">Mã số<br />Code</th>
-                            <th className="border border-gray-600 p-3 text-center">Thuyết minh<br />Note</th>
-                            <th className="border border-gray-600 p-3 text-center">Kỳ này<br />Current period</th>
-                            <th className="border border-gray-600 p-3 text-center">Kỳ trước<br />Prior period</th>
+                            <th className="border border-gray-600 p-3 text-center">Chỉ tiêu</th>
+                            <th className="border border-gray-600 p-3 text-center">Mã số</th>
+                            <th className="border border-gray-600 p-3 text-center">Kỳ này</th>
+                            <th className="border border-gray-600 p-3 text-center">Kỳ trước</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2602,7 +3325,6 @@ export default function AdminRevenuePage() {
                             <tr key={`${row.code}-${row.item}`} className={row.bold ? "font-black" : ""}>
                               <td className="border border-gray-500 p-2">{row.item}</td>
                               <td className="border border-gray-500 p-2 text-center">{row.code}</td>
-                              <td className="border border-gray-500 p-2 text-center">{row.note}</td>
                               <td className={`border border-gray-500 p-2 text-right ${row.current < 0 ? "text-red-700" : ""}`}>{money(row.current)}</td>
                               <td className={`border border-gray-500 p-2 text-right ${row.previous < 0 ? "text-red-700" : ""}`}>{money(row.previous)}</td>
                             </tr>
@@ -2617,20 +3339,17 @@ export default function AdminRevenuePage() {
                         onClick={exportPrintableReport}
                         className="rounded-xl border border-yellow-400 px-4 py-3 text-xs font-bold uppercase text-yellow-300 hover:bg-yellow-400 hover:text-black"
                       >
-                        Xuất mẫu in giống báo cáo
+                        Xuất bản in
                       </button>
                       <button
                         type="button"
                         onClick={exportAccountingWorkbook}
                         className="rounded-xl bg-yellow-400 px-4 py-3 text-xs font-black uppercase text-black hover:bg-yellow-300"
                       >
-                        Xuất toàn bộ sổ Excel
+                        Xuất Excel
                       </button>
                     </div>
 
-                    <p className="mt-4 text-xs leading-5 text-gray-500">
-                      Đây là báo cáo quản trị nội bộ bằng CAD. Hệ thống không tự giả định thuế, khấu hao hoặc giá vốn nếu chưa có bút toán / công nợ được phân loại tương ứng.
-                    </p>
                   </SectionCard>
                 </div>
               ) : null}

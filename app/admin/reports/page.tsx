@@ -6,7 +6,16 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
 
-type ReportType = "full-html" | "revenue" | "sessions" | "clients";
+type ReportType =
+  | "business-html"
+  | "business-csv"
+  | "session-html"
+  | "session-csv"
+  | "clients";
+
+type PeriodMode = "month" | "year" | "custom";
+type ClientPeriodMode = "all" | PeriodMode;
+type SessionStatusFilter = "all" | "success" | "failed" | "cancelled";
 
 type BusinessTransaction = {
   id: string;
@@ -112,6 +121,28 @@ type ClientExportRow = {
   createdAt: string;
 };
 
+type PeriodRange = {
+  startDate: string;
+  endDateExclusive: string;
+  startIso: string;
+  endIso: string;
+  label: string;
+  fileLabel: string;
+};
+
+type PeriodRangeState = {
+  range: PeriodRange | null;
+  error: string;
+};
+
+type SessionSummary = {
+  total: number;
+  success: number;
+  failed: number;
+  cancelled: number;
+  uniqueClients: number;
+};
+
 const MONTH_OPTIONS = [
   "January",
   "February",
@@ -127,21 +158,84 @@ const MONTH_OPTIONS = [
   "December",
 ];
 
-function getMonthRange(year: number, month: number) {
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 1);
-  const lastDay = new Date(year, month, 0).getDate();
+function pad(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function dateString(year: number, month: number, day: number) {
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
+function addDays(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+
+  return date.toISOString().slice(0, 10);
+}
+
+function localDateStartIso(value: string) {
+  return new Date(`${value}T00:00:00`).toISOString();
+}
+
+function getPeriodRange(
+  mode: PeriodMode,
+  year: number,
+  month: number,
+  customStart: string,
+  customEnd: string
+): PeriodRangeState {
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    return { range: null, error: "Enter a valid year between 2000 and 2100." };
+  }
+
+  let startDate = "";
+  let endDateExclusive = "";
+  let label = "";
+  let fileLabel = "";
+
+  if (mode === "month") {
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      return { range: null, error: "Select a valid month." };
+    }
+
+    startDate = dateString(year, month, 1);
+    endDateExclusive = month === 12 ? dateString(year + 1, 1, 1) : dateString(year, month + 1, 1);
+    label = `${MONTH_OPTIONS[month - 1]} ${year}`;
+    fileLabel = `${year}-${pad(month)}`;
+  }
+
+  if (mode === "year") {
+    startDate = dateString(year, 1, 1);
+    endDateExclusive = dateString(year + 1, 1, 1);
+    label = String(year);
+    fileLabel = String(year);
+  }
+
+  if (mode === "custom") {
+    if (!customStart || !customEnd) {
+      return { range: null, error: "Choose both a start date and an end date." };
+    }
+
+    if (customStart > customEnd) {
+      return { range: null, error: "The start date cannot be later than the end date." };
+    }
+
+    startDate = customStart;
+    endDateExclusive = addDays(customEnd, 1);
+    label = `${formatDate(customStart)} to ${formatDate(customEnd)}`;
+    fileLabel = `${customStart}_to_${customEnd}`;
+  }
 
   return {
-    startDate: start.toISOString().slice(0, 10),
-    endDate: end.toISOString().slice(0, 10),
-    startIso: start.toISOString(),
-    endIso: end.toISOString(),
-    label: `${MONTH_OPTIONS[month - 1]} ${year}`,
-    fileLabel: `${year}-${String(month).padStart(2, "0")}`,
-    year,
-    month,
-    lastDay,
+    range: {
+      startDate,
+      endDateExclusive,
+      startIso: localDateStartIso(startDate),
+      endIso: localDateStartIso(endDateExclusive),
+      label,
+      fileLabel,
+    },
+    error: "",
   };
 }
 
@@ -149,10 +243,7 @@ function toNumber(value: number | string | null | undefined) {
   if (value === null || value === undefined || value === "") return null;
 
   const cleanValue = Number(value);
-
-  if (Number.isNaN(cleanValue)) return null;
-
-  return cleanValue;
+  return Number.isNaN(cleanValue) ? null : cleanValue;
 }
 
 function money(value: number | string | null | undefined) {
@@ -177,7 +268,6 @@ function formatDate(value: string | null | undefined) {
   if (!value) return "-";
 
   const date = new Date(value.length <= 10 ? `${value}T00:00:00` : value);
-
   if (Number.isNaN(date.getTime())) return "-";
 
   return date.toLocaleDateString("en-CA", {
@@ -191,7 +281,6 @@ function formatDateTime(value: string | null | undefined) {
   if (!value) return "-";
 
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) return "-";
 
   return date.toLocaleString("en-CA", {
@@ -207,7 +296,6 @@ function getTime(value: string | null | undefined) {
   if (!value) return 0;
 
   const date = new Date(value);
-
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }
 
@@ -217,10 +305,19 @@ function getLatestByDate<T extends { created_at: string | null }>(rows: T[]) {
   return [...rows].sort((a, b) => getTime(b.created_at) - getTime(a.created_at))[0];
 }
 
-function isDateInRange(value: string | null | undefined, startIso: string, endIso: string) {
+function isDateInRange(value: string | null | undefined, range: PeriodRange) {
   const time = getTime(value);
+  return time >= getTime(range.startIso) && time < getTime(range.endIso);
+}
 
-  return time >= getTime(startIso) && time < getTime(endIso);
+function getDateKey(value: string | null | undefined) {
+  if (!value) return "";
+  if (value.length <= 10) return value.slice(0, 10);
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function cleanText(value: unknown) {
@@ -238,7 +335,6 @@ function downloadFile(filename: string, content: string, type: string) {
 
   link.href = url;
   link.download = filename;
-
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -289,7 +385,13 @@ function getSourceLabel(source: string | null | undefined) {
     other: "Other",
   };
 
-  return labels[source] || source.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+  return (
+    labels[source] ||
+    source
+      .split("_")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ")
+  );
 }
 
 function getClientSourceLabel(source: string | null, sourceOther: string | null) {
@@ -306,7 +408,6 @@ function getClientSourceLabel(source: string | null, sourceOther: string | null)
   };
 
   if (source === "other") return sourceOther ? `Other: ${sourceOther}` : "Other";
-
   return labels[source] || source;
 }
 
@@ -324,7 +425,8 @@ function getPackageNumbers(packageRow: SessionPackageRow | null) {
   const totalSessions = toNumber(packageRow?.total_sessions) ?? 0;
   const usedSessions = toNumber(packageRow?.used_sessions) ?? 0;
   const savedRemaining = toNumber(packageRow?.remaining_sessions);
-  const remainingSessions = savedRemaining !== null ? savedRemaining : Math.max(totalSessions - usedSessions, 0);
+  const remainingSessions =
+    savedRemaining !== null ? savedRemaining : Math.max(totalSessions - usedSessions, 0);
 
   return { totalSessions, usedSessions, remainingSessions };
 }
@@ -342,11 +444,9 @@ function getDaysUntil(value: string | null | undefined) {
 
   const today = new Date();
   const deadline = new Date(`${value.slice(0, 10)}T00:00:00`);
-
   if (Number.isNaN(deadline.getTime())) return null;
 
   today.setHours(0, 0, 0, 0);
-
   return Math.ceil((deadline.getTime() - today.getTime()) / 86400000);
 }
 
@@ -371,7 +471,9 @@ function buildClientExportRows(data: ReportData): ClientExportRow[] {
     const amountPaid = toNumber(latestPurchase?.amount_paid);
     const balanceDue = toNumber(latestPurchase?.balance_due);
     const pt = client.assigned_trainer_id ? profileMap.get(client.assigned_trainer_id) : null;
-    const nc = client.assigned_nutrition_coach_id ? profileMap.get(client.assigned_nutrition_coach_id) : null;
+    const nc = client.assigned_nutrition_coach_id
+      ? profileMap.get(client.assigned_nutrition_coach_id)
+      : null;
 
     return {
       clientCode: client.client_code || "-",
@@ -404,31 +506,40 @@ function buildHtmlTable(headers: string[], rows: unknown[][], emptyText: string)
   }
 
   return `
-    <table>
-      <thead>
-        <tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr>
-      </thead>
-      <tbody>
-        ${rows
-          .map(
-            (row) => `
-              <tr>
-                ${row
-                  .map((cell, index) => {
-                    const isNumber = typeof cell === "number" || String(cell).startsWith("$") || String(cell).startsWith("-");
-                    return `<td class="${isNumber && index > 0 ? "right" : ""}">${escapeHtml(cell)}</td>`;
-                  })
-                  .join("")}
-              </tr>
-            `
-          )
-          .join("")}
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (row) => `
+                <tr>
+                  ${row
+                    .map((cell, index) => {
+                      const isNumber =
+                        typeof cell === "number" ||
+                        String(cell).startsWith("$") ||
+                        String(cell).startsWith("-$");
+
+                      return `<td class="${isNumber && index > 0 ? "right" : ""}">${escapeHtml(cell)}</td>`;
+                    })
+                    .join("")}
+                </tr>
+              `
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
-function buildBarChart(rows: { label: string; value: number; tone?: "good" | "bad" | "warn" | "blue" }[], emptyText: string) {
+function buildMoneyBarChart(
+  rows: { label: string; value: number; tone?: "good" | "bad" | "warn" | "blue" }[],
+  emptyText: string
+) {
   if (rows.length === 0) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
 
   const max = Math.max(...rows.map((row) => Math.abs(row.value)), 1);
@@ -437,7 +548,7 @@ function buildBarChart(rows: { label: string; value: number; tone?: "good" | "ba
     <div class="bar-chart">
       ${rows
         .map((row) => {
-          const width = Math.max((Math.abs(row.value) / max) * 100, 4);
+          const width = Math.max((Math.abs(row.value) / max) * 100, 3);
           const tone = row.tone || (row.value >= 0 ? "good" : "bad");
 
           return `
@@ -453,7 +564,10 @@ function buildBarChart(rows: { label: string; value: number; tone?: "good" | "ba
   `;
 }
 
-function buildCountBarChart(rows: { label: string; value: number; tone?: "good" | "bad" | "warn" | "blue" }[], emptyText: string) {
+function buildCountBarChart(
+  rows: { label: string; value: number; tone?: "good" | "bad" | "warn" | "blue" }[],
+  emptyText: string
+) {
   if (rows.length === 0) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
 
   const max = Math.max(...rows.map((row) => Math.abs(row.value)), 1);
@@ -462,7 +576,7 @@ function buildCountBarChart(rows: { label: string; value: number; tone?: "good" 
     <div class="bar-chart">
       ${rows
         .map((row) => {
-          const width = Math.max((Math.abs(row.value) / max) * 100, 4);
+          const width = Math.max((Math.abs(row.value) / max) * 100, 3);
           const tone = row.tone || "blue";
 
           return `
@@ -478,73 +592,228 @@ function buildCountBarChart(rows: { label: string; value: number; tone?: "good" 
   `;
 }
 
-function buildDailyGraph(rows: { day: string; revenue: number; sessions: number }[]) {
-  const maxRevenue = Math.max(...rows.map((row) => row.revenue), 1);
+function buildTrendRows(
+  range: PeriodRange,
+  transactions: BusinessTransaction[],
+  sessions: SessionHistoryRow[]
+) {
+  const start = new Date(`${range.startDate}T12:00:00`);
+  const end = new Date(`${range.endDateExclusive}T12:00:00`);
+  const dayCount = Math.max(Math.round((end.getTime() - start.getTime()) / 86400000), 1);
+  const useMonths = dayCount > 62;
+  const bucketMap = new Map<string, { label: string; income: number; expenses: number; sessions: number }>();
+
+  const ensureBucket = (dateKey: string) => {
+    const key = useMonths ? dateKey.slice(0, 7) : dateKey;
+    const label = useMonths
+      ? new Date(`${key}-01T00:00:00`).toLocaleDateString("en-CA", {
+          year: "numeric",
+          month: "short",
+        })
+      : new Date(`${key}T00:00:00`).toLocaleDateString("en-CA", {
+          month: "short",
+          day: "numeric",
+        });
+
+    if (!bucketMap.has(key)) {
+      bucketMap.set(key, { label, income: 0, expenses: 0, sessions: 0 });
+    }
+
+    return bucketMap.get(key)!;
+  };
+
+  if (useMonths) {
+    let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    const finish = new Date(end.getFullYear(), end.getMonth(), 1);
+
+    while (cursor < finish) {
+      ensureBucket(`${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}-01`);
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+    }
+  } else {
+    let cursor = range.startDate;
+    while (cursor < range.endDateExclusive) {
+      ensureBucket(cursor);
+      cursor = addDays(cursor, 1);
+    }
+  }
+
+  transactions.forEach((transaction) => {
+    const dateKey = getDateKey(transaction.transaction_date);
+    if (!dateKey) return;
+
+    const bucket = ensureBucket(dateKey);
+    const amount = toNumber(transaction.amount) ?? 0;
+
+    if (transaction.transaction_type === "income") bucket.income += amount;
+    if (transaction.transaction_type === "expense") bucket.expenses += amount;
+  });
+
+  sessions.forEach((session) => {
+    if (session.status !== "success") return;
+
+    const dateKey = getDateKey(session.created_at);
+    if (!dateKey) return;
+
+    ensureBucket(dateKey).sessions += 1;
+  });
+
+  return Array.from(bucketMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, value]) => value);
+}
+
+function buildActivityChart(
+  rows: { label: string; income: number; expenses: number; sessions: number }[]
+) {
+  if (rows.length === 0) return `<div class="empty">No activity in this period.</div>`;
+
+  const maxMoney = Math.max(...rows.flatMap((row) => [row.income, row.expenses]), 1);
   const maxSessions = Math.max(...rows.map((row) => row.sessions), 1);
 
   return `
-    <div class="daily-grid">
+    <div class="activity-chart">
       ${rows
         .map((row) => {
-          const revenueHeight = Math.max((row.revenue / maxRevenue) * 100, row.revenue > 0 ? 6 : 0);
-          const sessionHeight = Math.max((row.sessions / maxSessions) * 100, row.sessions > 0 ? 6 : 0);
+          const incomeHeight = Math.max((row.income / maxMoney) * 100, row.income > 0 ? 5 : 0);
+          const expenseHeight = Math.max((row.expenses / maxMoney) * 100, row.expenses > 0 ? 5 : 0);
+          const sessionHeight = Math.max((row.sessions / maxSessions) * 100, row.sessions > 0 ? 5 : 0);
 
           return `
-            <div class="daily-item" title="${escapeHtml(row.day)} · Revenue ${escapeHtml(money(row.revenue))} · Sessions ${escapeHtml(row.sessions)}">
-              <div class="daily-bars">
-                <div class="daily-bar revenue" style="height:${revenueHeight}%"></div>
-                <div class="daily-bar session" style="height:${sessionHeight}%"></div>
+            <div class="activity-item" title="${escapeHtml(row.label)} | Income ${escapeHtml(
+              money(row.income)
+            )} | Expenses ${escapeHtml(money(row.expenses))} | Sessions ${escapeHtml(row.sessions)}">
+              <div class="activity-bars">
+                <div class="activity-bar income" style="height:${incomeHeight}%"></div>
+                <div class="activity-bar expense" style="height:${expenseHeight}%"></div>
+                <div class="activity-bar session" style="height:${sessionHeight}%"></div>
               </div>
-              <div class="daily-label">${escapeHtml(row.day)}</div>
+              <div class="activity-label">${escapeHtml(row.label)}</div>
             </div>
           `;
         })
         .join("")}
     </div>
-    <div class="legend"><span><b class="legend-revenue"></b> Revenue</span><span><b class="legend-session"></b> Sessions</span></div>
+    <div class="legend">
+      <span><b class="legend-income"></b> Income</span>
+      <span><b class="legend-expense"></b> Expenses</span>
+      <span><b class="legend-session"></b> Completed sessions</span>
+    </div>
   `;
 }
 
-function buildFullHtmlReport(args: {
-  monthLabel: string;
-  fileLabel: string;
-  year: number;
-  month: number;
-  lastDay: number;
-  startIso: string;
-  endIso: string;
+function buildReportStyles() {
+  return `
+    * { box-sizing: border-box; }
+    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body {
+      margin: 0;
+      background: #eef1f5;
+      color: #172033;
+      font-family: Arial, "Segoe UI", Helvetica, sans-serif;
+      line-height: 1.45;
+    }
+    .page { max-width: 1240px; margin: 0 auto; padding: 28px; }
+    .report { overflow: hidden; border: 1px solid #dce1e8; border-radius: 22px; background: white; box-shadow: 0 22px 70px rgba(15, 23, 42, .11); }
+    .hero { padding: 32px 36px; border-bottom: 6px solid #f3c71b; background: #111827; color: white; }
+    .brand { color: #facc15; font-size: 12px; font-weight: 800; letter-spacing: .28em; text-transform: uppercase; }
+    h1 { margin: 10px 0 0; font-size: 40px; line-height: 1.08; letter-spacing: -.035em; }
+    .hero p { margin: 10px 0 0; color: #cbd5e1; }
+    .section { padding: 27px 34px; border-bottom: 1px solid #e5e7eb; }
+    .section-title { margin: 0 0 15px; font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
+    .section-subtitle { margin: -7px 0 17px; color: #667085; font-size: 13px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
+    .card { border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px; background: #f8fafc; }
+    .label { font-size: 10px; font-weight: 800; letter-spacing: .09em; color: #667085; text-transform: uppercase; }
+    .value { margin-top: 8px; font-size: 27px; line-height: 1.05; font-weight: 850; letter-spacing: -.03em; }
+    .sub { margin-top: 6px; color: #667085; font-size: 12px; }
+    .good { color: #047857; }
+    .bad { color: #c2413b; }
+    .warn { color: #b45309; }
+    .blue { color: #1d4ed8; }
+    .neutral { color: #172033; }
+    .bar-chart { display: grid; gap: 10px; }
+    .bar-row { display: grid; grid-template-columns: 190px 1fr 115px; gap: 12px; align-items: center; }
+    .bar-label { font-size: 13px; font-weight: 700; color: #344054; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar-track { height: 16px; border: 1px solid #e2e8f0; border-radius: 999px; background: #f1f5f9; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 999px; }
+    .bar-fill.good { background: #16a34a; }
+    .bar-fill.bad { background: #dc2626; }
+    .bar-fill.warn { background: #d97706; }
+    .bar-fill.blue { background: #2563eb; }
+    .bar-value { text-align: right; font-size: 13px; font-weight: 800; white-space: nowrap; }
+    .activity-chart { display: flex; gap: 7px; align-items: end; min-height: 220px; padding: 18px 12px 8px; border: 1px solid #e2e8f0; border-radius: 17px; background: #f8fafc; overflow-x: auto; }
+    .activity-item { display: flex; min-width: 38px; height: 190px; flex: 1 0 38px; flex-direction: column; justify-content: end; align-items: center; gap: 7px; }
+    .activity-bars { display: flex; align-items: end; justify-content: center; gap: 3px; width: 100%; height: 156px; }
+    .activity-bar { width: 8px; border-radius: 4px 4px 0 0; }
+    .activity-bar.income { background: #16a34a; }
+    .activity-bar.expense { background: #dc2626; }
+    .activity-bar.session { background: #eab308; }
+    .activity-label { max-width: 62px; color: #667085; font-size: 9px; text-align: center; white-space: nowrap; }
+    .legend { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 11px; color: #667085; font-size: 12px; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .legend b { display: inline-block; width: 10px; height: 10px; border-radius: 999px; }
+    .legend-income { background: #16a34a; }
+    .legend-expense { background: #dc2626; }
+    .legend-session { background: #eab308; }
+    .table-wrap { width: 100%; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th { padding: 10px; background: #172033; color: white; text-align: left; font-size: 10px; letter-spacing: .065em; text-transform: uppercase; white-space: nowrap; }
+    td { padding: 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    tr:nth-child(even) td { background: #f8fafc; }
+    .right { text-align: right; white-space: nowrap; }
+    .empty { padding: 20px; border: 1px dashed #cbd5e1; border-radius: 16px; color: #667085; background: #f8fafc; text-align: center; }
+    .footer { padding: 17px 34px; background: #f8fafc; color: #667085; font-size: 12px; }
+    .page-break { page-break-before: always; }
+    @media (max-width: 900px) {
+      .grid-4, .grid-3 { grid-template-columns: 1fr 1fr; }
+      .bar-row { grid-template-columns: 125px 1fr 85px; }
+      .page { padding: 12px; }
+    }
+    @media print {
+      body { background: white; }
+      .page { max-width: none; padding: 0; }
+      .report { border: none; border-radius: 0; box-shadow: none; }
+      .section { break-inside: avoid; }
+    }
+  `;
+}
+
+function buildBusinessReportHtml(args: {
+  range: PeriodRange;
   generatedAt: string;
   data: ReportData;
 }) {
-  const { data } = args;
+  const { data, range } = args;
   const clientMap = makeClientMap(data.clients);
-  const profileMap = makeProfileMap(data.profiles);
   const clientExportRows = buildClientExportRows(data);
 
   const incomeTransactions = data.transactions.filter((row) => row.transaction_type === "income");
   const expenseTransactions = data.transactions.filter((row) => row.transaction_type === "expense");
-  const adjustmentTransactions = data.transactions.filter((row) => row.transaction_type === "cash_adjustment");
+  const adjustmentTransactions = data.transactions.filter(
+    (row) => row.transaction_type === "cash_adjustment"
+  );
 
   const income = incomeTransactions.reduce((sum, row) => sum + (toNumber(row.amount) ?? 0), 0);
-  const expenses = expenseTransactions.reduce((sum, row) => sum + (toNumber(row.amount) ?? 0), 0);
-  const adjustments = adjustmentTransactions.reduce((sum, row) => sum + (toNumber(row.amount) ?? 0), 0);
-  const net = income + adjustments - expenses;
-
-  const successSessions = data.sessions.filter((row) => row.status === "success");
-  const failedSessions = data.sessions.filter((row) => row.status === "failed");
-  const cancelledSessions = data.sessions.filter((row) => row.status === "cancelled");
-  const uniqueClientSessions = new Set(data.sessions.map((row) => row.client_id).filter(Boolean)).size;
-  const uniqueTrainerSessions = new Set(data.sessions.map((row) => row.trainer_id).filter(Boolean)).size;
-  const completionRate = data.sessions.length > 0 ? (successSessions.length / data.sessions.length) * 100 : 0;
-
-  const activeClients = data.clients.filter((client) => String(client.status || "").toLowerCase() === "active").length;
-  const inactiveClients = data.clients.filter((client) => String(client.status || "").toLowerCase() === "inactive").length;
-  const newClientsThisMonth = data.clients.filter((client) => isDateInRange(client.created_at, args.startIso, args.endIso)).length;
-
-  const allRemainingSessions = clientExportRows.reduce((sum, row) => sum + row.remainingSessions, 0);
-  const allUsedSessions = clientExportRows.reduce((sum, row) => sum + row.usedSessions, 0);
-  const allPackageValue = clientExportRows.reduce((sum, row) => sum + (row.packageValue || 0), 0);
-  const totalOutstandingDebt = data.purchases.reduce((sum, purchase) => sum + Math.max(toNumber(purchase.balance_due) ?? 0, 0), 0);
+  const expenses = expenseTransactions.reduce(
+    (sum, row) => sum + (toNumber(row.amount) ?? 0),
+    0
+  );
+  const adjustments = adjustmentTransactions.reduce(
+    (sum, row) => sum + (toNumber(row.amount) ?? 0),
+    0
+  );
+  const netCash = income + adjustments - expenses;
+  const completedSessions = data.sessions.filter((row) => row.status === "success");
+  const newClients = data.clients.filter((client) => isDateInRange(client.created_at, range)).length;
+  const activeClients = data.clients.filter(
+    (client) => String(client.status || "").toLowerCase() === "active"
+  ).length;
+  const allRemainingSessions = clientExportRows.reduce(
+    (sum, row) => sum + row.remainingSessions,
+    0
+  );
 
   const debtRows = data.purchases
     .map((purchase) => {
@@ -557,7 +826,7 @@ function buildFullHtmlReport(args: {
       return {
         clientCode: client?.client_code || "-",
         clientName: client?.full_name || "Unknown Client",
-        planName: purchase.plan_name || "Debt / Unpaid Balance",
+        planName: purchase.plan_name || "Unpaid Balance",
         balanceDue,
         deadline: purchase.debt_deadline,
         daysLeft,
@@ -566,29 +835,30 @@ function buildFullHtmlReport(args: {
     .filter((row): row is NonNullable<typeof row> => Boolean(row))
     .sort((a, b) => (a.daysLeft ?? 9999) - (b.daysLeft ?? 9999));
 
+  const totalOutstandingDebt = debtRows.reduce((sum, row) => sum + row.balanceDue, 0);
   const overdueDebt = debtRows.filter((row) => row.daysLeft !== null && row.daysLeft < 0);
-  const dueSoonDebt = debtRows.filter((row) => row.daysLeft !== null && row.daysLeft >= 0 && row.daysLeft <= 7);
+  const dueSoonDebt = debtRows.filter(
+    (row) => row.daysLeft !== null && row.daysLeft >= 0 && row.daysLeft <= 7
+  );
 
   const lowSessionRows = clientExportRows
     .filter((row) => row.remainingSessions > 0 && row.remainingSessions <= 10)
     .sort((a, b) => a.remainingSessions - b.remainingSessions)
-    .slice(0, 20);
+    .slice(0, 30);
 
-  const expiredOrZeroRows = clientExportRows
-    .filter((row) => row.remainingSessions <= 0 || String(row.status).toLowerCase() === "inactive")
-    .sort((a, b) => a.remainingSessions - b.remainingSessions)
-    .slice(0, 20);
-
-  const purchaseRowsThisMonth = data.purchases
-    .filter((purchase) => isDateInRange(purchase.created_at, args.startIso, args.endIso))
-    .filter((purchase) => ["new", "renew", "renewal"].includes(String(purchase.purchase_type || "").toLowerCase()))
-    .sort((a, b) => getTime(b.created_at) - getTime(a.created_at));
-
-  const sourceMap = new Map<string, { income: number; expenses: number; adjustments: number; net: number }>();
+  const sourceMap = new Map<
+    string,
+    { income: number; expenses: number; adjustments: number; net: number }
+  >();
 
   data.transactions.forEach((transaction) => {
     const source = transaction.source || "manual";
-    const current = sourceMap.get(source) || { income: 0, expenses: 0, adjustments: 0, net: 0 };
+    const current = sourceMap.get(source) || {
+      income: 0,
+      expenses: 0,
+      adjustments: 0,
+      net: 0,
+    };
     const amount = toNumber(transaction.amount) ?? 0;
 
     if (transaction.transaction_type === "income") {
@@ -613,112 +883,7 @@ function buildFullHtmlReport(args: {
     .map(([source, totals]) => ({ source, label: getSourceLabel(source), ...totals }))
     .sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
 
-  const trainerMap = new Map<string, { name: string; sessions: number; success: number; notes: number }>();
-
-  data.sessions.forEach((session) => {
-    const trainerId = session.trainer_id || "manual";
-    const trainer = session.trainer_id ? profileMap.get(session.trainer_id) : null;
-    const name = trainer ? getStaffName(trainer) : "Admin / Manual";
-    const current = trainerMap.get(trainerId) || { name, sessions: 0, success: 0, notes: 0 };
-
-    current.sessions += 1;
-    if (session.status === "success") current.success += 1;
-    if (session.trainer_note) current.notes += 1;
-
-    trainerMap.set(trainerId, current);
-  });
-
-  const trainerRows = Array.from(trainerMap.values()).sort((a, b) => b.success - a.success);
-
-  const dailyRows = Array.from({ length: args.lastDay }).map((_, index) => {
-    const day = index + 1;
-    const dayKey = `${args.year}-${String(args.month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    const dayLabel = String(day);
-    const dayRevenue = incomeTransactions
-      .filter((transaction) => transaction.transaction_date?.slice(0, 10) === dayKey)
-      .reduce((sum, transaction) => sum + (toNumber(transaction.amount) ?? 0), 0);
-    const daySessions = successSessions.filter((session) => session.created_at?.slice(0, 10) === dayKey).length;
-
-    return {
-      day: dayLabel,
-      revenue: dayRevenue,
-      sessions: daySessions,
-    };
-  });
-
-  const transactionTableRows = data.transactions.map((transaction) => [
-    formatDate(transaction.transaction_date),
-    getTransactionTypeLabel(transaction.transaction_type),
-    getSourceLabel(transaction.source),
-    transaction.title || "-",
-    transaction.transaction_type === "expense" ? `-${money(transaction.amount)}` : money(transaction.amount),
-    transaction.notes || "",
-  ]);
-
-  const sessionTableRows = data.sessions.slice(0, 300).map((session) => {
-    const client = session.client_id ? clientMap.get(session.client_id) : null;
-    const trainer = session.trainer_id ? profileMap.get(session.trainer_id) : null;
-
-    return [
-      formatDateTime(session.created_at),
-      client?.client_code || "-",
-      client?.full_name || "Unknown Client",
-      getStaffName(trainer || null) || "Admin / Manual",
-      session.status,
-      session.remaining_after ?? "",
-      session.trainer_note || session.message || "",
-    ];
-  });
-
-  const debtTableRows = debtRows.slice(0, 50).map((row) => [
-    row.clientCode,
-    row.clientName,
-    row.planName,
-    money(row.balanceDue),
-    formatDate(row.deadline),
-    row.daysLeft === null ? "No deadline" : row.daysLeft < 0 ? `Overdue ${Math.abs(row.daysLeft)} days` : `Due in ${row.daysLeft} days`,
-  ]);
-
-  const lowSessionTableRows = lowSessionRows.map((row) => [
-    row.clientCode,
-    row.fullName,
-    row.packageName,
-    row.remainingSessions,
-    row.personalTrainer,
-    row.nutritionCoach,
-  ]);
-
-  const purchaseTableRows = purchaseRowsThisMonth.map((purchase) => {
-    const client = clientMap.get(purchase.client_id);
-
-    return [
-      formatDate(purchase.created_at),
-      client?.client_code || "-",
-      client?.full_name || "Unknown Client",
-      purchase.plan_name || "-",
-      getPurchaseTypeLabel(purchase.purchase_type),
-      purchase.session_count ?? "",
-      money(purchase.price),
-      money(purchase.amount_paid),
-      money(purchase.balance_due),
-    ];
-  });
-
-  const clientTableRows = clientExportRows.map((row) => [
-    row.clientCode,
-    row.fullName,
-    row.status,
-    row.personalTrainer,
-    row.nutritionCoach,
-    row.packageName,
-    row.totalSessions,
-    row.usedSessions,
-    row.remainingSessions,
-    money(row.packageValue),
-    money(row.balanceDue),
-    row.debtDeadline,
-    row.source,
-  ]);
+  const trendRows = buildTrendRows(range, data.transactions, data.sessions);
 
   const sourceTableRows = sourceRows.map((row) => [
     row.label,
@@ -728,11 +893,38 @@ function buildFullHtmlReport(args: {
     money(row.net),
   ]);
 
-  const statusChartRows = [
-    { label: "Active", value: activeClients, tone: "good" as const },
-    { label: "Inactive", value: inactiveClients, tone: "bad" as const },
-    { label: "New this month", value: newClientsThisMonth, tone: "blue" as const },
-  ];
+  const debtTableRows = debtRows.slice(0, 60).map((row) => [
+    row.clientCode,
+    row.clientName,
+    row.planName,
+    money(row.balanceDue),
+    formatDate(row.deadline),
+    row.daysLeft === null
+      ? "No deadline"
+      : row.daysLeft < 0
+        ? `Overdue by ${Math.abs(row.daysLeft)} days`
+        : `Due in ${row.daysLeft} days`,
+  ]);
+
+  const renewalRows = lowSessionRows.map((row) => [
+    row.clientCode,
+    row.fullName,
+    row.packageName,
+    row.remainingSessions,
+    row.personalTrainer,
+    row.nutritionCoach,
+  ]);
+
+  const transactionRows = data.transactions.map((transaction) => [
+    formatDate(transaction.transaction_date),
+    getTransactionTypeLabel(transaction.transaction_type),
+    getSourceLabel(transaction.source),
+    transaction.title || "-",
+    transaction.transaction_type === "expense"
+      ? `-${money(transaction.amount)}`
+      : money(transaction.amount),
+    transaction.notes || "",
+  ]);
 
   return `
 <!doctype html>
@@ -740,196 +932,93 @@ function buildFullHtmlReport(args: {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FXA FITNESS Full Business Report - ${escapeHtml(args.monthLabel)}</title>
-  <style>
-    * { box-sizing: border-box; }
-    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    body {
-      margin: 0;
-      background: #f4f4f5;
-      color: #111827;
-      font-family: Arial, "Segoe UI", "Noto Sans", Helvetica, sans-serif;
-      line-height: 1.45;
-    }
-    .page { max-width: 1280px; margin: 0 auto; padding: 28px; }
-    .report { overflow: hidden; border: 1px solid #e5e7eb; border-radius: 28px; background: #fff; box-shadow: 0 24px 80px rgba(0,0,0,0.10); }
-    .hero { padding: 34px; border-bottom: 8px solid #facc15; background: radial-gradient(circle at top left, rgba(250,204,21,.22), transparent 36%), linear-gradient(135deg, #050505, #171717 62%, #050505); color: white; }
-    .brand { color: #facc15; font-size: 12px; font-weight: 900; letter-spacing: .32em; text-transform: uppercase; }
-    h1 { margin: 10px 0 0; font-size: 42px; line-height: 1.05; letter-spacing: -.04em; }
-    .hero p { margin: 10px 0 0; color: #d4d4d8; }
-    .section { padding: 28px 34px; border-bottom: 1px solid #e5e7eb; }
-    .section-title { margin: 0 0 16px; font-size: 21px; font-weight: 900; letter-spacing: -.02em; }
-    .section-subtitle { margin: -8px 0 18px; color: #6b7280; font-size: 13px; }
-    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-    .card { border: 1px solid #e5e7eb; border-radius: 20px; padding: 17px; background: #fafafa; }
-    .label { font-size: 11px; font-weight: 900; letter-spacing: .10em; color: #6b7280; text-transform: uppercase; }
-    .value { margin-top: 8px; font-size: 28px; line-height: 1.05; font-weight: 950; letter-spacing: -.03em; }
-    .sub { margin-top: 6px; color: #6b7280; font-size: 12px; }
-    .good { color: #047857; }
-    .bad { color: #dc2626; }
-    .warn { color: #d97706; }
-    .blue { color: #2563eb; }
-    .neutral { color: #111827; }
-    .bar-chart { display: grid; gap: 11px; }
-    .bar-row { display: grid; grid-template-columns: 190px 1fr 110px; gap: 12px; align-items: center; }
-    .bar-label { font-size: 13px; font-weight: 800; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .bar-track { height: 18px; border: 1px solid #e5e7eb; border-radius: 999px; background: #f3f4f6; overflow: hidden; }
-    .bar-fill { height: 100%; border-radius: 999px; }
-    .bar-fill.good { background: linear-gradient(90deg, #facc15, #22c55e); }
-    .bar-fill.bad { background: linear-gradient(90deg, #fb7185, #dc2626); }
-    .bar-fill.warn { background: linear-gradient(90deg, #facc15, #f97316); }
-    .bar-fill.blue { background: linear-gradient(90deg, #38bdf8, #2563eb); }
-    .bar-value { text-align: right; font-size: 13px; font-weight: 900; white-space: nowrap; }
-    .daily-grid { display: grid; grid-template-columns: repeat(${args.lastDay}, minmax(16px, 1fr)); gap: 5px; align-items: end; height: 190px; padding: 16px 8px 8px; border: 1px solid #e5e7eb; border-radius: 20px; background: #fafafa; }
-    .daily-item { display: flex; min-width: 0; height: 100%; flex-direction: column; justify-content: end; align-items: center; gap: 5px; }
-    .daily-bars { display: flex; align-items: end; justify-content: center; gap: 2px; height: 145px; width: 100%; }
-    .daily-bar { width: 6px; min-height: 0; border-radius: 999px 999px 0 0; }
-    .daily-bar.revenue { background: #22c55e; }
-    .daily-bar.session { background: #facc15; }
-    .daily-label { color: #71717a; font-size: 9px; }
-    .legend { display: flex; gap: 14px; margin-top: 10px; color: #6b7280; font-size: 12px; }
-    .legend span { display: inline-flex; align-items: center; gap: 6px; }
-    .legend b { display: inline-block; width: 10px; height: 10px; border-radius: 999px; }
-    .legend-revenue { background: #22c55e; }
-    .legend-session { background: #facc15; }
-    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    th { padding: 10px; background: #111827; color: #facc15; text-align: left; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
-    td { padding: 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
-    tr:nth-child(even) td { background: #fafafa; }
-    .right { text-align: right; white-space: nowrap; }
-    .empty { padding: 18px; border: 1px dashed #d1d5db; border-radius: 18px; color: #6b7280; background: #fafafa; text-align: center; }
-    .warning-box { border: 1px solid #f59e0b33; background: #fffbeb; color: #92400e; border-radius: 18px; padding: 14px; font-size: 13px; }
-    .footer { padding: 18px 34px; background: #fafafa; color: #6b7280; font-size: 12px; }
-    .page-break { page-break-before: always; }
-    @media (max-width: 900px) { .grid-4, .grid-3 { grid-template-columns: 1fr 1fr; } .bar-row { grid-template-columns: 120px 1fr 82px; } .page { padding: 12px; } }
-    @media print { body { background: white; } .page { max-width: none; padding: 0; } .report { border-radius: 0; box-shadow: none; border: none; } .section { break-inside: avoid; } }
-  </style>
+  <title>FXA FITNESS Business Report - ${escapeHtml(range.label)}</title>
+  <style>${buildReportStyles()}</style>
 </head>
 <body>
   <main class="page">
     <article class="report">
       <header class="hero">
         <div class="brand">FXA FITNESS</div>
-        <h1>Full Business Report</h1>
-        <p>${escapeHtml(args.monthLabel)} · Generated ${escapeHtml(args.generatedAt)} · UTF-8 / Vietnamese-safe export</p>
+        <h1>Business Report</h1>
+        <p>${escapeHtml(range.label)} · Generated ${escapeHtml(args.generatedAt)}</p>
       </header>
 
       <section class="section">
-        <h2 class="section-title">Executive Summary</h2>
+        <h2 class="section-title">Business Summary</h2>
         <div class="grid-4">
-          <div class="card"><div class="label">Revenue Collected</div><div class="value good">${escapeHtml(money(income))}</div><div class="sub">Income transactions in selected month</div></div>
-          <div class="card"><div class="label">Expenses</div><div class="value bad">${escapeHtml(money(expenses))}</div><div class="sub">Expense transactions in selected month</div></div>
-          <div class="card"><div class="label">Net Cash</div><div class="value ${net >= 0 ? "good" : "bad"}">${escapeHtml(money(net))}</div><div class="sub">Income + adjustments - expenses</div></div>
-          <div class="card"><div class="label">Outstanding Debt</div><div class="value warn">${escapeHtml(money(totalOutstandingDebt))}</div><div class="sub">All unpaid client balances</div></div>
+          <div class="card"><div class="label">Income Collected</div><div class="value good">${escapeHtml(money(income))}</div><div class="sub">Income recorded during this period</div></div>
+          <div class="card"><div class="label">Expenses Paid</div><div class="value bad">${escapeHtml(money(expenses))}</div><div class="sub">Expenses recorded during this period</div></div>
+          <div class="card"><div class="label">Net Cash</div><div class="value ${netCash >= 0 ? "good" : "bad"}">${escapeHtml(money(netCash))}</div><div class="sub">Income + adjustments - expenses</div></div>
+          <div class="card"><div class="label">Outstanding Client Debt</div><div class="value warn">${escapeHtml(money(totalOutstandingDebt))}</div><div class="sub">Current unpaid client balances</div></div>
         </div>
-        <div style="height:14px"></div>
+        <div style="height:13px"></div>
         <div class="grid-4">
-          <div class="card"><div class="label">Total Clients</div><div class="value neutral">${escapeHtml(data.clients.length)}</div><div class="sub">All client records</div></div>
-          <div class="card"><div class="label">Active Clients</div><div class="value good">${escapeHtml(activeClients)}</div><div class="sub">Status active</div></div>
-          <div class="card"><div class="label">Completed Sessions</div><div class="value blue">${escapeHtml(successSessions.length)}</div><div class="sub">Successful scan/history rows</div></div>
-          <div class="card"><div class="label">Sessions Remaining</div><div class="value warn">${escapeHtml(allRemainingSessions)}</div><div class="sub">All active package balances</div></div>
+          <div class="card"><div class="label">New Clients</div><div class="value blue">${escapeHtml(newClients)}</div><div class="sub">Clients created during this period</div></div>
+          <div class="card"><div class="label">Active Clients</div><div class="value neutral">${escapeHtml(activeClients)}</div><div class="sub">Current active client records</div></div>
+          <div class="card"><div class="label">Completed Sessions</div><div class="value blue">${escapeHtml(completedSessions.length)}</div><div class="sub">Successful session history records</div></div>
+          <div class="card"><div class="label">Sessions Remaining</div><div class="value warn">${escapeHtml(allRemainingSessions)}</div><div class="sub">Current total across client packages</div></div>
         </div>
       </section>
 
       <section class="section">
-        <h2 class="section-title">Daily Revenue and Session Graph</h2>
-        <p class="section-subtitle">Green bars show daily revenue collected. Yellow bars show successful sessions.</p>
-        ${buildDailyGraph(dailyRows)}
+        <h2 class="section-title">Income, Expenses and Sessions</h2>
+        <p class="section-subtitle">The chart uses daily buckets for shorter periods and monthly buckets for longer periods.</p>
+        ${buildActivityChart(trendRows)}
       </section>
 
       <section class="section">
-        <h2 class="section-title">Revenue by Source</h2>
-        ${buildBarChart(sourceRows.slice(0, 10).map((row) => ({ label: row.label, value: row.net, tone: row.net >= 0 ? "good" : "bad" })), "No revenue source activity in this month.")}
-      </section>
-
-      <section class="section">
-        <h2 class="section-title">Source Breakdown</h2>
-        ${buildHtmlTable(["Source", "Income", "Expenses", "Adjustments", "Net"], sourceTableRows, "No source breakdown available.")}
-      </section>
-
-      <section class="section page-break">
-        <h2 class="section-title">Session Performance</h2>
-        <div class="grid-4">
-          <div class="card"><div class="label">Total Logs</div><div class="value neutral">${escapeHtml(data.sessions.length)}</div><div class="sub">All session records this month</div></div>
-          <div class="card"><div class="label">Success</div><div class="value good">${escapeHtml(successSessions.length)}</div><div class="sub">Completed sessions</div></div>
-          <div class="card"><div class="label">Failed / Cancelled</div><div class="value bad">${escapeHtml(failedSessions.length + cancelledSessions.length)}</div><div class="sub">Failed + cancelled records</div></div>
-          <div class="card"><div class="label">Completion Rate</div><div class="value blue">${escapeHtml(percent(completionRate))}</div><div class="sub">Success divided by all logs</div></div>
-        </div>
+        <h2 class="section-title">Financial Activity by Source</h2>
+        ${buildMoneyBarChart(
+          sourceRows.slice(0, 12).map((row) => ({
+            label: row.label,
+            value: row.net,
+            tone: row.net >= 0 ? "good" : "bad",
+          })),
+          "No financial activity was found for this period."
+        )}
         <div style="height:18px"></div>
-        <div class="grid-3">
-          <div class="card"><div class="label">Unique Clients</div><div class="value neutral">${escapeHtml(uniqueClientSessions)}</div><div class="sub">Clients trained this month</div></div>
-          <div class="card"><div class="label">Unique Staff</div><div class="value neutral">${escapeHtml(uniqueTrainerSessions)}</div><div class="sub">Trainers / coaches with sessions</div></div>
-          <div class="card"><div class="label">Used Sessions Total</div><div class="value warn">${escapeHtml(allUsedSessions)}</div><div class="sub">Current used sessions across clients</div></div>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2 class="section-title">Trainer / Coach Session Graph</h2>
-        ${buildCountBarChart(trainerRows.slice(0, 12).map((row) => ({ label: row.name, value: row.success, tone: "blue" })), "No trainer sessions found for this month.")}
-      </section>
-
-      <section class="section">
-        <h2 class="section-title">Client Management Snapshot</h2>
-        <div class="grid-4">
-          <div class="card"><div class="label">New Clients</div><div class="value blue">${escapeHtml(newClientsThisMonth)}</div><div class="sub">Created in selected month</div></div>
-          <div class="card"><div class="label">Inactive Clients</div><div class="value bad">${escapeHtml(inactiveClients)}</div><div class="sub">Moved to inactive page</div></div>
-          <div class="card"><div class="label">Low Sessions</div><div class="value warn">${escapeHtml(lowSessionRows.length)}</div><div class="sub">1-10 sessions remaining</div></div>
-          <div class="card"><div class="label">Package Value</div><div class="value neutral">${escapeHtml(money(allPackageValue))}</div><div class="sub">From package/purchase records</div></div>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2 class="section-title">Client Status Graph</h2>
-        ${buildCountBarChart(statusChartRows, "No clients available.")}
+        ${buildHtmlTable(
+          ["Source", "Income", "Expenses", "Adjustments", "Net"],
+          sourceTableRows,
+          "No source breakdown is available."
+        )}
       </section>
 
       <section class="section page-break">
         <h2 class="section-title">Debt Follow-Up</h2>
         <div class="grid-3">
-          <div class="card"><div class="label">Outstanding Debt</div><div class="value warn">${escapeHtml(money(totalOutstandingDebt))}</div><div class="sub">Total unpaid balance</div></div>
-          <div class="card"><div class="label">Overdue Records</div><div class="value bad">${escapeHtml(overdueDebt.length)}</div><div class="sub">Deadline already passed</div></div>
-          <div class="card"><div class="label">Due Soon</div><div class="value warn">${escapeHtml(dueSoonDebt.length)}</div><div class="sub">Due in 0-7 days</div></div>
+          <div class="card"><div class="label">Outstanding Balance</div><div class="value warn">${escapeHtml(money(totalOutstandingDebt))}</div><div class="sub">All current unpaid balances</div></div>
+          <div class="card"><div class="label">Overdue Records</div><div class="value bad">${escapeHtml(overdueDebt.length)}</div><div class="sub">Payment deadline has passed</div></div>
+          <div class="card"><div class="label">Due Within 7 Days</div><div class="value warn">${escapeHtml(dueSoonDebt.length)}</div><div class="sub">Requires near-term follow-up</div></div>
         </div>
         <div style="height:18px"></div>
-        ${buildHtmlTable(["Client Code", "Client", "Record", "Balance", "Deadline", "Notice"], debtTableRows, "No outstanding debt records.")}
+        ${buildHtmlTable(
+          ["Client Code", "Client", "Record", "Balance", "Deadline", "Status"],
+          debtTableRows,
+          "No outstanding client debt was found."
+        )}
       </section>
 
       <section class="section">
         <h2 class="section-title">Renewal Follow-Up</h2>
-        ${buildHtmlTable(["Client Code", "Client", "Package", "Remaining", "PT", "NC"], lowSessionTableRows, "No clients with 1-10 sessions remaining.")}
-      </section>
-
-      <section class="section">
-        <h2 class="section-title">Inactive / Zero-Session Watch</h2>
-        ${buildHtmlTable(["Client Code", "Client", "Status", "Package", "Remaining", "Debt"], expiredOrZeroRows.map((row) => [row.clientCode, row.fullName, row.status, row.packageName, row.remainingSessions, money(row.balanceDue)]), "No inactive or zero-session clients in the current data.")}
+        ${buildHtmlTable(
+          ["Client Code", "Client", "Package", "Remaining", "PT", "Nutrition Coach"],
+          renewalRows,
+          "No clients currently have 1 to 10 sessions remaining."
+        )}
       </section>
 
       <section class="section page-break">
-        <h2 class="section-title">New / Renew Purchases This Month</h2>
-        ${buildHtmlTable(["Date", "Client Code", "Client", "Plan", "Type", "Sessions", "Price", "Paid", "Balance"], purchaseTableRows, "No new/renew purchase records for this month.")}
-      </section>
-
-      <section class="section">
         <h2 class="section-title">Transaction Detail</h2>
-        ${buildHtmlTable(["Date", "Type", "Source", "Title", "Amount", "Notes"], transactionTableRows, "No revenue transactions for this month.")}
+        ${buildHtmlTable(
+          ["Date", "Type", "Source", "Description", "Amount", "Notes"],
+          transactionRows,
+          "No transactions were found for this period."
+        )}
       </section>
 
-      <section class="section page-break">
-        <h2 class="section-title">Session Detail</h2>
-        <p class="section-subtitle">Showing up to first 300 session rows in the exported report. Use Sessions CSV for the complete raw export.</p>
-        ${buildHtmlTable(["Date / Time", "Client Code", "Client", "Staff", "Status", "Remaining", "Note / Message"], sessionTableRows, "No sessions for this month.")}
-      </section>
-
-      <section class="section page-break">
-        <h2 class="section-title">Client Directory Snapshot</h2>
-        <p class="section-subtitle">Use Clients CSV for the complete editable table.</p>
-        ${buildHtmlTable(["Code", "Client", "Status", "PT", "NC", "Package", "Total", "Used", "Remaining", "Value", "Debt", "Debt Deadline", "Source"], clientTableRows, "No clients available.")}
-      </section>
-
-      <footer class="footer">
-        FXA FITNESS report · ${escapeHtml(args.monthLabel)} · This file uses UTF-8 and safe fonts for Vietnamese text. Open in Chrome or Edge and Print to PDF when needed.
-      </footer>
+      <footer class="footer">FXA FITNESS · Business Report · ${escapeHtml(range.label)}</footer>
     </article>
   </main>
 </body>
@@ -937,19 +1026,310 @@ function buildFullHtmlReport(args: {
   `.trim();
 }
 
+function buildSessionReportHtml(args: {
+  range: PeriodRange;
+  generatedAt: string;
+  sessions: SessionHistoryRow[];
+  clients: ClientRow[];
+  profiles: ProfileRow[];
+  selectedStaffName: string;
+  statusLabel: string;
+}) {
+  const clientMap = makeClientMap(args.clients);
+  const profileMap = makeProfileMap(args.profiles);
+  const successful = args.sessions.filter((row) => row.status === "success");
+  const failed = args.sessions.filter((row) => row.status === "failed");
+  const cancelled = args.sessions.filter((row) => row.status === "cancelled");
+  const uniqueClients = new Set(args.sessions.map((row) => row.client_id).filter(Boolean)).size;
+  const completionRate = args.sessions.length > 0 ? (successful.length / args.sessions.length) * 100 : 0;
+
+  const staffMap = new Map<
+    string,
+    { name: string; total: number; success: number; failed: number; cancelled: number; clients: Set<string> }
+  >();
+
+  args.sessions.forEach((session) => {
+    const staffId = session.trainer_id || "manual";
+    const staff = session.trainer_id ? profileMap.get(session.trainer_id) : null;
+    const current = staffMap.get(staffId) || {
+      name: staff ? getStaffName(staff) : "Admin / Manual",
+      total: 0,
+      success: 0,
+      failed: 0,
+      cancelled: 0,
+      clients: new Set<string>(),
+    };
+
+    current.total += 1;
+    if (session.status === "success") current.success += 1;
+    if (session.status === "failed") current.failed += 1;
+    if (session.status === "cancelled") current.cancelled += 1;
+    if (session.client_id) current.clients.add(session.client_id);
+
+    staffMap.set(staffId, current);
+  });
+
+  const staffRows = Array.from(staffMap.values()).sort((a, b) => b.success - a.success);
+  const trendRows = buildTrendRows(args.range, [], args.sessions);
+
+  const staffTableRows = staffRows.map((row) => [
+    row.name,
+    row.total,
+    row.success,
+    row.failed,
+    row.cancelled,
+    row.clients.size,
+    percent(row.total > 0 ? (row.success / row.total) * 100 : 0),
+  ]);
+
+  const detailRows = args.sessions.map((session) => {
+    const client = session.client_id ? clientMap.get(session.client_id) : null;
+    const staff = session.trainer_id ? profileMap.get(session.trainer_id) : null;
+
+    return [
+      formatDateTime(session.created_at),
+      client?.client_code || "-",
+      client?.full_name || "Unknown Client",
+      staff ? getStaffName(staff) : "Admin / Manual",
+      getStatusLabel(session.status),
+      session.remaining_after ?? "",
+      session.trainer_note || session.message || "",
+    ];
+  });
+
+  return `
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FXA FITNESS Session Report - ${escapeHtml(args.range.label)}</title>
+  <style>${buildReportStyles()}</style>
+</head>
+<body>
+  <main class="page">
+    <article class="report">
+      <header class="hero">
+        <div class="brand">FXA FITNESS</div>
+        <h1>Session Report</h1>
+        <p>${escapeHtml(args.range.label)} · PT / Coach: ${escapeHtml(args.selectedStaffName)} · Status: ${escapeHtml(args.statusLabel)} · Generated ${escapeHtml(args.generatedAt)}</p>
+      </header>
+
+      <section class="section">
+        <h2 class="section-title">Session Summary</h2>
+        <div class="grid-4">
+          <div class="card"><div class="label">Total Session Records</div><div class="value neutral">${escapeHtml(args.sessions.length)}</div><div class="sub">All records matching the selected filters</div></div>
+          <div class="card"><div class="label">Completed Sessions / Shows</div><div class="value good">${escapeHtml(successful.length)}</div><div class="sub">Successful session records</div></div>
+          <div class="card"><div class="label">Failed or Cancelled</div><div class="value bad">${escapeHtml(failed.length + cancelled.length)}</div><div class="sub">Records requiring review</div></div>
+          <div class="card"><div class="label">Completion Rate</div><div class="value blue">${escapeHtml(percent(completionRate))}</div><div class="sub">Completed divided by total records</div></div>
+        </div>
+        <div style="height:13px"></div>
+        <div class="grid-3">
+          <div class="card"><div class="label">Unique Clients</div><div class="value neutral">${escapeHtml(uniqueClients)}</div><div class="sub">Clients appearing in this report</div></div>
+          <div class="card"><div class="label">Selected PT / Coach</div><div class="value blue" style="font-size:20px">${escapeHtml(args.selectedStaffName)}</div><div class="sub">Use the filter on the report page to isolate one staff member</div></div>
+          <div class="card"><div class="label">Status Filter</div><div class="value neutral" style="font-size:20px">${escapeHtml(args.statusLabel)}</div><div class="sub">Current session status filter</div></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">Session Activity</h2>
+        <p class="section-subtitle">Yellow bars show completed sessions. Longer periods are grouped by month.</p>
+        ${buildActivityChart(trendRows)}
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">PT / Coach Performance</h2>
+        ${buildCountBarChart(
+          staffRows.slice(0, 20).map((row) => ({
+            label: row.name,
+            value: row.success,
+            tone: "blue",
+          })),
+          "No PT or coach session records were found."
+        )}
+        <div style="height:18px"></div>
+        ${buildHtmlTable(
+          ["PT / Coach", "Total", "Completed", "Failed", "Cancelled", "Unique Clients", "Completion Rate"],
+          staffTableRows,
+          "No PT or coach performance data was found."
+        )}
+      </section>
+
+      <section class="section page-break">
+        <h2 class="section-title">Session Detail</h2>
+        ${buildHtmlTable(
+          ["Date / Time", "Client Code", "Client", "PT / Coach", "Status", "Remaining After", "Note"],
+          detailRows,
+          "No sessions match the selected filters."
+        )}
+      </section>
+
+      <footer class="footer">FXA FITNESS · Session Report · ${escapeHtml(args.range.label)}</footer>
+    </article>
+  </main>
+</body>
+</html>
+  `.trim();
+}
+
+function PeriodFields(props: {
+  mode: PeriodMode;
+  setMode: (mode: PeriodMode) => void;
+  year: number;
+  setYear: (year: number) => void;
+  month: number;
+  setMonth: (month: number) => void;
+  customStart: string;
+  setCustomStart: (value: string) => void;
+  customEnd: string;
+  setCustomEnd: (value: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <label className="space-y-2">
+        <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Period</span>
+        <select
+          value={props.mode}
+          onChange={(event) => props.setMode(event.target.value as PeriodMode)}
+          className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+        >
+          <option value="month">Month</option>
+          <option value="year">Year</option>
+          <option value="custom">Custom period</option>
+        </select>
+      </label>
+
+      {props.mode === "month" || props.mode === "year" ? (
+        <label className="space-y-2">
+          <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Year</span>
+          <input
+            type="number"
+            value={props.year}
+            min={2000}
+            max={2100}
+            onChange={(event) => props.setYear(Number(event.target.value))}
+            className="w-full rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+          />
+        </label>
+      ) : null}
+
+      {props.mode === "month" ? (
+        <label className="space-y-2">
+          <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Month</span>
+          <select
+            value={props.month}
+            onChange={(event) => props.setMonth(Number(event.target.value))}
+            className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+          >
+            {MONTH_OPTIONS.map((monthName, index) => (
+              <option key={monthName} value={index + 1}>
+                {pad(index + 1)} - {monthName}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+
+      {props.mode === "custom" ? (
+        <>
+          <label className="space-y-2">
+            <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Start date</span>
+            <input
+              type="date"
+              value={props.customStart}
+              onChange={(event) => props.setCustomStart(event.target.value)}
+              className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+            />
+          </label>
+
+          <label className="space-y-2">
+            <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">End date</span>
+            <input
+              type="date"
+              value={props.customEnd}
+              onChange={(event) => props.setCustomEnd(event.target.value)}
+              className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+            />
+          </label>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export default function AdminReportsPage() {
   const router = useRouter();
   const now = new Date();
+  const currentDate = dateString(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  const currentMonthStart = dateString(now.getFullYear(), now.getMonth() + 1, 1);
 
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [downloading, setDownloading] = useState<ReportType | null>(null);
-  const [error, setError] = useState("");
   const [checkingRole, setCheckingRole] = useState(true);
   const [currentRole, setCurrentRole] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<ReportType | null>(null);
+  const [error, setError] = useState("");
+  const [staffProfiles, setStaffProfiles] = useState<ProfileRow[]>([]);
 
-  const monthRange = useMemo(() => getMonthRange(year, month), [year, month]);
+  const [businessMode, setBusinessMode] = useState<PeriodMode>("month");
+  const [businessYear, setBusinessYear] = useState(now.getFullYear());
+  const [businessMonth, setBusinessMonth] = useState(now.getMonth() + 1);
+  const [businessStart, setBusinessStart] = useState(currentMonthStart);
+  const [businessEnd, setBusinessEnd] = useState(currentDate);
+
+  const [sessionMode, setSessionMode] = useState<PeriodMode>("month");
+  const [sessionYear, setSessionYear] = useState(now.getFullYear());
+  const [sessionMonth, setSessionMonth] = useState(now.getMonth() + 1);
+  const [sessionStart, setSessionStart] = useState(currentMonthStart);
+  const [sessionEnd, setSessionEnd] = useState(currentDate);
+  const [sessionStaffId, setSessionStaffId] = useState("all");
+  const [sessionStatus, setSessionStatus] = useState<SessionStatusFilter>("all");
+  const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+  const [loadingSessionSummary, setLoadingSessionSummary] = useState(false);
+
+  const [clientMode, setClientMode] = useState<ClientPeriodMode>("all");
+  const [clientYear, setClientYear] = useState(now.getFullYear());
+  const [clientMonth, setClientMonth] = useState(now.getMonth() + 1);
+  const [clientStart, setClientStart] = useState(currentMonthStart);
+  const [clientEnd, setClientEnd] = useState(currentDate);
+
+  const businessRangeState = useMemo(
+    () =>
+      getPeriodRange(
+        businessMode,
+        businessYear,
+        businessMonth,
+        businessStart,
+        businessEnd
+      ),
+    [businessMode, businessYear, businessMonth, businessStart, businessEnd]
+  );
+
+  const sessionRangeState = useMemo(
+    () =>
+      getPeriodRange(sessionMode, sessionYear, sessionMonth, sessionStart, sessionEnd),
+    [sessionMode, sessionYear, sessionMonth, sessionStart, sessionEnd]
+  );
+
+  const clientRangeState = useMemo(() => {
+    if (clientMode === "all") {
+      return { range: null, error: "" } as PeriodRangeState;
+    }
+
+    return getPeriodRange(clientMode, clientYear, clientMonth, clientStart, clientEnd);
+  }, [clientMode, clientYear, clientMonth, clientStart, clientEnd]);
+
   const isManager = currentRole === "manager";
+  const staffOptions = useMemo(
+    () =>
+      staffProfiles
+        .filter((profile) => ["trainer", "nutrition_coach"].includes(String(profile.role)))
+        .sort((a, b) => getStaffName(a).localeCompare(getStaffName(b))),
+    [staffProfiles]
+  );
+
+  const selectedStaffName =
+    sessionStaffId === "all"
+      ? "All PTs and coaches"
+      : getStaffName(staffProfiles.find((profile) => profile.id === sessionStaffId));
 
   useEffect(() => {
     async function protectPage() {
@@ -962,6 +1342,19 @@ export default function AdminReportsPage() {
 
       if (role === "admin" || role === "manager") {
         setCurrentRole(role);
+
+        const { data, error: profileError } = await supabase
+          .from("profiles")
+          .select("id, full_name, email, role")
+          .in("role", ["trainer", "nutrition_coach", "admin", "manager"])
+          .order("full_name", { ascending: true });
+
+        if (profileError) {
+          console.error(profileError);
+        } else {
+          setStaffProfiles((data || []) as ProfileRow[]);
+        }
+
         setCheckingRole(false);
         return;
       }
@@ -983,63 +1376,77 @@ export default function AdminReportsPage() {
     protectPage();
   }, [router]);
 
-  async function fetchTransactions() {
+  async function fetchTransactions(range: PeriodRange) {
     const { data, error: fetchError } = await supabase
       .from("business_transactions")
       .select("id, transaction_type, source, title, amount, notes, transaction_date, created_at")
-      .gte("transaction_date", monthRange.startDate)
-      .lt("transaction_date", monthRange.endDate)
+      .gte("transaction_date", range.startDate)
+      .lt("transaction_date", range.endDateExclusive)
       .order("transaction_date", { ascending: true })
       .order("created_at", { ascending: true });
 
     if (fetchError) throw new Error(fetchError.message);
-
     return (data || []) as BusinessTransaction[];
   }
 
-  async function fetchSessions() {
-    const { data, error: fetchError } = await supabase
+  async function fetchSessions(
+    range: PeriodRange,
+    staffId = "all",
+    status: SessionStatusFilter = "all"
+  ) {
+    let query = supabase
       .from("session_history")
       .select("id, client_id, trainer_id, status, message, trainer_note, remaining_after, created_at")
-      .gte("created_at", monthRange.startIso)
-      .lt("created_at", monthRange.endIso)
-      .order("created_at", { ascending: true });
+      .gte("created_at", range.startIso)
+      .lt("created_at", range.endIso);
+
+    if (staffId !== "all") query = query.eq("trainer_id", staffId);
+    if (status !== "all") query = query.eq("status", status);
+
+    const { data, error: fetchError } = await query.order("created_at", { ascending: true });
 
     if (fetchError) throw new Error(fetchError.message);
-
     return (data || []) as SessionHistoryRow[];
   }
 
-  async function fetchClients() {
-    const { data, error: fetchError } = await supabase
+  async function fetchClients(range?: PeriodRange | null) {
+    let query = supabase
       .from("clients")
-      .select("id, client_code, full_name, email, phone, gender, status, client_source, client_source_other, assigned_trainer_id, assigned_nutrition_coach_id, created_at")
-      .order("created_at", { ascending: true });
+      .select(
+        "id, client_code, full_name, email, phone, gender, status, client_source, client_source_other, assigned_trainer_id, assigned_nutrition_coach_id, created_at"
+      );
+
+    if (range) {
+      query = query.gte("created_at", range.startIso).lt("created_at", range.endIso);
+    }
+
+    const { data, error: fetchError } = await query.order("created_at", { ascending: true });
 
     if (fetchError) throw new Error(fetchError.message);
-
     return (data || []) as ClientRow[];
   }
 
   async function fetchPackages() {
     const { data, error: fetchError } = await supabase
       .from("session_packages")
-      .select("id, client_id, package_name, total_sessions, used_sessions, remaining_sessions, package_value, status, starts_at, expires_at, created_at")
+      .select(
+        "id, client_id, package_name, total_sessions, used_sessions, remaining_sessions, package_value, status, starts_at, expires_at, created_at"
+      )
       .order("created_at", { ascending: false });
 
     if (fetchError) throw new Error(fetchError.message);
-
     return (data || []) as SessionPackageRow[];
   }
 
   async function fetchPurchases() {
     const { data, error: fetchError } = await supabase
       .from("client_purchases")
-      .select("id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at")
+      .select(
+        "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at"
+      )
       .order("created_at", { ascending: false });
 
     if (fetchError) throw new Error(fetchError.message);
-
     return (data || []) as ClientPurchaseRow[];
   }
 
@@ -1051,14 +1458,13 @@ export default function AdminReportsPage() {
       .order("full_name", { ascending: true });
 
     if (fetchError) throw new Error(fetchError.message);
-
     return (data || []) as ProfileRow[];
   }
 
-  async function fetchFullReportData(): Promise<ReportData> {
+  async function fetchBusinessReportData(range: PeriodRange): Promise<ReportData> {
     const [transactions, sessions, clients, packages, purchases, profiles] = await Promise.all([
-      fetchTransactions(),
-      fetchSessions(),
+      fetchTransactions(range),
+      fetchSessions(range),
       fetchClients(),
       fetchPackages(),
       fetchPurchases(),
@@ -1068,21 +1474,66 @@ export default function AdminReportsPage() {
     return { transactions, sessions, clients, packages, purchases, profiles };
   }
 
-  async function exportFullHtmlReport() {
+  useEffect(() => {
+    if (checkingRole || !sessionRangeState.range) {
+      setSessionSummary(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setLoadingSessionSummary(true);
+
+      try {
+        const sessions = await fetchSessions(
+          sessionRangeState.range!,
+          sessionStaffId,
+          sessionStatus
+        );
+
+        if (!cancelled) {
+          setSessionSummary({
+            total: sessions.length,
+            success: sessions.filter((row) => row.status === "success").length,
+            failed: sessions.filter((row) => row.status === "failed").length,
+            cancelled: sessions.filter((row) => row.status === "cancelled").length,
+            uniqueClients: new Set(sessions.map((row) => row.client_id).filter(Boolean)).size,
+          });
+        }
+      } catch (summaryError) {
+        console.error(summaryError);
+        if (!cancelled) setSessionSummary(null);
+      } finally {
+        if (!cancelled) setLoadingSessionSummary(false);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    checkingRole,
+    sessionRangeState.range?.startIso,
+    sessionRangeState.range?.endIso,
+    sessionStaffId,
+    sessionStatus,
+  ]);
+
+  async function exportBusinessHtml() {
     setError("");
-    setDownloading("full-html");
+
+    if (!businessRangeState.range) {
+      setError(businessRangeState.error);
+      return;
+    }
+
+    setDownloading("business-html");
 
     try {
-      const data = await fetchFullReportData();
-
-      const html = buildFullHtmlReport({
-        monthLabel: monthRange.label,
-        fileLabel: monthRange.fileLabel,
-        year: monthRange.year,
-        month: monthRange.month,
-        lastDay: monthRange.lastDay,
-        startIso: monthRange.startIso,
-        endIso: monthRange.endIso,
+      const data = await fetchBusinessReportData(businessRangeState.range);
+      const html = buildBusinessReportHtml({
+        range: businessRangeState.range,
         generatedAt: new Date().toLocaleString("en-CA", {
           year: "numeric",
           month: "short",
@@ -1094,28 +1545,34 @@ export default function AdminReportsPage() {
       });
 
       downloadFile(
-        `FXA-Full-Business-Report-${monthRange.fileLabel}.html`,
+        `FXA-Business-Report-${businessRangeState.range.fileLabel}.html`,
         html,
         "text/html;charset=utf-8;"
       );
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : "Full report export failed.");
+    } catch (exportError) {
+      console.error(exportError);
+      setError(exportError instanceof Error ? exportError.message : "Business report export failed.");
+    } finally {
+      setDownloading(null);
     }
-
-    setDownloading(null);
   }
 
-  async function downloadRevenueCsv() {
+  async function exportBusinessCsv() {
     setError("");
-    setDownloading("revenue");
+
+    if (!businessRangeState.range) {
+      setError(businessRangeState.error);
+      return;
+    }
+
+    setDownloading("business-csv");
 
     try {
-      const rows = await fetchTransactions();
+      const rows = await fetchTransactions(businessRangeState.range);
 
       downloadCsv(
-        `FXA-Revenue-${monthRange.fileLabel}.csv`,
-        ["Date", "Type", "Source", "Title", "Amount", "Notes", "Created At"],
+        `FXA-Transactions-${businessRangeState.range.fileLabel}.csv`,
+        ["Date", "Type", "Source", "Description", "Amount", "Notes", "Created At"],
         rows.map((row) => [
           row.transaction_date,
           getTransactionTypeLabel(row.transaction_type),
@@ -1126,27 +1583,97 @@ export default function AdminReportsPage() {
           formatDateTime(row.created_at),
         ])
       );
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : "Revenue CSV export failed.");
+    } catch (exportError) {
+      console.error(exportError);
+      setError(exportError instanceof Error ? exportError.message : "Transaction CSV export failed.");
+    } finally {
+      setDownloading(null);
     }
-
-    setDownloading(null);
   }
 
-  async function downloadSessionsCsv() {
+  async function exportSessionHtml() {
     setError("");
-    setDownloading("sessions");
+
+    if (!sessionRangeState.range) {
+      setError(sessionRangeState.error);
+      return;
+    }
+
+    setDownloading("session-html");
 
     try {
-      const data = await fetchFullReportData();
-      const clientMap = makeClientMap(data.clients);
-      const profileMap = makeProfileMap(data.profiles);
+      const [sessions, clients, profiles] = await Promise.all([
+        fetchSessions(sessionRangeState.range, sessionStaffId, sessionStatus),
+        fetchClients(),
+        fetchProfiles(),
+      ]);
+
+      const html = buildSessionReportHtml({
+        range: sessionRangeState.range,
+        generatedAt: new Date().toLocaleString("en-CA", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+        sessions,
+        clients,
+        profiles,
+        selectedStaffName,
+        statusLabel: sessionStatus === "all" ? "All statuses" : getStatusLabel(sessionStatus),
+      });
+
+      const staffFileLabel =
+        sessionStaffId === "all"
+          ? "all-staff"
+          : selectedStaffName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "staff";
+
+      downloadFile(
+        `FXA-Session-Report-${sessionRangeState.range.fileLabel}-${staffFileLabel}.html`,
+        html,
+        "text/html;charset=utf-8;"
+      );
+    } catch (exportError) {
+      console.error(exportError);
+      setError(exportError instanceof Error ? exportError.message : "Session report export failed.");
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function exportSessionCsv() {
+    setError("");
+
+    if (!sessionRangeState.range) {
+      setError(sessionRangeState.error);
+      return;
+    }
+
+    setDownloading("session-csv");
+
+    try {
+      const [sessions, clients, profiles] = await Promise.all([
+        fetchSessions(sessionRangeState.range, sessionStaffId, sessionStatus),
+        fetchClients(),
+        fetchProfiles(),
+      ]);
+      const clientMap = makeClientMap(clients);
+      const profileMap = makeProfileMap(profiles);
 
       downloadCsv(
-        `FXA-Sessions-${monthRange.fileLabel}.csv`,
-        ["Date / Time", "Client Code", "Client Name", "Staff", "Status", "Remaining After", "Message", "Trainer Note"],
-        data.sessions.map((session) => {
+        `FXA-Sessions-${sessionRangeState.range.fileLabel}.csv`,
+        [
+          "Date / Time",
+          "Client Code",
+          "Client Name",
+          "PT / Coach",
+          "Status",
+          "Remaining After",
+          "Message",
+          "Trainer Note",
+        ],
+        sessions.map((session) => {
           const client = session.client_id ? clientMap.get(session.client_id) : null;
           const trainer = session.trainer_id ? profileMap.get(session.trainer_id) : null;
 
@@ -1154,7 +1681,7 @@ export default function AdminReportsPage() {
             formatDateTime(session.created_at),
             client?.client_code || "-",
             client?.full_name || "Unknown Client",
-            getStaffName(trainer || null) || "Admin / Manual",
+            trainer ? getStaffName(trainer) : "Admin / Manual",
             session.status,
             session.remaining_after ?? "",
             session.message || "",
@@ -1162,24 +1689,45 @@ export default function AdminReportsPage() {
           ];
         })
       );
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : "Sessions CSV export failed.");
+    } catch (exportError) {
+      console.error(exportError);
+      setError(exportError instanceof Error ? exportError.message : "Session CSV export failed.");
+    } finally {
+      setDownloading(null);
     }
-
-    setDownloading(null);
   }
 
-  async function downloadClientsCsv() {
+  async function exportClientsCsv() {
     setError("");
+
+    if (clientMode !== "all" && !clientRangeState.range) {
+      setError(clientRangeState.error);
+      return;
+    }
+
     setDownloading("clients");
 
     try {
-      const data = await fetchFullReportData();
-      const rows = buildClientExportRows(data);
+      const [clients, packages, purchases, profiles] = await Promise.all([
+        fetchClients(clientMode === "all" ? null : clientRangeState.range),
+        fetchPackages(),
+        fetchPurchases(),
+        fetchProfiles(),
+      ]);
+
+      const rows = buildClientExportRows({
+        transactions: [],
+        sessions: [],
+        clients,
+        packages,
+        purchases,
+        profiles,
+      });
+
+      const fileLabel = clientMode === "all" ? "all-clients" : clientRangeState.range!.fileLabel;
 
       downloadCsv(
-        `FXA-Clients-${monthRange.fileLabel}.csv`,
+        `FXA-Clients-${fileLabel}.csv`,
         [
           "Client Code",
           "Full Name",
@@ -1225,12 +1773,12 @@ export default function AdminReportsPage() {
           row.createdAt,
         ])
       );
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : "Clients CSV export failed.");
+    } catch (exportError) {
+      console.error(exportError);
+      setError(exportError instanceof Error ? exportError.message : "Client report export failed.");
+    } finally {
+      setDownloading(null);
     }
-
-    setDownloading(null);
   }
 
   if (checkingRole) {
@@ -1243,22 +1791,20 @@ export default function AdminReportsPage() {
 
   return (
     <main className="min-h-screen bg-black p-4 text-white md:p-6">
-      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
-        <div className="mx-auto max-w-6xl">
-          <header className="mb-6 rounded-3xl border border-yellow-500/25 bg-black/55 p-5 shadow-2xl">
+      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.16),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
+        <div className="mx-auto max-w-7xl">
+          <header className="mb-6 rounded-3xl border border-yellow-500/25 bg-black/55 p-5 shadow-2xl md:p-7">
             <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
               <div>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-[0.45em] text-yellow-400">FXA FITNESS</p>
-
-                <h1 className="text-4xl font-semibold tracking-tight md:text-6xl">Monthly Reports</h1>
-
-                <p className="mt-3 text-sm font-normal text-gray-400 md:text-base">
-                  Export a full business report with KPI cards, revenue graphs, session graphs, debt follow-up, renewal follow-up, purchase history, and client summary.
+                <h1 className="text-4xl font-semibold tracking-tight md:text-6xl">Reports</h1>
+                <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-400 md:text-base">
+                  Export a focused business report, a filtered PT session report, or a client directory report.
                 </p>
 
                 {isManager ? (
-                  <p className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm text-yellow-100">
-                    Manager view: reports are exportable, but editing finance records remains admin-only.
+                  <p className="mt-3 text-sm text-yellow-100">
+                    Manager access allows report viewing and export. Financial editing remains admin-only.
                   </p>
                 ) : null}
               </div>
@@ -1272,109 +1818,325 @@ export default function AdminReportsPage() {
             </div>
           </header>
 
-          <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-6">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <label className="space-y-2">
-                <span className="text-sm font-semibold uppercase tracking-widest text-gray-400">Year</span>
-                <input
-                  type="number"
-                  value={year}
-                  onChange={(event) => setYear(Number(event.target.value))}
-                  className="w-full rounded-2xl border border-yellow-500/30 bg-black px-4 py-3 text-sm font-normal text-white outline-none transition focus:border-yellow-400"
-                />
-              </label>
+          {error ? (
+            <div className="mb-5 whitespace-pre-wrap rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm font-semibold text-red-300">
+              {error}
+            </div>
+          ) : null}
 
-              <label className="space-y-2">
-                <span className="text-sm font-semibold uppercase tracking-widest text-gray-400">Month</span>
-                <select
-                  value={month}
-                  onChange={(event) => setMonth(Number(event.target.value))}
-                  className="w-full rounded-2xl border border-yellow-500/30 bg-white px-4 py-3 text-sm font-normal text-black outline-none transition focus:border-yellow-400"
+          <div className="grid gap-6">
+            <section className="rounded-[2rem] border border-yellow-500/25 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-6">
+              <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-yellow-400">01</p>
+                  <h2 className="mt-2 text-2xl font-semibold">Business Report</h2>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
+                    Financial summary, cash activity, debt follow-up, renewal follow-up and transaction detail.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-gray-300">
+                  {businessRangeState.range?.label || "Select a valid period"}
+                </div>
+              </div>
+
+              <PeriodFields
+                mode={businessMode}
+                setMode={setBusinessMode}
+                year={businessYear}
+                setYear={setBusinessYear}
+                month={businessMonth}
+                setMonth={setBusinessMonth}
+                customStart={businessStart}
+                setCustomStart={setBusinessStart}
+                customEnd={businessEnd}
+                setCustomEnd={setBusinessEnd}
+              />
+
+              {businessRangeState.error ? (
+                <p className="mt-3 text-sm text-red-300">{businessRangeState.error}</p>
+              ) : null}
+
+              <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <div className="rounded-2xl border border-yellow-400/35 bg-yellow-400/[0.08] p-4">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-yellow-400">
+                        Summary Report
+                      </p>
+                      <h3 className="mt-1 text-lg font-semibold text-white">Business Overview</h3>
+                      <p className="mt-1 text-sm leading-5 text-gray-400">
+                        Financial summary, charts, debt follow-up and transaction details in one print-ready file.
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-yellow-400/30 bg-yellow-400/10 px-3 py-1 text-xs font-semibold text-yellow-300">
+                      HTML / PDF
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={exportBusinessHtml}
+                    disabled={downloading !== null}
+                    className="flex w-full items-center justify-between rounded-xl bg-yellow-400 px-5 py-3.5 text-left text-sm font-semibold text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <span>{downloading === "business-html" ? "Exporting report..." : "Export Business Report"}</span>
+                    <span aria-hidden="true" className="text-lg">→</span>
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border border-blue-400/30 bg-blue-400/[0.07] p-4">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-300">
+                        Income & Expense Data
+                      </p>
+                      <h3 className="mt-1 text-lg font-semibold text-white">Transaction Export</h3>
+                      <p className="mt-1 text-sm leading-5 text-gray-400">
+                        A clean spreadsheet-ready list of income, expenses and cash adjustments for the selected period.
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-blue-400/30 bg-blue-400/10 px-3 py-1 text-xs font-semibold text-blue-200">
+                      CSV / Excel
+                    </span>
+                  </div>
+
+                  <div className="mb-3 grid grid-cols-3 gap-2 text-center text-[11px] font-semibold uppercase tracking-wide">
+                    <span className="rounded-lg border border-green-400/20 bg-green-400/10 px-2 py-2 text-green-300">Income</span>
+                    <span className="rounded-lg border border-red-400/20 bg-red-400/10 px-2 py-2 text-red-300">Expense</span>
+                    <span className="rounded-lg border border-gray-400/20 bg-white/5 px-2 py-2 text-gray-300">Adjustment</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={exportBusinessCsv}
+                    disabled={downloading !== null}
+                    className="flex w-full items-center justify-between rounded-xl border border-blue-300/70 bg-blue-400/10 px-5 py-3.5 text-left text-sm font-semibold text-blue-100 transition hover:bg-blue-300 hover:text-black disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <span>{downloading === "business-csv" ? "Exporting transactions..." : "Export Income & Expense CSV"}</span>
+                    <span aria-hidden="true" className="text-lg">↓</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-[2rem] border border-yellow-500/25 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-6">
+              <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-yellow-400">02</p>
+                  <h2 className="mt-2 text-2xl font-semibold">Session Report</h2>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
+                    Filter by period, PT or coach, and session status. The report shows completed session count, client count and staff performance.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-gray-300">
+                  {sessionRangeState.range?.label || "Select a valid period"}
+                </div>
+              </div>
+
+              <PeriodFields
+                mode={sessionMode}
+                setMode={setSessionMode}
+                year={sessionYear}
+                setYear={setSessionYear}
+                month={sessionMonth}
+                setMonth={setSessionMonth}
+                customStart={sessionStart}
+                setCustomStart={setSessionStart}
+                customEnd={sessionEnd}
+                setCustomEnd={setSessionEnd}
+              />
+
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">PT / Coach</span>
+                  <select
+                    value={sessionStaffId}
+                    onChange={(event) => setSessionStaffId(event.target.value)}
+                    className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+                  >
+                    <option value="all">All PTs and coaches</option>
+                    {staffOptions.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {getStaffName(profile)}{profile.role === "nutrition_coach" ? " - Nutrition Coach" : " - PT"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Session status</span>
+                  <select
+                    value={sessionStatus}
+                    onChange={(event) => setSessionStatus(event.target.value as SessionStatusFilter)}
+                    className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+                  >
+                    <option value="all">All statuses</option>
+                    <option value="success">Completed only</option>
+                    <option value="failed">Failed only</option>
+                    <option value="cancelled">Cancelled only</option>
+                  </select>
+                </label>
+              </div>
+
+              {sessionRangeState.error ? (
+                <p className="mt-3 text-sm text-red-300">{sessionRangeState.error}</p>
+              ) : null}
+
+              <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">Total</p>
+                  <p className="mt-2 text-2xl font-semibold text-white">
+                    {loadingSessionSummary ? "..." : sessionSummary?.total ?? 0}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">Completed / Shows</p>
+                  <p className="mt-2 text-2xl font-semibold text-green-400">
+                    {loadingSessionSummary ? "..." : sessionSummary?.success ?? 0}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">Failed</p>
+                  <p className="mt-2 text-2xl font-semibold text-red-300">
+                    {loadingSessionSummary ? "..." : sessionSummary?.failed ?? 0}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">Cancelled</p>
+                  <p className="mt-2 text-2xl font-semibold text-orange-300">
+                    {loadingSessionSummary ? "..." : sessionSummary?.cancelled ?? 0}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">Clients</p>
+                  <p className="mt-2 text-2xl font-semibold text-blue-300">
+                    {loadingSessionSummary ? "..." : sessionSummary?.uniqueClients ?? 0}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={exportSessionHtml}
+                  disabled={downloading !== null}
+                  className="rounded-xl bg-yellow-400 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {MONTH_OPTIONS.map((monthName, index) => (
-                    <option key={monthName} value={index + 1}>
-                      {String(index + 1).padStart(2, "0")} - {monthName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="mt-5 rounded-2xl border border-yellow-400/20 bg-black/40 p-4">
-              <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">Selected Period</p>
-              <p className="mt-1 text-2xl font-semibold text-white">{monthRange.label}</p>
-              <p className="mt-2 text-sm leading-6 text-gray-400">
-                The full report exports as an HTML file with safe UTF-8 encoding and print-friendly graphs. Open the file in Chrome/Edge, then print to PDF.
-              </p>
-            </div>
-
-            {error ? (
-              <div className="mt-5 whitespace-pre-wrap rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm font-semibold text-red-300">
-                {error}
+                  {downloading === "session-html" ? "Exporting..." : "Export Session Report"}
+                </button>
+                <button
+                  type="button"
+                  onClick={exportSessionCsv}
+                  disabled={downloading !== null}
+                  className="rounded-xl border border-yellow-400 px-5 py-3 text-sm font-semibold text-yellow-300 transition hover:bg-yellow-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {downloading === "session-csv" ? "Exporting..." : "Export Session CSV"}
+                </button>
               </div>
-            ) : null}
+            </section>
 
-            <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <button
-                type="button"
-                onClick={exportFullHtmlReport}
-                disabled={downloading !== null}
-                className="rounded-2xl bg-yellow-400 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {downloading === "full-html" ? "Exporting..." : "Full Business Report"}
-              </button>
-
-              <button
-                type="button"
-                onClick={downloadRevenueCsv}
-                disabled={downloading !== null}
-                className="rounded-2xl border border-yellow-400 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {downloading === "revenue" ? "Exporting..." : "Revenue CSV"}
-              </button>
-
-              <button
-                type="button"
-                onClick={downloadSessionsCsv}
-                disabled={downloading !== null}
-                className="rounded-2xl border border-yellow-400 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {downloading === "sessions" ? "Exporting..." : "Sessions CSV"}
-              </button>
-
-              <button
-                type="button"
-                onClick={downloadClientsCsv}
-                disabled={downloading !== null}
-                className="rounded-2xl border border-yellow-400 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {downloading === "clients" ? "Exporting..." : "Clients CSV"}
-              </button>
-            </div>
-
-            <div className="mt-6 grid gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                <h3 className="font-semibold text-yellow-300">Full Business Report</h3>
-                <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
-                  Includes executive summary, revenue graph, source breakdown, session graph, trainer performance, debt follow-up, renewal follow-up, purchases, transactions, and client directory snapshot.
-                </p>
+            <section className="rounded-[2rem] border border-yellow-500/25 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-6">
+              <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-yellow-400">03</p>
+                  <h2 className="mt-2 text-2xl font-semibold">Client Report</h2>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
+                    Keep the full client directory export, or limit it to clients created in a selected year, month or custom period.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-gray-300">
+                  {clientMode === "all"
+                    ? "All clients"
+                    : clientRangeState.range?.label || "Select a valid period"}
+                </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                <h3 className="font-semibold text-yellow-300">Vietnamese-Safe Export</h3>
-                <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
-                  HTML uses UTF-8 and safe system fonts. CSV exports include UTF-8 BOM so Excel can read Vietnamese accents better.
-                </p>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <label className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Client scope</span>
+                  <select
+                    value={clientMode}
+                    onChange={(event) => setClientMode(event.target.value as ClientPeriodMode)}
+                    className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+                  >
+                    <option value="all">All clients</option>
+                    <option value="year">Created in a year</option>
+                    <option value="month">Created in a month</option>
+                    <option value="custom">Created in a custom period</option>
+                  </select>
+                </label>
+
+                {clientMode === "month" || clientMode === "year" ? (
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Year</span>
+                    <input
+                      type="number"
+                      value={clientYear}
+                      min={2000}
+                      max={2100}
+                      onChange={(event) => setClientYear(Number(event.target.value))}
+                      className="w-full rounded-xl border border-yellow-500/30 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+                    />
+                  </label>
+                ) : null}
+
+                {clientMode === "month" ? (
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Month</span>
+                    <select
+                      value={clientMonth}
+                      onChange={(event) => setClientMonth(Number(event.target.value))}
+                      className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+                    >
+                      {MONTH_OPTIONS.map((monthName, index) => (
+                        <option key={monthName} value={index + 1}>
+                          {pad(index + 1)} - {monthName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {clientMode === "custom" ? (
+                  <>
+                    <label className="space-y-2">
+                      <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Start date</span>
+                      <input
+                        type="date"
+                        value={clientStart}
+                        onChange={(event) => setClientStart(event.target.value)}
+                        className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+                      />
+                    </label>
+                    <label className="space-y-2">
+                      <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">End date</span>
+                      <input
+                        type="date"
+                        value={clientEnd}
+                        onChange={(event) => setClientEnd(event.target.value)}
+                        className="w-full rounded-xl border border-yellow-500/30 bg-white px-4 py-3 text-sm text-black outline-none focus:border-yellow-400"
+                      />
+                    </label>
+                  </>
+                ) : null}
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                <h3 className="font-semibold text-yellow-300">No API Dependency</h3>
-                <p className="mt-2 text-sm font-normal leading-6 text-gray-400">
-                  Reports export directly from Supabase on this page, so broken API routes should not block your reports.
-                </p>
+              {clientRangeState.error ? (
+                <p className="mt-3 text-sm text-red-300">{clientRangeState.error}</p>
+              ) : null}
+
+              <div className="mt-5">
+                <button
+                  type="button"
+                  onClick={exportClientsCsv}
+                  disabled={downloading !== null}
+                  className="rounded-xl bg-yellow-400 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {downloading === "clients" ? "Exporting..." : "Export Client CSV"}
+                </button>
               </div>
-            </div>
-          </section>
+            </section>
+          </div>
         </div>
       </div>
     </main>
