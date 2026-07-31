@@ -485,8 +485,16 @@ export default function TrainerScanPage() {
     setNoteMessage("");
   }
 
-  async function startScanner() {
+  async function startScanner(requestedMode: SessionType = "training") {
     if (scannerStarted || scannerRef.current) return;
+
+    const nextMode: SessionType =
+      requestedMode === "nutrition_follow_up" &&
+      (trainerRole === "nutrition_coach" || trainerRole === "admin")
+        ? "nutrition_follow_up"
+        : "training";
+
+    setScanMode(nextMode);
 
     setResult({ type: "", message: "" });
     setNoteMessage("");
@@ -524,7 +532,7 @@ export default function TrainerScanPage() {
 
           try {
             await stopScanner();
-            await markSession(qrToken, scanMode);
+            await markSession(qrToken, nextMode);
           } catch (error) {
             console.error("Scan processing error:", error);
             setResult({
@@ -930,68 +938,53 @@ export default function TrainerScanPage() {
                   Scan Client QR
                 </h2>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-400">
-                  Choose the service first, then scan the client QR code.
-                  Training deducts one training session. Nutrition follow-up
-                  uses one nutrition credit and does not reduce training sessions.
+                  Training scan is the default and deducts 1 training session.
+                  Nutrition follow-up is a separate option and does not reduce
+                  the client&apos;s training balance.
                 </p>
 
-                {(trainerRole === "nutrition_coach" ||
-                  trainerRole === "admin") && (
-                  <div className="mt-4 grid max-w-xl gap-3 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => setScanMode("training")}
-                      disabled={scannerStarted}
-                      className={`rounded-2xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                        scanMode === "training"
-                          ? "border-yellow-400 bg-yellow-400 text-black"
-                          : "border-white/15 bg-black/30 text-white hover:border-yellow-400/60"
-                      }`}
-                    >
-                      <span className="block text-xs font-black uppercase tracking-widest">
-                        Training Session
-                      </span>
-                      <span className="mt-1 block text-xs opacity-75">
-                        Deduct 1 training session
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setScanMode("nutrition_follow_up")}
-                      disabled={scannerStarted}
-                      className={`rounded-2xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                        scanMode === "nutrition_follow_up"
-                          ? "border-emerald-300 bg-emerald-300 text-black"
-                          : "border-white/15 bg-black/30 text-white hover:border-emerald-300/60"
-                      }`}
-                    >
-                      <span className="block text-xs font-black uppercase tracking-widest">
-                        Nutrition Follow-up
-                      </span>
-                      <span className="mt-1 block text-xs opacity-75">
-                        1 follow-up for every 6 purchased sessions
-                      </span>
-                    </button>
+                {scanMode === "nutrition_follow_up" && scannerStarted ? (
+                  <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-xs font-bold uppercase tracking-wider text-emerald-300">
+                    <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                    Nutrition Follow-up Mode
+                  </div>
+                ) : (
+                  <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-xs font-bold uppercase tracking-wider text-yellow-300">
+                    <span className="h-2 w-2 rounded-full bg-yellow-400" />
+                    Training Mode — Default
                   </div>
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={scannerStarted ? stopScanner : startScanner}
-                className={`rounded-2xl px-7 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] md:min-w-56 ${
-                  scannerStarted
-                    ? "bg-red-400 text-black hover:bg-red-300"
-                    : "bg-yellow-400 text-black hover:bg-yellow-300"
-                }`}
-              >
-                {scannerStarted
-                  ? "Stop Scanner"
-                  : scanMode === "nutrition_follow_up"
-                    ? "Scan Nutrition"
-                    : "Scan Training"}
-              </button>
+              <div className="grid gap-3 md:min-w-64">
+                <button
+                  type="button"
+                  onClick={
+                    scannerStarted
+                      ? stopScanner
+                      : () => startScanner("training")
+                  }
+                  className={`rounded-2xl px-7 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] ${
+                    scannerStarted
+                      ? "bg-red-400 text-black hover:bg-red-300"
+                      : "bg-yellow-400 text-black hover:bg-yellow-300"
+                  }`}
+                >
+                  {scannerStarted ? "Stop Scanner" : "Start Training Scan"}
+                </button>
+
+                {!scannerStarted &&
+                (trainerRole === "nutrition_coach" ||
+                  trainerRole === "admin") ? (
+                  <button
+                    type="button"
+                    onClick={() => startScanner("nutrition_follow_up")}
+                    className="rounded-2xl border border-emerald-300/60 bg-emerald-300/10 px-7 py-3 text-sm font-black uppercase tracking-wide text-emerald-300 transition hover:bg-emerald-300 hover:text-black active:scale-[0.98]"
+                  >
+                    Scan Nutrition Follow-up
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             <div className="rounded-[1.75rem] border border-yellow-400/25 bg-black/70 p-3">
