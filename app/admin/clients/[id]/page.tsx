@@ -65,12 +65,9 @@ type ClientPurchase = {
   created_at: string | null;
 };
 
-type SessionType = "training" | "nutrition_follow_up";
-
 type SessionHistory = {
   id: string;
   trainer_id: string | null;
-  session_type: SessionType | null;
   status: string;
   message: string | null;
   trainer_note: string | null;
@@ -304,39 +301,6 @@ function isDebtPurchase(purchase: ClientPurchase) {
   );
 }
 
-function getNutritionFollowAllowance(
-  purchases: ClientPurchase[],
-  packages: SessionPackage[],
-) {
-  const purchasedSessions = purchases
-    .filter(isPackagePurchase)
-    .reduce(
-      (sum, purchase) => sum + Math.max(Number(purchase.session_count || 0), 0),
-      0,
-    );
-
-  const latestPackageTotal =
-    packages.length > 0
-      ? Math.max(Number(packages[0]?.total_sessions || 0), 0)
-      : 0;
-
-  return Math.floor(Math.max(purchasedSessions, latestPackageTotal) / 6);
-}
-
-function isCompletedTrainingSession(
-  status: string | null | undefined,
-  sessionType: SessionType | null | undefined,
-) {
-  return status === "success" && (sessionType || "training") === "training";
-}
-
-function isCompletedNutritionFollow(
-  status: string | null | undefined,
-  sessionType: SessionType | null | undefined,
-) {
-  return status === "success" && sessionType === "nutrition_follow_up";
-}
-
 function AdminClientDetailPageContent() {
   const params = useParams();
   const router = useRouter();
@@ -405,15 +369,11 @@ function AdminClientDetailPageContent() {
 
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editSessionTrainerId, setEditSessionTrainerId] = useState("");
-  const [editSessionType, setEditSessionType] =
-    useState<SessionType>("training");
   const [editSessionStatus, setEditSessionStatus] = useState("success");
   const [editSessionDateTime, setEditSessionDateTime] = useState("");
   const [editSessionMessage, setEditSessionMessage] = useState("");
   const [editSessionNote, setEditSessionNote] = useState("");
   const [savingSessionHistoryId, setSavingSessionHistoryId] = useState<string | null>(null);
-  const [showCorrectedSessions, setShowCorrectedSessions] = useState(false);
-  const [nutritionFollowUsed, setNutritionFollowUsed] = useState(0);
 
   const [debtAmount, setDebtAmount] = useState("");
   const [debtDeadline, setDebtDeadline] = useState("");
@@ -479,37 +439,22 @@ function AdminClientDetailPageContent() {
   }
 
   async function fetchSessionHistory() {
-    const [historyResult, nutritionCountResult] = await Promise.all([
-      supabase
-        .from("session_history")
-        .select(
-          "id, trainer_id, session_type, status, message, trainer_note, remaining_after, created_at",
-        )
-        .eq("client_id", clientId)
-        .order("created_at", { ascending: false })
-        .limit(100),
-      supabase
-        .from("session_history")
-        .select("id", { count: "exact", head: true })
-        .eq("client_id", clientId)
-        .eq("session_type", "nutrition_follow_up")
-        .eq("status", "success"),
-    ]);
+    const { data: historyData, error: historyError } = await supabase
+      .from("session_history")
+      .select(
+        "id, trainer_id, status, message, trainer_note, remaining_after, created_at",
+      )
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(20);
 
-    if (historyResult.error) {
-      console.error(historyResult.error.message);
+    if (historyError) {
+      console.error(historyError.message);
       setSessionHistory([]);
       return;
     }
 
-    if (nutritionCountResult.error) {
-      console.error(nutritionCountResult.error.message);
-      setNutritionFollowUsed(0);
-    } else {
-      setNutritionFollowUsed(nutritionCountResult.count || 0);
-    }
-
-    const rawHistory = (historyResult.data || []) as Omit<
+    const rawHistory = (historyData || []) as Omit<
       SessionHistory,
       "trainer_name"
     >[];
@@ -526,33 +471,27 @@ function AdminClientDetailPageContent() {
       setSessionHistory(
         rawHistory.map((log) => ({
           ...log,
-          session_type: log.session_type || "training",
           trainer_name: "Admin / Manual",
         })),
       );
       return;
     }
 
-    const { data: trainerProfiles, error: trainerProfilesError } = await supabase
+    const { data: trainerProfiles } = await supabase
       .from("profiles")
       .select("id, full_name")
       .in("id", trainerIds);
 
-    if (trainerProfilesError) {
-      console.error(trainerProfilesError.message);
-    }
-
     const trainerNameMap = new Map(
       ((trainerProfiles || []) as TrainerProfile[]).map((profile) => [
         profile.id,
-        profile.full_name || "Unknown Staff",
+        profile.full_name || "Unknown Trainer",
       ]),
     );
 
     setSessionHistory(
       rawHistory.map((log) => ({
         ...log,
-        session_type: log.session_type || "training",
         trainer_name:
           log.trainer_id && trainerNameMap.get(log.trainer_id)
             ? trainerNameMap.get(log.trainer_id)!
@@ -1544,7 +1483,6 @@ function AdminClientDetailPageContent() {
 
     setEditingSessionId(log.id);
     setEditSessionTrainerId(log.trainer_id || "");
-    setEditSessionType(log.session_type || "training");
     setEditSessionStatus(log.status || "success");
     setEditSessionDateTime(formatDateTimeInput(log.created_at));
     setEditSessionMessage(log.message || "");
@@ -1554,7 +1492,6 @@ function AdminClientDetailPageContent() {
   function cancelEditSessionHistory() {
     setEditingSessionId(null);
     setEditSessionTrainerId("");
-    setEditSessionType("training");
     setEditSessionStatus("success");
     setEditSessionDateTime("");
     setEditSessionMessage("");
@@ -1573,51 +1510,16 @@ function AdminClientDetailPageContent() {
     }
 
     const currentPackage = packages[0] || null;
-    const oldSessionType = log.session_type || "training";
-    const oldCountsAgainstTrainingPackage = isCompletedTrainingSession(
-      log.status,
-      oldSessionType,
-    );
-    const nextCountsAgainstTrainingPackage = isCompletedTrainingSession(
-      editSessionStatus,
-      editSessionType,
-    );
-    const trainingBalanceChanges =
-      oldCountsAgainstTrainingPackage !== nextCountsAgainstTrainingPackage;
+    const oldCompleted = log.status === "success";
+    const nextCompleted = editSessionStatus === "success";
+    const statusChangesSessionBalance = oldCompleted !== nextCompleted;
 
-    const oldCountsAsNutrition = isCompletedNutritionFollow(
-      log.status,
-      oldSessionType,
-    );
-    const nextCountsAsNutrition = isCompletedNutritionFollow(
-      editSessionStatus,
-      editSessionType,
-    );
-
-    const nutritionAllowance = getNutritionFollowAllowance(purchases, packages);
-    const nutritionUsedWithoutCurrent =
-      nutritionFollowUsed - (oldCountsAsNutrition ? 1 : 0);
-
-    if (
-      nextCountsAsNutrition &&
-      !oldCountsAsNutrition &&
-      nutritionUsedWithoutCurrent >= nutritionAllowance
-    ) {
-      alert(
-        `No nutrition follow-up credit is available. This client has ${nutritionAllowance} allowed and ${nutritionFollowUsed} already completed.`,
-      );
-      return;
-    }
-
-    let previousPackageNumbers: ReturnType<typeof getPackageNumbers> | null =
-      null;
+    let previousPackageNumbers: ReturnType<typeof getPackageNumbers> | null = null;
     let nextRemainingAfter = log.remaining_after;
 
-    if (trainingBalanceChanges) {
+    if (statusChangesSessionBalance) {
       if (!currentPackage) {
-        alert(
-          "No package was found. The training balance cannot be changed safely.",
-        );
+        alert("No active package was found. The session status cannot be changed safely.");
         return;
       }
 
@@ -1625,16 +1527,14 @@ function AdminClientDetailPageContent() {
       let nextUsed = previousPackageNumbers.usedSessions;
       let nextRemaining = previousPackageNumbers.remainingSessions;
 
-      if (oldCountsAgainstTrainingPackage && !nextCountsAgainstTrainingPackage) {
+      if (oldCompleted && !nextCompleted) {
         nextUsed = Math.max(previousPackageNumbers.usedSessions - 1, 0);
         nextRemaining = previousPackageNumbers.remainingSessions + 1;
       }
 
-      if (!oldCountsAgainstTrainingPackage && nextCountsAgainstTrainingPackage) {
+      if (!oldCompleted && nextCompleted) {
         if (previousPackageNumbers.remainingSessions <= 0) {
-          alert(
-            "This client has no remaining training sessions. Add or fix sessions before marking this as a completed training session.",
-          );
+          alert("This client has no remaining sessions. Add or fix sessions before marking this record as completed.");
           return;
         }
 
@@ -1643,44 +1543,27 @@ function AdminClientDetailPageContent() {
       }
 
       const confirmed = window.confirm(
-        oldCountsAgainstTrainingPackage &&
-          !nextCountsAgainstTrainingPackage
-          ? `This record will stop counting as a completed training session.\n\nOne training session will be returned.\nRemaining: ${previousPackageNumbers.remainingSessions} -> ${nextRemaining}`
-          : `This record will count as a completed training session.\n\nOne training session will be deducted.\nRemaining: ${previousPackageNumbers.remainingSessions} -> ${nextRemaining}`,
+        oldCompleted && !nextCompleted
+          ? `Change this completed session to ${editSessionStatus}?\n\nOne session will be returned to the client.\nRemaining: ${previousPackageNumbers.remainingSessions} → ${nextRemaining}`
+          : `Mark this record as completed?\n\nOne session will be deducted.\nRemaining: ${previousPackageNumbers.remainingSessions} → ${nextRemaining}`,
       );
 
       if (!confirmed) return;
 
       setSavingSessionHistoryId(log.id);
 
-      const { data: updatedPackage, error: packageError } = await supabase
+      const { error: packageError } = await supabase
         .from("session_packages")
         .update({
           used_sessions: nextUsed,
           remaining_sessions: nextRemaining,
           status: nextRemaining <= 0 ? "completed" : "active",
         })
-        .eq("id", currentPackage.id)
-        .eq(
-          "remaining_sessions",
-          previousPackageNumbers.remainingSessions,
-        )
-        .eq("used_sessions", previousPackageNumbers.usedSessions)
-        .select("id")
-        .maybeSingle();
+        .eq("id", currentPackage.id);
 
       if (packageError) {
         alert(packageError.message);
         setSavingSessionHistoryId(null);
-        return;
-      }
-
-      if (!updatedPackage) {
-        alert(
-          "The package balance changed before this edit was saved. Reload the client and try again.",
-        );
-        setSavingSessionHistoryId(null);
-        await fetchClientDetail();
         return;
       }
 
@@ -1689,21 +1572,12 @@ function AdminClientDetailPageContent() {
       setSavingSessionHistoryId(log.id);
     }
 
-    if (
-      editSessionType === "nutrition_follow_up" &&
-      currentPackage &&
-      !trainingBalanceChanges
-    ) {
-      nextRemainingAfter = getPackageNumbers(currentPackage).remainingSessions;
-    }
-
     const createdAtIso = new Date(editSessionDateTime).toISOString();
 
     const { error: historyError } = await supabase
       .from("session_history")
       .update({
         trainer_id: editSessionTrainerId || null,
-        session_type: editSessionType,
         status: editSessionStatus,
         created_at: createdAtIso,
         message: editSessionMessage.trim() || null,
@@ -1714,11 +1588,7 @@ function AdminClientDetailPageContent() {
       .eq("client_id", clientId);
 
     if (historyError) {
-      if (
-        trainingBalanceChanges &&
-        currentPackage &&
-        previousPackageNumbers
-      ) {
+      if (statusChangesSessionBalance && currentPackage && previousPackageNumbers) {
         await supabase
           .from("session_packages")
           .update({
@@ -1738,13 +1608,10 @@ function AdminClientDetailPageContent() {
     }
 
     alert(
-      editSessionType === "nutrition_follow_up"
-        ? "Nutrition follow-up updated. Training sessions were not deducted."
-        : editSessionStatus === "success"
-          ? "Training session updated."
-          : "Session corrected. The record no longer counts as a completed training session.",
+      editSessionStatus === "success"
+        ? "Session history updated."
+        : "Session corrected. Package balance was updated and the record remains visible for audit.",
     );
-
     cancelEditSessionHistory();
     await fetchClientDetail();
     setSavingSessionHistoryId(null);
@@ -1922,18 +1789,6 @@ function AdminClientDetailPageContent() {
 
   const activePackageNumbers = getPackageNumbers(activePackage);
   const purchaseHistory = packagePurchases;
-  const nutritionFollowAllowance = getNutritionFollowAllowance(
-    purchases,
-    packages,
-  );
-  const nutritionFollowRemaining = Math.max(
-    nutritionFollowAllowance - nutritionFollowUsed,
-    0,
-  );
-  const visibleSessionHistory = showCorrectedSessions
-    ? sessionHistory
-    : sessionHistory.filter((log) => log.status === "success");
-
   return (
     <main className="min-h-screen bg-black p-4 text-white md:p-6">
       <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
@@ -2451,7 +2306,7 @@ function AdminClientDetailPageContent() {
             </section>
           </section>
 
-          <section className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <section className="mb-6 grid gap-4 md:grid-cols-5">
             <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-2xl backdrop-blur">
               <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
                 Current Package Sessions
@@ -2476,18 +2331,6 @@ function AdminClientDetailPageContent() {
               </p>
               <p className="mt-3 text-4xl font-semibold text-yellow-400">
                 {activePackageNumbers.remainingSessions}
-              </p>
-            </div>
-
-            <div className="rounded-[2rem] border border-emerald-500/30 bg-emerald-500/10 p-5 text-center shadow-2xl backdrop-blur">
-              <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
-                Nutrition Follow-ups
-              </p>
-              <p className="mt-3 text-4xl font-semibold text-emerald-300">
-                {nutritionFollowRemaining}
-              </p>
-              <p className="mt-2 text-xs text-gray-400">
-                {nutritionFollowUsed} used / {nutritionFollowAllowance} allowed
               </p>
             </div>
 
@@ -3451,36 +3294,20 @@ function AdminClientDetailPageContent() {
                 <h2 className="mt-1 text-2xl font-semibold">Recent Sessions</h2>
               </div>
 
-              <div className="flex flex-col items-start gap-3 md:items-end">
-                <div className="rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">
-                  Nutrition follow-ups: {nutritionFollowUsed} used /{" "}
-                  {nutritionFollowAllowance} allowed /{" "}
-                  {nutritionFollowRemaining} remaining
-                </div>
-
-                {isAdmin ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setShowCorrectedSessions((current) => !current)
-                    }
-                    className="rounded-xl border border-white/20 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:border-yellow-400 hover:text-yellow-300"
-                  >
-                    {showCorrectedSessions
-                      ? "Hide Corrected Records"
-                      : "Show Corrected Records"}
-                  </button>
-                ) : null}
-              </div>
+              {isAdmin ? (
+                <p className="max-w-xl text-sm leading-6 text-gray-400">
+                  Admin can edit date, staff, status, message, and note. All statuses are shown here so corrected, failed, cancelled, and reversed records remain available for audit.
+                </p>
+              ) : null}
             </div>
 
-            {visibleSessionHistory.length === 0 ? (
+            {sessionHistory.length === 0 ? (
               <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm font-normal text-gray-400">
                 No session history yet.
               </p>
             ) : (
               <div className="mt-5 space-y-3">
-                {visibleSessionHistory.map((log) => {
+                {sessionHistory.map((log) => {
                   const isEditing = editingSessionId === log.id;
 
                   return (
@@ -3537,32 +3364,6 @@ function AdminClientDetailPageContent() {
                                   </option>
                                 ))}
                               </select>
-                            </label>
-
-                            <label>
-                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
-                                Session Type
-                              </span>
-                              <select
-                                value={editSessionType}
-                                onChange={(event) =>
-                                  setEditSessionType(
-                                    event.target.value as SessionType,
-                                  )
-                                }
-                                className="w-full rounded-2xl border border-cyan-400/40 bg-white px-4 py-3 text-sm text-black outline-none focus:border-cyan-300"
-                              >
-                                <option value="training">
-                                  Training Session
-                                </option>
-                                <option value="nutrition_follow_up">
-                                  Nutrition Follow-up
-                                </option>
-                              </select>
-                              <p className="mt-2 text-xs leading-5 text-gray-400">
-                                Nutrition follow-ups do not reduce training
-                                sessions.
-                              </p>
                             </label>
 
                             <label>
@@ -3638,29 +3439,13 @@ function AdminClientDetailPageContent() {
                         <>
                           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div>
-                              <div className="flex flex-wrap gap-2">
-                                <span
-                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${getStatusClass(
-                                    log.status,
-                                  )}`}
-                                >
-                                  {log.status === "success"
-                                    ? "Completed"
-                                    : log.status}
-                                </span>
-
-                                <span
-                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
-                                    log.session_type === "nutrition_follow_up"
-                                      ? "bg-emerald-400/15 text-emerald-300"
-                                      : "bg-yellow-400/15 text-yellow-300"
-                                  }`}
-                                >
-                                  {log.session_type === "nutrition_follow_up"
-                                    ? "Nutrition Follow-up"
-                                    : "Training Session"}
-                                </span>
-                              </div>
+                              <span
+                                className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${getStatusClass(
+                                  log.status,
+                                )}`}
+                              >
+                                {log.status === "success" ? "Completed" : log.status}
+                              </span>
 
                               <p className="mt-2 text-sm text-gray-400">
                                 Staff: {log.trainer_name}
@@ -3685,9 +3470,7 @@ function AdminClientDetailPageContent() {
                           </div>
 
                           <p className="mt-3 text-sm text-gray-300">
-                            {log.session_type === "nutrition_follow_up"
-                              ? "Training Balance (unchanged): "
-                              : "Training Remaining After: "}
+                            Remaining After: {" "}
                             <span className="font-semibold text-yellow-400">
                               {log.remaining_after ?? "-"}
                             </span>
@@ -3702,9 +3485,7 @@ function AdminClientDetailPageContent() {
                           {log.trainer_note ? (
                             <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
                               <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
-                                {log.session_type === "nutrition_follow_up"
-                                  ? "Nutrition Follow-up Note"
-                                  : "Training Note"}
+                                Session Note
                               </p>
                               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
                                 {log.trainer_note}

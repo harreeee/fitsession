@@ -123,6 +123,18 @@ type PayableEditDraft = {
   notes: string;
 };
 
+type TransactionEditDraft = {
+  transactionType: TransactionType;
+  source: string;
+  title: string;
+  amount: string;
+  transactionDate: string;
+  accountingMonth: string;
+  reportGroup: ReportGroup;
+  counterparty: string;
+  notes: string;
+};
+
 type ProfitLoss = {
   salesRevenue: number;
   revenueDeductions: number;
@@ -853,6 +865,9 @@ export default function AdminRevenuePage() {
   const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const [classificationDrafts, setClassificationDrafts] = useState<Record<string, ReportGroup>>({});
+
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [transactionEditDraft, setTransactionEditDraft] = useState<TransactionEditDraft | null>(null);
 
   const [editingReceivableId, setEditingReceivableId] = useState<string | null>(null);
   const [receivableEditDraft, setReceivableEditDraft] = useState<ReceivableEditDraft | null>(null);
@@ -1613,6 +1628,109 @@ export default function AdminRevenuePage() {
 
     setMessage("Đã cập nhật khoản PHẢI TRẢ và tháng ghi nhận chi phí.");
     cancelPayableEdit();
+    setSaving(false);
+    await fetchData();
+  }
+
+  function startTransactionEdit(transaction: BusinessTransaction) {
+    if (!isAdmin) return;
+
+    if (transaction.payable_id) {
+      setMessage("Khoản này là thanh toán công nợ phải trả. Hãy sửa tại phần công nợ để tránh lệch số dư.");
+      return;
+    }
+
+    setEditingTransactionId(transaction.id);
+    setTransactionEditDraft({
+      transactionType: transaction.transaction_type,
+      source: transaction.source || "manual",
+      title: transaction.title || "",
+      amount: String(Math.abs(toNumber(transaction.amount))),
+      transactionDate: transaction.transaction_date?.slice(0, 10) || todayInputDate(),
+      accountingMonth: getTransactionAccountingMonth(transaction),
+      reportGroup: transaction.report_group || fallbackReportGroup(transaction),
+      counterparty: transaction.counterparty || "",
+      notes: transaction.notes || "",
+    });
+    setMessage("");
+  }
+
+  function cancelTransactionEdit() {
+    setEditingTransactionId(null);
+    setTransactionEditDraft(null);
+  }
+
+  async function saveTransactionEdit() {
+    if (!isAdmin || !editingTransactionId || !transactionEditDraft) return;
+
+    const transaction = transactions.find((item) => item.id === editingTransactionId);
+    if (!transaction) {
+      setMessage("Không tìm thấy giao dịch cần sửa.");
+      return;
+    }
+
+    if (transaction.payable_id) {
+      setMessage("Không thể sửa trực tiếp khoản thanh toán công nợ phải trả.");
+      return;
+    }
+
+    const parsedAmount = Number(transactionEditDraft.amount);
+
+    if (!transactionEditDraft.title.trim()) {
+      setMessage("Vui lòng nhập nội dung giao dịch.");
+      return;
+    }
+
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      setMessage("Số tiền phải lớn hơn 0.");
+      return;
+    }
+
+    if (!transactionEditDraft.transactionDate || !transactionEditDraft.accountingMonth) {
+      setMessage("Vui lòng chọn ngày thu / chi và tháng ghi nhận.");
+      return;
+    }
+
+    const importantChange =
+      transaction.transaction_type !== transactionEditDraft.transactionType ||
+      Math.abs(toNumber(transaction.amount)) !== parsedAmount ||
+      getTransactionAccountingMonth(transaction) !== transactionEditDraft.accountingMonth;
+
+    if (importantChange) {
+      const confirmed = window.confirm(
+        `Xác nhận sửa giao dịch "${transaction.title}"?\n\n` +
+          `Loại: ${transaction.transaction_type} → ${transactionEditDraft.transactionType}\n` +
+          `Số tiền: ${money(Math.abs(toNumber(transaction.amount)))} → ${money(parsedAmount)}\n` +
+          `Tháng: ${getTransactionAccountingMonth(transaction)} → ${transactionEditDraft.accountingMonth}`,
+      );
+      if (!confirmed) return;
+    }
+
+    setSaving(true);
+
+    const { error } = await supabase
+      .from("business_transactions")
+      .update({
+        transaction_type: transactionEditDraft.transactionType,
+        source: transactionEditDraft.source,
+        title: transactionEditDraft.title.trim(),
+        amount: parsedAmount,
+        transaction_date: transactionEditDraft.transactionDate,
+        accounting_month: monthStart(transactionEditDraft.accountingMonth),
+        report_group: transactionEditDraft.reportGroup,
+        counterparty: transactionEditDraft.counterparty.trim() || null,
+        notes: transactionEditDraft.notes.trim() || null,
+      })
+      .eq("id", editingTransactionId);
+
+    if (error) {
+      setMessage(error.message);
+      setSaving(false);
+      return;
+    }
+
+    setMessage("Đã cập nhật giao dịch thu / chi.");
+    cancelTransactionEdit();
     setSaving(false);
     await fetchData();
   }
@@ -2438,6 +2556,200 @@ export default function AdminRevenuePage() {
                       />
                     </div>
 
+                    {editingTransactionId && transactionEditDraft ? (
+                      <div className="mb-5 rounded-3xl border border-yellow-400/35 bg-yellow-400/10 p-5">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="font-black text-yellow-200">Sửa giao dịch thu / chi</p>
+                            <p className="mt-1 text-sm text-yellow-100/75">
+                              Có thể sửa loại giao dịch, nguồn, ngày, tháng ghi nhận, nội dung, số tiền, đối tượng, nhóm báo cáo và ghi chú.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={cancelTransactionEdit}
+                            className="rounded-xl border border-white/20 px-4 py-2 font-bold text-white hover:border-white/50"
+                          >
+                            Đóng
+                          </button>
+                        </div>
+
+                        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                          <label className="grid gap-1">
+                            <span className="font-bold text-gray-300">Thu hay chi?</span>
+                            <select
+                              value={transactionEditDraft.transactionType}
+                              onChange={(event) => {
+                                const nextType = event.target.value as TransactionType;
+                                setTransactionEditDraft((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        transactionType: nextType,
+                                        reportGroup:
+                                          nextType === "income"
+                                            ? "sales_revenue"
+                                            : nextType === "expense"
+                                              ? "admin_expense"
+                                              : "cash_only",
+                                      }
+                                    : current,
+                                );
+                              }}
+                              className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-black"
+                            >
+                              <option value="income">Thu tiền</option>
+                              <option value="expense">Chi tiền</option>
+                              <option value="cash_adjustment">Điều chỉnh tiền mặt</option>
+                            </select>
+                          </label>
+
+                          <label className="grid gap-1 xl:col-span-2">
+                            <span className="font-bold text-gray-300">Khoản tiền này là gì?</span>
+                            <select
+                              value={transactionEditDraft.source}
+                              onChange={(event) =>
+                                setTransactionEditDraft((current) =>
+                                  current ? { ...current, source: event.target.value } : current,
+                                )
+                              }
+                              className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-black"
+                            >
+                              {SOURCE_OPTIONS.filter((option) => option.value !== "payable_payment").map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="grid gap-1">
+                            <span className="font-bold text-gray-300">Ngày thu / chi</span>
+                            <input
+                              type="date"
+                              value={transactionEditDraft.transactionDate}
+                              onChange={(event) =>
+                                setTransactionEditDraft((current) =>
+                                  current ? { ...current, transactionDate: event.target.value } : current,
+                                )
+                              }
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                            />
+                          </label>
+
+                          <label className="grid gap-1">
+                            <span className="font-bold text-gray-300">Tính vào tháng</span>
+                            <input
+                              type="month"
+                              value={transactionEditDraft.accountingMonth}
+                              onChange={(event) =>
+                                setTransactionEditDraft((current) =>
+                                  current ? { ...current, accountingMonth: event.target.value } : current,
+                                )
+                              }
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                            />
+                          </label>
+
+                          <label className="grid gap-1">
+                            <span className="font-bold text-gray-300">Số tiền</span>
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.01"
+                              value={transactionEditDraft.amount}
+                              onChange={(event) =>
+                                setTransactionEditDraft((current) =>
+                                  current ? { ...current, amount: event.target.value } : current,
+                                )
+                              }
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                            />
+                          </label>
+
+                          <label className="grid gap-1 xl:col-span-3">
+                            <span className="font-bold text-gray-300">Nội dung</span>
+                            <input
+                              value={transactionEditDraft.title}
+                              onChange={(event) =>
+                                setTransactionEditDraft((current) =>
+                                  current ? { ...current, title: event.target.value } : current,
+                                )
+                              }
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                            />
+                          </label>
+
+                          <label className="grid gap-1 xl:col-span-2">
+                            <span className="font-bold text-gray-300">Người trả / người nhận</span>
+                            <input
+                              value={transactionEditDraft.counterparty}
+                              onChange={(event) =>
+                                setTransactionEditDraft((current) =>
+                                  current ? { ...current, counterparty: event.target.value } : current,
+                                )
+                              }
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                            />
+                          </label>
+
+                          <label className="grid gap-1 xl:col-span-3">
+                            <span className="font-bold text-gray-300">Phân loại kế toán</span>
+                            <select
+                              value={transactionEditDraft.reportGroup}
+                              onChange={(event) =>
+                                setTransactionEditDraft((current) =>
+                                  current
+                                    ? { ...current, reportGroup: event.target.value as ReportGroup }
+                                    : current,
+                                )
+                              }
+                              className="rounded-xl border border-yellow-500/30 bg-white px-3 py-3 text-black"
+                            >
+                              {REPORT_GROUP_OPTIONS.filter((option) =>
+                                option.transactionTypes.includes(transactionEditDraft.transactionType),
+                              ).map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="grid gap-1 xl:col-span-3">
+                            <span className="font-bold text-gray-300">Ghi chú</span>
+                            <input
+                              value={transactionEditDraft.notes}
+                              onChange={(event) =>
+                                setTransactionEditDraft((current) =>
+                                  current ? { ...current, notes: event.target.value } : current,
+                                )
+                              }
+                              className="rounded-xl border border-yellow-500/30 bg-black/60 px-3 py-3 text-white"
+                            />
+                          </label>
+
+                          <div className="flex items-end justify-end gap-2 xl:col-span-6">
+                            <button
+                              type="button"
+                              onClick={cancelTransactionEdit}
+                              className="rounded-xl border border-white/20 px-4 py-3 font-bold text-white"
+                            >
+                              Hủy
+                            </button>
+                            <button
+                              type="button"
+                              onClick={saveTransactionEdit}
+                              disabled={saving}
+                              className="rounded-xl bg-yellow-400 px-5 py-3 font-black text-black disabled:opacity-50"
+                            >
+                              {saving ? "Đang lưu..." : "Lưu thay đổi"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
                     {filteredJournal.length === 0 ? (
                       <p className="rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-gray-400">
                         Không có giao dịch phù hợp.
@@ -2537,10 +2849,19 @@ export default function AdminRevenuePage() {
                                       {isAdmin && !linkedPayable ? (
                                         <button
                                           type="button"
+                                          onClick={() => startTransactionEdit(transaction)}
+                                          className="rounded-lg border border-cyan-400 px-2 py-2 font-bold text-cyan-300 hover:bg-cyan-400 hover:text-black"
+                                        >
+                                          Sửa
+                                        </button>
+                                      ) : null}
+                                      {isAdmin && !linkedPayable ? (
+                                        <button
+                                          type="button"
                                           onClick={() => saveTransactionClassification(transaction)}
                                           className="rounded-lg border border-yellow-400 px-2 py-2 font-bold text-yellow-300 hover:bg-yellow-400 hover:text-black"
                                         >
-                                          Lưu nhóm
+                                          Lưu phân loại
                                         </button>
                                       ) : null}
                                       {isAdmin && !linkedPayable ? (
