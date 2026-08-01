@@ -626,15 +626,20 @@ export default function TrainerScanPage() {
       setLastScannedType(row.session_type || sessionType);
       setShowNoteBox(true);
 
+      const trainingRemaining = row.remaining_after ?? 0;
+      const nutritionRemaining = row.nutrition_remaining ?? 0;
+      const nutritionUsed = row.nutrition_used ?? 0;
+      const nutritionAllowed = row.nutrition_allowed ?? 0;
+
       if (row.session_type === "nutrition_follow_up") {
         setResult({
           type: "success",
-          message: `Nutrition follow-up recorded for ${row.client_name}. Training sessions were not deducted. Nutrition follow-ups used: ${row.nutrition_used}/${row.nutrition_allowed}. Remaining: ${row.nutrition_remaining}.`,
+          message: `NUTRITION FOLLOW-UP SUCCESSFUL — ${row.client_name}. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used). Training sessions remaining: ${trainingRemaining} — no training session was deducted.`,
         });
       } else {
         setResult({
           type: "success",
-          message: `Training session recorded for ${row.client_name}. ${row.remaining_after ?? 0} training sessions remaining.`,
+          message: `TRAINING SCAN SUCCESSFUL — ${row.client_name}. Training sessions remaining: ${trainingRemaining}. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used).`,
         });
       }
 
