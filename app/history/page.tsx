@@ -135,6 +135,8 @@ export default function HistoryPage() {
   const [role, setRole] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [activeFilterLabel, setActiveFilterLabel] = useState("This Month");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   const clientMap = useMemo(() => {
     const map = new Map<string, ClientRow>();
@@ -186,6 +188,16 @@ export default function HistoryPage() {
         .includes(cleanSearch);
     });
   }, [logs, search, clientMap, trainerMap]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / pageSize));
+
+  const paginatedLogs = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredLogs.slice(startIndex, startIndex + pageSize);
+  }, [filteredLogs, currentPage, pageSize]);
+
+  const pageStart = filteredLogs.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const pageEnd = Math.min(currentPage * pageSize, filteredLogs.length);
 
   const completedCount = logs.filter(
     (log) => log.status === "success" || log.status === "completed"
@@ -256,6 +268,7 @@ export default function HistoryPage() {
     }
 
     setLogs((historyResult.data || []) as HistoryLog[]);
+    setCurrentPage(1);
     setClients((clientsResult.data || []) as ClientRow[]);
     setTrainers((trainersResult.data || []) as TrainerRow[]);
     setLoading(false);
@@ -368,6 +381,16 @@ export default function HistoryPage() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkingRole, currentUserId, role]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, pageSize]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   if (checkingRole) {
     return (
@@ -583,7 +606,8 @@ export default function HistoryPage() {
             <section className="overflow-hidden rounded-3xl border border-yellow-500/30 bg-black/60 shadow-2xl">
               <div className="border-b border-yellow-500/25 bg-black px-5 py-4">
                 <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
-                  Showing {filteredLogs.length} of {logs.length} records
+                  Showing {pageStart}-{pageEnd} of {filteredLogs.length} filtered records
+                  {filteredLogs.length !== logs.length ? ` (${logs.length} total)` : ""}
                 </p>
               </div>
 
@@ -613,7 +637,7 @@ export default function HistoryPage() {
                   </thead>
 
                   <tbody>
-                    {filteredLogs.map((log, index) => {
+                    {paginatedLogs.map((log, index) => {
                       const client = log.client_id
                         ? clientMap.get(log.client_id)
                         : null;
@@ -690,6 +714,65 @@ export default function HistoryPage() {
                     })}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="flex flex-col gap-3 border-t border-yellow-500/25 bg-black px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-widest text-gray-500">
+                    Rows per page
+                  </span>
+                  <select
+                    value={pageSize}
+                    onChange={(event) => setPageSize(Number(event.target.value))}
+                    className="rounded-xl border border-yellow-500/30 bg-white px-3 py-2 text-sm font-semibold text-black outline-none"
+                  >
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(1)}
+                    disabled={currentPage === 1}
+                    className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold text-gray-300 transition hover:border-yellow-400 hover:text-yellow-300 disabled:cursor-not-allowed disabled:opacity-35"
+                  >
+                    First
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                    disabled={currentPage === 1}
+                    className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold text-gray-300 transition hover:border-yellow-400 hover:text-yellow-300 disabled:cursor-not-allowed disabled:opacity-35"
+                  >
+                    Previous
+                  </button>
+
+                  <span className="min-w-28 rounded-xl bg-yellow-400 px-4 py-2 text-center text-xs font-black text-black">
+                    Page {currentPage} / {totalPages}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCurrentPage((page) => Math.min(totalPages, page + 1))
+                    }
+                    disabled={currentPage === totalPages}
+                    className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold text-gray-300 transition hover:border-yellow-400 hover:text-yellow-300 disabled:cursor-not-allowed disabled:opacity-35"
+                  >
+                    Next
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={currentPage === totalPages}
+                    className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold text-gray-300 transition hover:border-yellow-400 hover:text-yellow-300 disabled:cursor-not-allowed disabled:opacity-35"
+                  >
+                    Last
+                  </button>
+                </div>
               </div>
             </section>
           )}
