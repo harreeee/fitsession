@@ -1,146 +1,126 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { supabase } from "../../../../lib/supabaseClient";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Html5Qrcode } from "html5-qrcode";
-import { useRouter } from "next/navigation";
-import { supabase } from "../../../lib/supabaseClient";
-import { getCurrentUserRole } from "../../../lib/checkUserRole";
+import QRCode from "qrcode";
 
-type ScanResult = {
-  type: "success" | "error" | "";
-  message: string;
+import { getCurrentUserRole } from "../../../../lib/checkUserRole";
+import {
+  canEditClientBasicInfo,
+  canEditDebt,
+  canEditPackages,
+  getRoleDisplayName,
+  isAdminOrManager,
+  normalizeRole,
+  type AppRole,
+} from "../../../../lib/role";
+
+type ClientDetail = {
+  id: string;
+  client_code: string | null;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  gender: string | null;
+  date_of_birth: string | null;
+  qr_token: string | null;
+  activation_code: string | null;
+  status: string | null;
+  client_note: string | null;
+  client_source: string | null;
+  client_source_other: string | null;
+  sales_person_id: string | null;
+  assigned_trainer_id: string | null;
+  assigned_nutrition_coach_id: string | null;
+  created_at: string | null;
+};
+
+type SessionPackage = {
+  id: string;
+  client_id: string;
+  total_sessions: number | null;
+  used_sessions: number | null;
+  remaining_sessions: number | null;
+  status: string | null;
+  starts_at: string | null;
+  expires_at: string | null;
+  package_name: string | null;
+  package_value: number | null;
+  created_at: string | null;
+};
+
+type ClientPurchase = {
+  id: string;
+  client_id: string;
+  plan_name: string | null;
+  session_count: number | null;
+  price: number | null;
+  amount_paid: number | null;
+  balance_due: number | null;
+  debt_deadline: string | null;
+  purchase_type: string | null;
+  status: string | null;
+  created_at: string | null;
 };
 
 type SessionType = "training" | "nutrition_follow_up";
 
-type TrainerHistoryLog = {
+type SessionHistory = {
   id: string;
-  client_id: string;
+  trainer_id: string | null;
   session_type: SessionType | null;
   status: string;
   message: string | null;
   trainer_note: string | null;
   remaining_after: number | null;
-  created_at: string;
-};
-
-type ClientInfo = {
-  id: string;
-  profile_id: string | null;
-  full_name: string;
-  email: string | null;
+  created_at: string | null;
+  trainer_name: string;
 };
 
 type TrainerProfile = {
+  id: string;
   full_name: string | null;
-  email: string | null;
-  phone: string | null;
+  role?: string | null;
 };
 
-type RecordSessionRpcRow = {
-  history_id: string;
-  client_id: string;
-  client_name: string;
-  session_type: SessionType;
-  remaining_after: number | null;
-  nutrition_allowed: number;
-  nutrition_used: number;
-  nutrition_remaining: number;
-};
+type SessionAdjustAction = "add" | "subtract" | "fixRemaining" | "fixTotal";
 
-const MOTIVATION_QUOTES = [
-  "Every scan is proof that your coaching creates momentum.",
-  "Strong coaches do not just count reps. They build standards.",
-  "Your energy sets the room. Lead the session before it starts.",
-  "One great session can change a client's whole week.",
-  "Coach with purpose. Track with discipline. Win with consistency.",
-  "Great PTs create results, trust, and reasons to come back.",
+const CLIENT_SOURCE_OPTIONS = [
+  { value: "", label: "Select source" },
+  { value: "coach", label: "Coach" },
+  { value: "google", label: "Google" },
+  { value: "facebook", label: "Facebook" },
+  { value: "instagram", label: "Instagram" },
+  { value: "direct_lead_walk_in", label: "Direct Lead (Walk In)" },
+  { value: "referral_lead", label: "Referral Lead" },
+  { value: "other", label: "Other" },
 ];
 
-function normalizeScannerRole(role: string | null | undefined) {
-  const cleanRole = String(role || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-
-  if (cleanRole === "nutritioncoach") return "nutrition_coach";
-  return cleanRole;
+function generateActivationCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-function canScanClients(role: string | null | undefined) {
-  const cleanRole = normalizeScannerRole(role);
+function formatDate(value: string | null | undefined) {
+  if (!value) return "-";
 
-  return (
-    cleanRole === "trainer" ||
-    cleanRole === "nutrition_coach" ||
-    cleanRole === "admin"
-  );
-}
+  const date = new Date(value);
 
-function getRoleLabel(role: string) {
-  const cleanRole = normalizeScannerRole(role);
+  if (Number.isNaN(date.getTime())) return "-";
 
-  if (cleanRole === "nutrition_coach") return "Nutrition Coach";
-  if (cleanRole === "trainer") return "Trainer";
-  if (cleanRole === "admin") return "Admin";
-  return "Staff";
-}
-
-function getInitials(name: string) {
-  return (
-    name
-      .trim()
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase() || "FX"
-  );
-}
-
-function getFirstName(name: string) {
-  return name.trim().split(" ")[0] || "Coach";
-}
-
-function getDailyMotivation() {
-  const today = new Date();
-  const index =
-    (today.getFullYear() + today.getMonth() + today.getDate()) %
-    MOTIVATION_QUOTES.length;
-
-  return MOTIVATION_QUOTES[index];
-}
-
-function getGreeting() {
-  const hour = new Date().getHours();
-
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
-}
-
-function getPerformanceLabel(sessionsToday: number) {
-  if (sessionsToday >= 8) return "Elite day";
-  if (sessionsToday >= 5) return "Strong day";
-  if (sessionsToday >= 3) return "Momentum building";
-  if (sessionsToday >= 1) return "Started strong";
-  return "Ready to win";
-}
-
-function getPerformanceMessage(sessionsToday: number) {
-  if (sessionsToday >= 8) return "You are setting the floor high today.";
-  if (sessionsToday >= 5) return "Great pace. Keep client care sharp.";
-  if (sessionsToday >= 3) return "Solid rhythm. Turn sessions into renewals.";
-  if (sessionsToday >= 1) return "First win logged. Keep the streak going.";
-  return "Scan your first client and start the day with energy.";
+  return date.toLocaleDateString("en-CA", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function formatDateTime(value: string | null) {
   if (!value) return "-";
 
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return "-";
 
   return date.toLocaleString("en-CA", {
@@ -152,513 +132,1533 @@ function formatDateTime(value: string | null) {
   });
 }
 
-function formatTime(value: string | null) {
-  if (!value) return "-";
+function formatDateInput(value: string | null | undefined) {
+  if (!value) return "";
 
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
 
-  return date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toISOString().slice(0, 10);
 }
 
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
+function formatDateTimeInput(value: string | null | undefined) {
+  if (!value) return "";
 
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
+  const date = new Date(value);
 
-  return "Unknown error";
+  if (Number.isNaN(date.getTime())) return "";
+
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 16);
 }
 
-function getResultClass(type: ScanResult["type"]) {
-  if (type === "success") {
-    return "border-emerald-400/40 bg-emerald-400/10 text-emerald-200";
-  }
-
-  if (type === "error") {
-    return "border-red-400/40 bg-red-400/10 text-red-200";
-  }
-
-  return "border-yellow-400/25 bg-yellow-400/10 text-yellow-100";
+function getTodayInputDate() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-export default function TrainerScanPage() {
+function formatMoney(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return "-";
+  }
+
+  return `$${Number(value).toLocaleString("en-CA", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function getStatusClass(status: string | null) {
+  if (status === "active" || status === "paid" || status === "success") {
+    return "bg-green-500/20 text-green-300";
+  }
+
+  if (status === "inactive" || status === "failed" || status === "cancelled") {
+    return "bg-red-500/20 text-red-300";
+  }
+
+  return "bg-gray-500/20 text-gray-300";
+}
+
+function getPurchaseTypeLabel(value: string | null) {
+  if (value === "new") return "New";
+  if (value === "renew") return "Renew";
+  if (value === "renewal") return "Renew";
+  if (value === "paid") return "Paid";
+  if (value === "debt") return "Debt";
+  return "-";
+}
+
+function getDaysUntil(value: string | null) {
+  if (!value) return null;
+
+  const today = new Date();
+  const deadline = new Date(`${value.slice(0, 10)}T00:00:00`);
+
+  if (Number.isNaN(deadline.getTime())) return null;
+
+  today.setHours(0, 0, 0, 0);
+
+  return Math.ceil((deadline.getTime() - today.getTime()) / 86400000);
+}
+
+function getDebtNotice(
+  balanceDue: number | null | undefined,
+  deadline: string | null,
+) {
+  const cleanBalance = Number(balanceDue || 0);
+
+  if (cleanBalance <= 0) {
+    return {
+      label: "No active debt",
+      className: "border-green-400/30 bg-green-400/10 text-green-300",
+    };
+  }
+
+  if (!deadline) {
+    return {
+      label: "Debt has no deadline",
+      className: "border-orange-400/30 bg-orange-400/10 text-orange-300",
+    };
+  }
+
+  const daysLeft = getDaysUntil(deadline);
+
+  if (daysLeft === null) {
+    return {
+      label: "Invalid debt deadline",
+      className: "border-red-400/30 bg-red-400/10 text-red-300",
+    };
+  }
+
+  if (daysLeft < 0) {
+    return {
+      label: `Overdue by ${Math.abs(daysLeft)} day${
+        Math.abs(daysLeft) === 1 ? "" : "s"
+      }`,
+      className: "border-red-400/30 bg-red-400/10 text-red-300",
+    };
+  }
+
+  if (daysLeft === 0) {
+    return {
+      label: "Debt is due today",
+      className: "border-red-400/30 bg-red-400/10 text-red-300",
+    };
+  }
+
+  if (daysLeft <= 7) {
+    return {
+      label: `Debt due in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
+      className: "border-orange-400/30 bg-orange-400/10 text-orange-300",
+    };
+  }
+
+  return {
+    label: `Debt due in ${daysLeft} days`,
+    className: "border-yellow-400/30 bg-yellow-400/10 text-yellow-300",
+  };
+}
+
+function getPackageNumbers(packageRow: SessionPackage | null) {
+  const totalSessions = Number(packageRow?.total_sessions || 0);
+  const usedSessions = Number(packageRow?.used_sessions || 0);
+
+  const remainingSessions =
+    packageRow?.remaining_sessions !== null &&
+    packageRow?.remaining_sessions !== undefined
+      ? Number(packageRow.remaining_sessions)
+      : Math.max(totalSessions - usedSessions, 0);
+
+  return {
+    totalSessions,
+    usedSessions,
+    remainingSessions,
+  };
+}
+
+function getCleanPurchaseType(purchase: ClientPurchase) {
+  return (purchase.purchase_type || "").toLowerCase();
+}
+
+function isPackagePurchase(purchase: ClientPurchase) {
+  const type = getCleanPurchaseType(purchase);
+  const sessionCount = Number(purchase.session_count || 0);
+
+  return (
+    (type === "new" || type === "renew" || type === "renewal") &&
+    sessionCount > 0
+  );
+}
+
+function isDebtPurchase(purchase: ClientPurchase) {
+  const type = getCleanPurchaseType(purchase);
+  const balanceDue = Number(purchase.balance_due || 0);
+  const sessionCount = Number(purchase.session_count || 0);
+  const planName = (purchase.plan_name || "").toLowerCase();
+
+  return (
+    type === "debt" ||
+    balanceDue > 0 ||
+    (sessionCount === 0 && planName.includes("debt"))
+  );
+}
+
+function AdminClientDetailPageContent() {
+  const params = useParams();
   const router = useRouter();
-  const scannerRef = useRef<Html5Qrcode | null>(null);
-  const scanningLockRef = useRef(false);
+  const searchParams = useSearchParams();
 
-  const [result, setResult] = useState<ScanResult>({ type: "", message: "" });
-  const [scannerStarted, setScannerStarted] = useState(false);
+  const clientId = params.id as string;
+  const action = searchParams.get("action");
 
-  const [trainerId, setTrainerId] = useState<string | null>(null);
-  const [trainerName, setTrainerName] = useState("");
-  const [trainerEmail, setTrainerEmail] = useState("");
-  const [trainerPhone, setTrainerPhone] = useState("");
-  const [trainerRole, setTrainerRole] = useState("");
+  const [client, setClient] = useState<ClientDetail | null>(null);
+  const [packages, setPackages] = useState<SessionPackage[]>([]);
+  const [purchases, setPurchases] = useState<ClientPurchase[]>([]);
+  const [sessionHistory, setSessionHistory] = useState<SessionHistory[]>([]);
+  const [qrCode, setQrCode] = useState("");
 
+  const [salesPeople, setSalesPeople] = useState<TrainerProfile[]>([]);
+  const [selectedSalesPersonId, setSelectedSalesPersonId] = useState("");
+  const [savingSalesPerson, setSavingSalesPerson] = useState(false);
+
+  const [trainerOptions, setTrainerOptions] = useState<TrainerProfile[]>([]);
+  const [nutritionCoachOptions, setNutritionCoachOptions] = useState<
+    TrainerProfile[]
+  >([]);
+  const [selectedTrainerId, setSelectedTrainerId] = useState("");
+  const [selectedNutritionCoachId, setSelectedNutritionCoachId] = useState("");
+  const [savingStaffAssignment, setSavingStaffAssignment] = useState(false);
+
+  const [userRole, setUserRole] = useState<AppRole | null>(null);
+  const [checkingRole, setCheckingRole] = useState(true);
+  const [checkingMessage, setCheckingMessage] = useState(
+    "Checking client access...",
+  );
+  const [loading, setLoading] = useState(true);
+
+  const [editClientCode, setEditClientCode] = useState("");
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editPhone, setEditPhone] = useState("");
-  const [editPassword, setEditPassword] = useState("");
+  const [editGender, setEditGender] = useState("");
+  const [editDateOfBirth, setEditDateOfBirth] = useState("");
+  const [editClientSource, setEditClientSource] = useState("");
+  const [editClientSourceOther, setEditClientSourceOther] = useState("");
+  const [editClientNote, setEditClientNote] = useState("");
+  const [savingClientInfo, setSavingClientInfo] = useState(false);
 
-  const [sessionsToday, setSessionsToday] = useState(0);
-  const [trainingSessionsToday, setTrainingSessionsToday] = useState(0);
-  const [nutritionFollowsToday, setNutritionFollowsToday] = useState(0);
-  const [clientsToday, setClientsToday] = useState(0);
-  const [lastScan, setLastScan] = useState<string | null>(null);
-  const [scanMode, setScanMode] = useState<SessionType>("training");
-  const [lastScannedType, setLastScannedType] =
-    useState<SessionType>("training");
+  const [activationCode, setActivationCode] = useState("");
+  const [generatingActivationCode, setGeneratingActivationCode] =
+    useState(false);
 
-  const [historyLogs, setHistoryLogs] = useState<TrainerHistoryLog[]>([]);
-  const [clientMap, setClientMap] = useState<Map<string, ClientInfo>>(new Map());
+  const [packageName, setPackageName] = useState("");
+  const [packageTotalSessions, setPackageTotalSessions] = useState("");
+  const [packageValue, setPackageValue] = useState("");
+  const [packageAmountPaid, setPackageAmountPaid] = useState("");
+  const [packageStartDate, setPackageStartDate] = useState("");
+  const [packageExpireDate, setPackageExpireDate] = useState("");
 
-  const [checkingRole, setCheckingRole] = useState(true);
-  const [checkingMessage, setCheckingMessage] = useState(
-    "Checking scanner access..."
+  const [uploadedPurchaseType, setUploadedPurchaseType] = useState("");
+  const [savingUploadedPurchaseType, setSavingUploadedPurchaseType] =
+    useState(false);
+
+  const [renewPackageMode, setRenewPackageMode] = useState(false);
+  const [savingPackage, setSavingPackage] = useState(false);
+
+  const [sessionAdjustValue, setSessionAdjustValue] = useState("");
+  const [sessionAdjustAction, setSessionAdjustAction] =
+    useState<SessionAdjustAction | null>(null);
+
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editSessionTrainerId, setEditSessionTrainerId] = useState("");
+  const [editSessionStatus, setEditSessionStatus] = useState("success");
+  const [editSessionDateTime, setEditSessionDateTime] = useState("");
+  const [editSessionMessage, setEditSessionMessage] = useState("");
+  const [editSessionNote, setEditSessionNote] = useState("");
+  const [savingSessionHistoryId, setSavingSessionHistoryId] = useState<string | null>(null);
+
+  const [debtAmount, setDebtAmount] = useState("");
+  const [debtDeadline, setDebtDeadline] = useState("");
+  const [savingDebt, setSavingDebt] = useState(false);
+  const [selectedDebtFixId, setSelectedDebtFixId] = useState<string | null>(
+    null,
   );
-  const [savingProfile, setSavingProfile] = useState(false);
-  const [profileMessage, setProfileMessage] = useState("");
 
-  const [lastScannedHistoryId, setLastScannedHistoryId] = useState<
-    string | null
-  >(null);
-  const [trainerNote, setTrainerNote] = useState("");
-  const [showNoteBox, setShowNoteBox] = useState(false);
-  const [savingNote, setSavingNote] = useState(false);
-  const [noteMessage, setNoteMessage] = useState("");
+  const [newDebtAmount, setNewDebtAmount] = useState("");
+  const [newDebtDeadline, setNewDebtDeadline] = useState("");
+  const [newDebtNote, setNewDebtNote] = useState("");
+  const [addingDebt, setAddingDebt] = useState(false);
+  const [completingDebtId, setCompletingDebtId] = useState<string | null>(null);
+  const [debtPaymentAmounts, setDebtPaymentAmounts] = useState<
+    Record<string, string>
+  >({});
+  const [debtPaymentDates, setDebtPaymentDates] = useState<
+    Record<string, string>
+  >({});
+  const [debtFixAddsRevenue, setDebtFixAddsRevenue] = useState(true);
+  const [debtFixRevenueDate, setDebtFixRevenueDate] =
+    useState(getTodayInputDate());
 
-  const motivationQuote = useMemo(() => getDailyMotivation(), []);
-  const greeting = useMemo(() => getGreeting(), []);
-  const performanceLabel = getPerformanceLabel(sessionsToday);
-  const performanceMessage = getPerformanceMessage(sessionsToday);
+  const roleLabel = getRoleDisplayName(userRole);
+  const allowBasicInfoEdit = canEditClientBasicInfo(userRole);
+  const allowPackageEdit = canEditPackages(userRole);
+  const allowDebtEdit = canEditDebt(userRole);
+  const isAdmin = userRole === "admin";
 
-  async function handleLogout() {
-    await stopScanner();
-    await supabase.auth.signOut();
-    router.push("/login");
+  function scrollToPackageSection() {
+    document
+      .getElementById("package-renew-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function extractQrToken(decodedText: string) {
-    const cleanText = decodedText.trim();
-    const match = cleanText.match(/FXA-[a-zA-Z0-9-]+/);
-    return match ? match[0] : cleanText;
+  function scrollToSessionControlSection() {
+    document
+      .getElementById("session-control-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  async function stopScanner() {
-    const scanner = scannerRef.current;
-
-    try {
-      if (scanner?.isScanning) {
-        await scanner.stop();
-      }
-
-      if (scanner) {
-        await scanner.clear();
-      }
-    } catch (error) {
-      console.log("Scanner stop error:", error);
-    } finally {
-      scannerRef.current = null;
-      // Keep the scan lock active until the current scan has fully finished.
-      // startScanner() resets it before a new camera session begins.
-      setScannerStarted(false);
-    }
+  function scrollToDebtSection() {
+    document
+      .getElementById("debt-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  async function fetchClientsForHistory(logClientIds: string[]) {
-    const nextClientMap = new Map<string, ClientInfo>();
-
-    if (logClientIds.length === 0) {
-      setClientMap(nextClientMap);
-      return;
-    }
-
-    const { data: clientsById, error: clientsByIdError } = await supabase
-      .from("clients")
-      .select("id, profile_id, full_name, email")
-      .in("id", logClientIds);
-
-    if (clientsByIdError) {
-      console.error("clients by id error:", clientsByIdError.message);
-    }
-
-    ((clientsById || []) as ClientInfo[]).forEach((client) => {
-      nextClientMap.set(client.id, client);
-      if (client.profile_id) nextClientMap.set(client.profile_id, client);
-    });
-
-    const { data: clientsByProfileId, error: clientsByProfileError } =
-      await supabase
-        .from("clients")
-        .select("id, profile_id, full_name, email")
-        .in("profile_id", logClientIds);
-
-    if (clientsByProfileError) {
-      console.error(
-        "clients by profile id error:",
-        clientsByProfileError.message
-      );
-    }
-
-    ((clientsByProfileId || []) as ClientInfo[]).forEach((client) => {
-      nextClientMap.set(client.id, client);
-      if (client.profile_id) nextClientMap.set(client.profile_id, client);
-    });
-
-    setClientMap(nextClientMap);
+  function scrollToSalesPersonSection() {
+    document
+      .getElementById("sales-person-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  async function fetchTrainerStats(userId: string) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  function scrollToStaffAssignmentSection() {
+    document
+      .getElementById("staff-assignment-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
-    const { data: todayLogs, error: todayLogsError } = await supabase
-      .from("session_history")
-      .select("id, client_id, created_at, status, session_type")
-      .eq("trainer_id", userId)
-      .eq("status", "success")
-      .gte("created_at", today.toISOString())
-      .order("created_at", { ascending: false });
+  function startRenewPackage() {
+    setRenewPackageMode(true);
+    window.setTimeout(scrollToPackageSection, 100);
+  }
 
-    if (todayLogsError) {
-      console.error(todayLogsError);
-      setResult({
-        type: "error",
-        message: `Could not load today's stats: ${todayLogsError.message}`,
-      });
-      return;
-    }
-
-    const logsToday = (todayLogs || []) as Array<{
-      id: string;
-      client_id: string;
-      created_at: string;
-      status: string;
-      session_type: SessionType | null;
-    }>;
-    const uniqueClients = new Set(logsToday.map((log) => log.client_id));
-    const trainingCount = logsToday.filter(
-      (log) => (log.session_type || "training") === "training",
-    ).length;
-    const nutritionCount = logsToday.filter(
-      (log) => log.session_type === "nutrition_follow_up",
-    ).length;
-
-    setSessionsToday(logsToday.length);
-    setTrainingSessionsToday(trainingCount);
-    setNutritionFollowsToday(nutritionCount);
-    setClientsToday(uniqueClients.size);
-    setLastScan(logsToday[0]?.created_at || null);
-
-    const { data: recentLogs, error: recentLogsError } = await supabase
+  async function fetchSessionHistory() {
+    const { data: historyData, error: historyError } = await supabase
       .from("session_history")
       .select(
-        "id, client_id, session_type, status, message, trainer_note, remaining_after, created_at"
+        "id, trainer_id, session_type, status, message, trainer_note, remaining_after, created_at",
       )
-      .eq("trainer_id", userId)
+      .eq("client_id", clientId)
       .order("created_at", { ascending: false })
       .limit(20);
 
-    if (recentLogsError) {
-      console.error(recentLogsError);
-      setResult({
-        type: "error",
-        message: `Could not load recent history: ${recentLogsError.message}`,
-      });
+    if (historyError) {
+      console.error(historyError.message);
+      setSessionHistory([]);
       return;
     }
 
-    const cleanLogs = (recentLogs || []) as TrainerHistoryLog[];
-    setHistoryLogs(cleanLogs);
+    const rawHistory = (historyData || []) as Omit<
+      SessionHistory,
+      "trainer_name"
+    >[];
 
-    const clientIds = Array.from(
+    const trainerIds = Array.from(
       new Set(
-        cleanLogs
-          .map((log) => log.client_id)
-          .filter((clientId): clientId is string => Boolean(clientId))
-      )
+        rawHistory
+          .map((log) => log.trainer_id)
+          .filter((trainerId): trainerId is string => Boolean(trainerId)),
+      ),
     );
 
-    await fetchClientsForHistory(clientIds);
+    if (trainerIds.length === 0) {
+      setSessionHistory(
+        rawHistory.map((log) => ({
+          ...log,
+          trainer_name: "Admin / Manual",
+        })),
+      );
+      return;
+    }
+
+    const { data: trainerProfiles } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", trainerIds);
+
+    const trainerNameMap = new Map(
+      ((trainerProfiles || []) as TrainerProfile[]).map((profile) => [
+        profile.id,
+        profile.full_name || "Unknown Trainer",
+      ]),
+    );
+
+    setSessionHistory(
+      rawHistory.map((log) => ({
+        ...log,
+        trainer_name:
+          log.trainer_id && trainerNameMap.get(log.trainer_id)
+            ? trainerNameMap.get(log.trainer_id)!
+            : "Admin / Manual",
+      })),
+    );
   }
 
-  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+  async function fetchClientDetail() {
+    setLoading(true);
+
+    const [clientResult, packageResult, purchaseResult, salesPeopleResult] =
+      await Promise.all([
+        supabase
+          .from("clients")
+          .select(
+            "id, client_code, full_name, email, phone, gender, date_of_birth, qr_token, activation_code, status, client_note, client_source, client_source_other, sales_person_id, assigned_trainer_id, assigned_nutrition_coach_id, created_at",
+          )
+          .eq("id", clientId)
+          .maybeSingle(),
+
+        supabase
+          .from("session_packages")
+          .select(
+            "id, client_id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, package_name, package_value, created_at",
+          )
+          .eq("client_id", clientId)
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("client_purchases")
+          .select(
+            "id, client_id, plan_name, session_count, price, amount_paid, balance_due, debt_deadline, purchase_type, status, created_at",
+          )
+          .eq("client_id", clientId)
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("profiles")
+          .select("id, full_name, role")
+          .in("role", ["trainer", "nutrition_coach"])
+          .order("full_name", { ascending: true }),
+      ]);
+
+    if (clientResult.error) {
+      alert(clientResult.error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (!clientResult.data) {
+      setClient(null);
+      setLoading(false);
+      return;
+    }
+
+    if (packageResult.error) {
+      alert(packageResult.error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (purchaseResult.error) {
+      alert(purchaseResult.error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (salesPeopleResult.error) {
+      alert(salesPeopleResult.error.message);
+      setLoading(false);
+      return;
+    }
+
+    const cleanClient = clientResult.data as ClientDetail;
+    const cleanPackages = (packageResult.data || []) as SessionPackage[];
+    const cleanPurchases = (purchaseResult.data || []) as ClientPurchase[];
+
+    const latestPurchase = cleanPurchases[0] || null;
+    const firstDebtPurchase =
+      cleanPurchases.find(
+        (purchase) => isDebtPurchase(purchase) && Number(purchase.balance_due || 0) > 0,
+      ) ||
+      cleanPurchases.find((purchase) => isDebtPurchase(purchase)) ||
+      null;
+
+    setClient(cleanClient);
+    setPackages(cleanPackages);
+    setPurchases(cleanPurchases);
+    const cleanStaffPeople = (salesPeopleResult.data || []) as TrainerProfile[];
+
+    setSalesPeople(cleanStaffPeople);
+    setTrainerOptions(
+      cleanStaffPeople.filter((person) => person.role === "trainer"),
+    );
+    setNutritionCoachOptions(
+      cleanStaffPeople.filter((person) => person.role === "nutrition_coach"),
+    );
+
+    setSelectedSalesPersonId(cleanClient.sales_person_id || "");
+    setSelectedTrainerId(cleanClient.assigned_trainer_id || "");
+    setSelectedNutritionCoachId(cleanClient.assigned_nutrition_coach_id || "");
+
+    setEditClientCode(cleanClient.client_code || "");
+    setEditName(cleanClient.full_name || "");
+    setEditEmail(cleanClient.email || "");
+    setEditPhone(cleanClient.phone || "");
+    setEditGender(cleanClient.gender || "");
+    setEditDateOfBirth(formatDateInput(cleanClient.date_of_birth));
+    setEditClientSource(cleanClient.client_source || "");
+    setEditClientSourceOther(cleanClient.client_source_other || "");
+    setEditClientNote(cleanClient.client_note || "");
+    setActivationCode(cleanClient.activation_code || "");
+
+    setPackageName("");
+    setPackageTotalSessions("");
+    setPackageValue("");
+    setPackageAmountPaid("");
+    setPackageStartDate("");
+    setPackageExpireDate("");
+    setUploadedPurchaseType(latestPurchase?.purchase_type || "");
+    setRenewPackageMode(action === "renew");
+
+    setDebtAmount(
+      firstDebtPurchase?.balance_due !== null &&
+        firstDebtPurchase?.balance_due !== undefined
+        ? String(firstDebtPurchase.balance_due)
+        : "",
+    );
+    setDebtDeadline(formatDateInput(firstDebtPurchase?.debt_deadline || null));
+
+    if (cleanClient.qr_token) {
+      const qrImage = await QRCode.toDataURL(cleanClient.qr_token);
+      setQrCode(qrImage);
+    } else {
+      setQrCode("");
+    }
+
+    await fetchSessionHistory();
+
+    setLoading(false);
+  }
+
+  async function generateClientActivationCode() {
+    if (!client) return;
+
+    if (!isAdmin) {
+      alert("Only admins can generate activation codes.");
+      return;
+    }
+
+    if (!client.email) {
+      alert("Please save a client email before generating an activation code.");
+      return;
+    }
+
+    const nextCode = generateActivationCode();
+
+    setGeneratingActivationCode(true);
+
+    const { error } = await supabase
+      .from("clients")
+      .update({
+        activation_code: nextCode,
+      })
+      .eq("id", client.id);
+
+    if (error) {
+      alert(error.message);
+      setGeneratingActivationCode(false);
+      return;
+    }
+
+    setActivationCode(nextCode);
+    setClient({
+      ...client,
+      activation_code: nextCode,
+    });
+
+    setGeneratingActivationCode(false);
+    alert(`Activation code generated: ${nextCode}`);
+  }
+
+  async function saveClientInfo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!trainerId) {
-      setProfileMessage("Staff account not loaded.");
+    if (!client) return;
+
+    if (!allowBasicInfoEdit) {
+      alert("You do not have permission to edit client information.");
       return;
     }
 
-    setSavingProfile(true);
-    setProfileMessage("");
-
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        router.push("/login");
-        return;
-      }
-
-      const response = await fetch("/api/trainer/profile", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          full_name: editName,
-          email: editEmail,
-          phone: editPhone,
-          password: editPassword,
-        }),
-      });
-
-      const resultData: { error?: string } = await response.json();
-
-      if (!response.ok) {
-        setProfileMessage(resultData.error || "Could not update profile.");
-        return;
-      }
-
-      setTrainerName(editName);
-      setTrainerEmail(editEmail);
-      setTrainerPhone(editPhone);
-      setEditPassword("");
-      setProfileMessage("Profile updated successfully.");
-    } catch (error) {
-      setProfileMessage(getErrorMessage(error));
-    } finally {
-      setSavingProfile(false);
-    }
-  }
-
-  async function saveTrainerNote() {
-    if (!lastScannedHistoryId) {
-      setNoteMessage("No completed scan found for this note.");
+    if (!editName.trim()) {
+      alert("Client name is required.");
       return;
     }
 
-    setSavingNote(true);
-    setNoteMessage("");
-
-    try {
-      const cleanNote = trainerNote.trim();
-
-      const { error } = await supabase
-        .from("session_history")
-        .update({ trainer_note: cleanNote || null })
-        .eq("id", lastScannedHistoryId);
-
-      if (error) throw error;
-
-      setNoteMessage("Note saved.");
-      setShowNoteBox(false);
-      setTrainerNote("");
-      setLastScannedHistoryId(null);
-
-      if (trainerId) await fetchTrainerStats(trainerId);
-    } catch (error) {
-      setNoteMessage(getErrorMessage(error) || "Unable to save note.");
-    } finally {
-      setSavingNote(false);
+    if (editClientSource === "other" && !editClientSourceOther.trim()) {
+      alert("Please specify the other client source.");
+      return;
     }
-  }
 
-  function skipTrainerNote() {
-    setShowNoteBox(false);
-    setTrainerNote("");
-    setLastScannedHistoryId(null);
-    setNoteMessage("");
-  }
+    setSavingClientInfo(true);
 
-  async function startScanner(requestedMode: SessionType = "training") {
-    if (scannerStarted || scannerRef.current) return;
-
-    const nextMode: SessionType =
-      requestedMode === "nutrition_follow_up" &&
-      (trainerRole === "nutrition_coach" || trainerRole === "admin")
-        ? "nutrition_follow_up"
-        : "training";
-
-    setScanMode(nextMode);
-
-    setResult({ type: "", message: "" });
-    setNoteMessage("");
-    setShowNoteBox(false);
-    setTrainerNote("");
-    setLastScannedHistoryId(null);
-    scanningLockRef.current = false;
-    setScannerStarted(true);
-
-    try {
-      const scanner = new Html5Qrcode("qr-reader");
-      scannerRef.current = scanner;
-
-      const qrSize = Math.min(
-        340,
-        Math.max(
-          240,
-          Math.floor(
-            (typeof window !== "undefined" ? window.innerWidth : 360) * 0.72
-          )
-        )
-      );
-
-      await scanner.start(
-        { facingMode: "environment" },
-        {
-          fps: 12,
-          qrbox: { width: qrSize, height: qrSize },
-        },
-        async (decodedText) => {
-          if (scanningLockRef.current) return;
-          scanningLockRef.current = true;
-
-          const qrToken = extractQrToken(decodedText);
-
-          try {
-            await stopScanner();
-            await markSession(qrToken, nextMode);
-          } catch (error) {
-            console.error("Scan processing error:", error);
-            setResult({
-              type: "error",
-              message: getErrorMessage(error) || "Unable to process this scan.",
-            });
+    const updatePayload =
+      userRole === "admin"
+        ? {
+            client_code: editClientCode.trim() || null,
+            full_name: editName.trim(),
+            email: editEmail.trim() || null,
+            phone: editPhone.trim() || null,
+            gender: editGender.trim() || null,
+            date_of_birth: editDateOfBirth || null,
+            client_source: editClientSource || null,
+            client_source_other:
+              editClientSource === "other"
+                ? editClientSourceOther.trim() || null
+                : null,
+            client_note: editClientNote.trim() || null,
           }
-        },
-        () => {}
-      );
-    } catch (error) {
-      console.error(error);
-      scannerRef.current = null;
-      scanningLockRef.current = false;
-      setScannerStarted(false);
-      setResult({
-        type: "error",
-        message:
-          "Camera could not start. Allow camera permission and use localhost or HTTPS.",
-      });
-    }
-  }
+        : {
+            full_name: editName.trim(),
+            email: editEmail.trim() || null,
+            phone: editPhone.trim() || null,
+            gender: editGender.trim() || null,
+            date_of_birth: editDateOfBirth || null,
+            client_source: editClientSource || null,
+            client_source_other:
+              editClientSource === "other"
+                ? editClientSourceOther.trim() || null
+                : null,
+          };
 
-  async function markSession(qrToken: string, sessionType: SessionType) {
-    const cleanQrToken = qrToken.trim();
+    const { error } = await supabase
+      .from("clients")
+      .update(updatePayload)
+      .eq("id", client.id);
 
-    setShowNoteBox(false);
-    setTrainerNote("");
-    setLastScannedHistoryId(null);
-    setNoteMessage("");
-
-    if (!trainerId) {
-      setResult({ type: "error", message: "Please log in before scanning." });
+    if (error) {
+      alert(error.message);
+      setSavingClientInfo(false);
       return;
     }
 
-    const cleanTrainerRole = normalizeScannerRole(trainerRole);
+    alert("Client information saved.");
+    await fetchClientDetail();
+    setSavingClientInfo(false);
+  }
 
-    if (!canScanClients(cleanTrainerRole)) {
-      setResult({
-        type: "error",
-        message:
-          "This account cannot scan clients. Allowed roles: trainer, nutrition coach, or admin.",
+  async function saveSalesPerson(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowBasicInfoEdit) {
+      alert("You do not have permission to assign a sale person.");
+      return;
+    }
+
+    setSavingSalesPerson(true);
+
+    const { error } = await supabase
+      .from("clients")
+      .update({
+        sales_person_id: selectedSalesPersonId || null,
+      })
+      .eq("id", client.id);
+
+    if (error) {
+      alert(error.message);
+      setSavingSalesPerson(false);
+      return;
+    }
+
+    alert("Sale person saved.");
+    await fetchClientDetail();
+    setSavingSalesPerson(false);
+  }
+
+  async function saveStaffAssignment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowBasicInfoEdit) {
+      alert("You do not have permission to assign staff.");
+      return;
+    }
+
+    setSavingStaffAssignment(true);
+
+    const { error } = await supabase
+      .from("clients")
+      .update({
+        assigned_trainer_id: selectedTrainerId || null,
+        assigned_nutrition_coach_id: selectedNutritionCoachId || null,
+      })
+      .eq("id", client.id);
+
+    if (error) {
+      alert(error.message);
+      setSavingStaffAssignment(false);
+      return;
+    }
+
+    alert("Trainer and Nutrition Coach assignment saved.");
+    await fetchClientDetail();
+    setSavingStaffAssignment(false);
+  }
+
+  async function saveUploadedPurchaseType(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowPackageEdit) {
+      alert("Only admins can edit uploaded purchase type.");
+      return;
+    }
+
+    if (!uploadedPurchaseType) {
+      alert("Please select New or Renew.");
+      return;
+    }
+
+    const latestPurchase = purchases[0] || null;
+
+    setSavingUploadedPurchaseType(true);
+
+    if (latestPurchase) {
+      const { error } = await supabase
+        .from("client_purchases")
+        .update({
+          purchase_type: uploadedPurchaseType,
+        })
+        .eq("id", latestPurchase.id);
+
+      if (error) {
+        alert(error.message);
+        setSavingUploadedPurchaseType(false);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from("client_purchases").insert({
+        client_id: client.id,
+        plan_name: "Uploaded Purchase",
+        session_count: 0,
+        price: 0,
+        amount_paid: 0,
+        balance_due: 0,
+        purchase_type: uploadedPurchaseType,
+        status: "paid",
+        created_at: new Date().toISOString(),
       });
+
+      if (error) {
+        alert(error.message);
+        setSavingUploadedPurchaseType(false);
+        return;
+      }
+    }
+
+    alert(`Uploaded purchase type saved as ${uploadedPurchaseType}.`);
+    await fetchClientDetail();
+    setSavingUploadedPurchaseType(false);
+  }
+
+  async function saveNewRenewPackage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowPackageEdit) {
+      alert("Only admins can renew packages.");
+      return;
+    }
+
+    const addedSessions = packageTotalSessions.trim()
+      ? Number(packageTotalSessions)
+      : null;
+
+    const numericPackageValue = packageValue.trim()
+      ? Number(packageValue)
+      : null;
+
+    const numericAmountPaid = packageAmountPaid.trim()
+      ? Number(packageAmountPaid)
+      : (numericPackageValue ?? 0);
+
+    if (
+      addedSessions === null ||
+      Number.isNaN(addedSessions) ||
+      addedSessions <= 0
+    ) {
+      alert("Sessions to add must be a valid number greater than 0.");
       return;
     }
 
     if (
-      sessionType === "nutrition_follow_up" &&
-      cleanTrainerRole !== "nutrition_coach" &&
-      cleanTrainerRole !== "admin"
+      numericPackageValue !== null &&
+      (Number.isNaN(numericPackageValue) || numericPackageValue < 0)
     ) {
-      setResult({
-        type: "error",
-        message:
-          "Only a Nutrition Coach or Admin can record a nutrition follow-up.",
-      });
+      alert("Package value must be a valid number.");
       return;
     }
 
-    try {
-      const { data, error } = await supabase.rpc("record_staff_session", {
-        p_qr_token: cleanQrToken,
-        p_session_type: sessionType,
+    if (Number.isNaN(numericAmountPaid) || numericAmountPaid < 0) {
+      alert("Amount paid must be a valid number.");
+      return;
+    }
+
+    const cleanPackageValue = numericPackageValue ?? 0;
+    const cleanAmountPaid = Math.min(numericAmountPaid, cleanPackageValue);
+    const balanceDue = Math.max(cleanPackageValue - cleanAmountPaid, 0);
+
+    const currentPackage = packages[0] || null;
+
+    setSavingPackage(true);
+
+    if (currentPackage) {
+      const { totalSessions, usedSessions, remainingSessions } =
+        getPackageNumbers(currentPackage);
+
+      const currentPackageValue = Number(currentPackage.package_value || 0);
+
+      const newTotalSessions = totalSessions + addedSessions;
+      const newRemainingSessions = remainingSessions + addedSessions;
+      const newPackageValue = currentPackageValue + cleanPackageValue;
+
+      const { error: packageUpdateError } = await supabase
+        .from("session_packages")
+        .update({
+          package_name:
+            packageName.trim() ||
+            currentPackage.package_name ||
+            "Renew Package",
+          total_sessions: newTotalSessions,
+          used_sessions: usedSessions,
+          remaining_sessions: newRemainingSessions,
+          package_value: newPackageValue,
+          starts_at: packageStartDate
+            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
+            : currentPackage.starts_at,
+          expires_at: packageExpireDate
+            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
+            : currentPackage.expires_at,
+          status: "active",
+        })
+        .eq("id", currentPackage.id);
+
+      if (packageUpdateError) {
+        alert(packageUpdateError.message);
+        setSavingPackage(false);
+        return;
+      }
+    } else {
+      const { error: packageInsertError } = await supabase
+        .from("session_packages")
+        .insert({
+          client_id: client.id,
+          package_name: packageName.trim() || "Renew Package",
+          total_sessions: addedSessions,
+          used_sessions: 0,
+          remaining_sessions: addedSessions,
+          package_value: cleanPackageValue,
+          starts_at: packageStartDate
+            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
+            : null,
+          expires_at: packageExpireDate
+            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
+            : null,
+          status: "active",
+          created_at: new Date().toISOString(),
+        });
+
+      if (packageInsertError) {
+        alert(packageInsertError.message);
+        setSavingPackage(false);
+        return;
+      }
+    }
+
+    const { error: purchaseInsertError } = await supabase
+      .from("client_purchases")
+      .insert({
+        client_id: client.id,
+        plan_name: packageName.trim() || "Renew Package",
+        session_count: addedSessions,
+        price: cleanPackageValue,
+        amount_paid: cleanAmountPaid,
+        balance_due: balanceDue,
+        debt_deadline: balanceDue > 0 ? packageExpireDate || null : null,
+        purchase_type: "renew",
+        status: "paid",
+        created_at: new Date().toISOString(),
+      });
+
+    if (purchaseInsertError) {
+      alert(purchaseInsertError.message);
+      setSavingPackage(false);
+      return;
+    }
+
+    setPackageName("");
+    setPackageTotalSessions("");
+    setPackageValue("");
+    setPackageAmountPaid("");
+    setPackageStartDate("");
+    setPackageExpireDate("");
+
+    alert(`Renew completed. Added ${addedSessions} sessions.`);
+    await fetchClientDetail();
+    setRenewPackageMode(false);
+    setSavingPackage(false);
+  }
+
+  async function adjustClientSessions(actionType: SessionAdjustAction) {
+    if (!client) return;
+
+    if (!allowPackageEdit) {
+      alert("Only admins can adjust sessions.");
+      return;
+    }
+
+    const currentPackage = packages[0] || null;
+
+    if (!currentPackage) {
+      alert("No package found. Please renew/add a package first.");
+      return;
+    }
+
+    const amount = sessionAdjustValue.trim()
+      ? Number(sessionAdjustValue)
+      : null;
+
+    if (amount === null || Number.isNaN(amount) || amount < 0) {
+      alert("Please enter a valid session number.");
+      return;
+    }
+
+    if ((actionType === "add" || actionType === "subtract") && amount <= 0) {
+      alert("Session amount must be greater than 0.");
+      return;
+    }
+
+    const { totalSessions, usedSessions, remainingSessions } =
+      getPackageNumbers(currentPackage);
+
+    let nextTotalSessions = totalSessions;
+    let nextUsedSessions = usedSessions;
+    let nextRemainingSessions = remainingSessions;
+    let actionLabel = "Update Sessions";
+
+    if (actionType === "add") {
+      actionLabel = "Add Sessions";
+      nextTotalSessions = totalSessions + amount;
+      nextUsedSessions = usedSessions;
+      nextRemainingSessions = remainingSessions + amount;
+    }
+
+    if (actionType === "subtract") {
+      actionLabel = "Subtract Sessions";
+
+      if (amount > remainingSessions) {
+        alert(
+          `Cannot subtract ${amount} sessions. Client only has ${remainingSessions} remaining.`,
+        );
+        return;
+      }
+
+      nextTotalSessions = totalSessions;
+      nextUsedSessions = usedSessions + amount;
+      nextRemainingSessions = remainingSessions - amount;
+    }
+
+    if (actionType === "fixRemaining") {
+      actionLabel = "Fix Remaining Sessions";
+
+      if (amount > totalSessions) {
+        alert(
+          `Remaining sessions cannot be higher than total sessions.\n\nCurrent Total: ${totalSessions}\nYou entered Remaining: ${amount}\n\nUse Fix Total first if the total session number is wrong.`,
+        );
+        return;
+      }
+
+      nextTotalSessions = totalSessions;
+      nextRemainingSessions = amount;
+      nextUsedSessions = Math.max(totalSessions - amount, 0);
+    }
+
+    if (actionType === "fixTotal") {
+      actionLabel = "Fix Total Sessions";
+
+      if (amount < usedSessions) {
+        alert(
+          `Total sessions cannot be lower than used sessions. Used sessions is currently ${usedSessions}.`,
+        );
+        return;
+      }
+
+      nextTotalSessions = amount;
+      nextUsedSessions = usedSessions;
+      nextRemainingSessions = Math.max(amount - usedSessions, 0);
+    }
+
+    const confirmed = window.confirm(
+      `${actionLabel}?\n\nBefore:\nTotal: ${totalSessions}\nUsed: ${usedSessions}\nRemaining: ${remainingSessions}\n\nAfter:\nTotal: ${nextTotalSessions}\nUsed: ${nextUsedSessions}\nRemaining: ${nextRemainingSessions}`,
+    );
+
+    if (!confirmed) return;
+
+    setSessionAdjustAction(actionType);
+
+    const { error } = await supabase
+      .from("session_packages")
+      .update({
+        total_sessions: nextTotalSessions,
+        used_sessions: nextUsedSessions,
+        remaining_sessions: nextRemainingSessions,
+        status: nextRemainingSessions <= 0 ? "completed" : "active",
+      })
+      .eq("id", currentPackage.id);
+
+    if (error) {
+      alert(error.message);
+      setSessionAdjustAction(null);
+      return;
+    }
+
+    setSessionAdjustValue("");
+    alert("Sessions updated.");
+    await fetchClientDetail();
+    setSessionAdjustAction(null);
+  }
+
+  function startFixExistingDebt(purchase: ClientPurchase) {
+    setSelectedDebtFixId(purchase.id);
+    setDebtAmount(String(Number(purchase.balance_due || 0)));
+    setDebtDeadline(formatDateInput(purchase.debt_deadline));
+    setDebtFixAddsRevenue(true);
+    setDebtFixRevenueDate(getTodayInputDate());
+
+    window.setTimeout(() => {
+      document
+        .getElementById("debt-fix-section")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  }
+
+  async function addDebtRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowDebtEdit) {
+      alert("Only admins can add debt records.");
+      return;
+    }
+
+    const numericDebtAmount = newDebtAmount.trim() ? Number(newDebtAmount) : 0;
+
+    if (Number.isNaN(numericDebtAmount) || numericDebtAmount <= 0) {
+      alert("Debt amount must be greater than 0.");
+      return;
+    }
+
+    if (!newDebtDeadline) {
+      alert("Please add a deadline for this debt.");
+      return;
+    }
+
+    setAddingDebt(true);
+
+    const { error } = await supabase.from("client_purchases").insert({
+      client_id: client.id,
+      plan_name: newDebtNote.trim()
+        ? `Debt - ${newDebtNote.trim()}`
+        : "Debt - Manual Debt",
+      session_count: 0,
+      price: numericDebtAmount,
+      amount_paid: 0,
+      balance_due: numericDebtAmount,
+      debt_deadline: newDebtDeadline,
+      purchase_type: "debt",
+      status: "confirmed",
+      created_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      alert(error.message);
+      setAddingDebt(false);
+      return;
+    }
+
+    setNewDebtAmount("");
+    setNewDebtDeadline("");
+    setNewDebtNote("");
+
+    alert("Debt record added.");
+    await fetchClientDetail();
+    setAddingDebt(false);
+  }
+
+  async function completeDebtRecord(
+    purchase: ClientPurchase,
+    forcedPaymentAmount?: number,
+  ) {
+    if (!client) return;
+
+    if (!allowDebtEdit) {
+      alert("Only admins can record debt payments.");
+      return;
+    }
+
+    const currentBalance = Number(purchase.balance_due || 0);
+
+    if (currentBalance <= 0) {
+      alert("This debt is already complete.");
+      return;
+    }
+
+    const paymentAmountText =
+      forcedPaymentAmount !== undefined
+        ? String(forcedPaymentAmount)
+        : debtPaymentAmounts[purchase.id] ?? String(currentBalance);
+
+    const paymentAmount = Number(paymentAmountText);
+
+    if (Number.isNaN(paymentAmount) || paymentAmount <= 0) {
+      alert("Payment amount must be greater than 0.");
+      return;
+    }
+
+    if (paymentAmount > currentBalance) {
+      alert(
+        `Payment cannot be greater than current debt balance: ${formatMoney(
+          currentBalance,
+        )}`,
+      );
+      return;
+    }
+
+    const paymentDate = debtPaymentDates[purchase.id] || getTodayInputDate();
+
+    if (!paymentDate) {
+      alert("Payment date is required.");
+      return;
+    }
+
+    const newBalance = Math.max(currentBalance - paymentAmount, 0);
+    const currentPaid = Number(purchase.amount_paid || 0);
+    const newPaidAmount = currentPaid + paymentAmount;
+    const isFullPayment = newBalance <= 0;
+
+    const confirmed = window.confirm(
+      `${isFullPayment ? "Complete debt" : "Record debt payment"}?\n\nClient: ${
+        client.full_name
+      }\nPayment: ${formatMoney(paymentAmount)}\nCurrent Debt: ${formatMoney(
+        currentBalance,
+      )}\nNew Debt Balance: ${formatMoney(
+        newBalance,
+      )}\n\nThis will also add income to Revenue.`,
+    );
+
+    if (!confirmed) return;
+
+    setCompletingDebtId(purchase.id);
+
+    const { data: userData } = await supabase.auth.getUser();
+
+    const { error: purchaseUpdateError } = await supabase
+      .from("client_purchases")
+      .update({
+        amount_paid: newPaidAmount,
+        balance_due: newBalance,
+        debt_deadline: newBalance > 0 ? purchase.debt_deadline : null,
+        status: isFullPayment ? "paid" : "confirmed",
+      })
+      .eq("id", purchase.id);
+
+    if (purchaseUpdateError) {
+      alert(purchaseUpdateError.message);
+      setCompletingDebtId(null);
+      return;
+    }
+
+    const { error: incomeInsertError } = await supabase
+      .from("business_transactions")
+      .insert({
+        transaction_type: "income",
+        source: "debt_payment",
+        title: `${isFullPayment ? "Completed debt" : "Debt payment"} - ${
+          client.full_name
+        }`,
+        amount: paymentAmount,
+        notes: [
+          `Client: ${client.full_name}`,
+          `Client Code: ${client.client_code || "-"}`,
+          `Debt Record: ${purchase.plan_name || "Manual Debt"}`,
+          `Original Balance: ${formatMoney(currentBalance)}`,
+          `Payment Received: ${formatMoney(paymentAmount)}`,
+          `Remaining Balance: ${formatMoney(newBalance)}`,
+        ].join(" | "),
+        created_by: userData.user?.id || null,
+        transaction_date: paymentDate,
+      });
+
+    if (incomeInsertError) {
+      alert(
+        `Debt balance was updated, but income was not recorded: ${incomeInsertError.message}`,
+      );
+      setCompletingDebtId(null);
+      await fetchClientDetail();
+      return;
+    }
+
+    setDebtPaymentAmounts((current) => {
+      const next = { ...current };
+      delete next[purchase.id];
+      return next;
+    });
+
+    setDebtPaymentDates((current) => {
+      const next = { ...current };
+      delete next[purchase.id];
+      return next;
+    });
+
+    alert(
+      isFullPayment
+        ? "Debt completed. Revenue income was added."
+        : "Partial debt payment recorded. Revenue income was added.",
+    );
+
+    await fetchClientDetail();
+    setCompletingDebtId(null);
+  }
+
+  async function saveDebtDetails(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!client) return;
+
+    if (!allowDebtEdit) {
+      alert("Only admins can edit debt details.");
+      return;
+    }
+
+    const debtPurchase =
+      purchases.find((purchase) => purchase.id === selectedDebtFixId) ||
+      purchases.find((purchase) => Number(purchase.balance_due || 0) > 0) ||
+      purchases[0] ||
+      null;
+
+    const numericDebtAmount = debtAmount.trim() ? Number(debtAmount) : 0;
+
+    if (Number.isNaN(numericDebtAmount) || numericDebtAmount < 0) {
+      alert("Debt must be a valid number.");
+      return;
+    }
+
+    if (numericDebtAmount > 0 && !debtDeadline) {
+      alert("Please add a deadline for this debt.");
+      return;
+    }
+
+    if (debtFixAddsRevenue && !debtFixRevenueDate) {
+      alert("Revenue date is required when adding the debt fix to Revenue.");
+      return;
+    }
+
+    const oldDebtAmount = debtPurchase
+      ? Number(debtPurchase.balance_due || 0)
+      : 0;
+    const debtReductionAmount = debtPurchase
+      ? Math.max(oldDebtAmount - numericDebtAmount, 0)
+      : 0;
+    const shouldAddRevenue = debtFixAddsRevenue && debtReductionAmount > 0;
+    const nextPaidAmount = shouldAddRevenue
+      ? Number(debtPurchase?.amount_paid || 0) + debtReductionAmount
+      : Number(debtPurchase?.amount_paid || 0);
+
+    const confirmed = window.confirm(
+      shouldAddRevenue
+        ? `Save debt fix and add revenue?\n\nClient: ${client.full_name}\nDebt Record: ${
+            debtPurchase?.plan_name || "Manual Debt"
+          }\nOld Debt: ${formatMoney(oldDebtAmount)}\nNew Debt: ${formatMoney(
+            numericDebtAmount,
+          )}\nRevenue Added: ${formatMoney(
+            debtReductionAmount,
+          )}\n\nThis will create an Income transaction on the Revenue page.`
+        : `Save debt correction?\n\nClient: ${client.full_name}\nDebt Record: ${
+            debtPurchase?.plan_name || "Manual Debt"
+          }\nOld Debt: ${formatMoney(oldDebtAmount)}\nNew Debt: ${formatMoney(
+            numericDebtAmount,
+          )}\n\nNo revenue transaction will be created.`,
+    );
+
+    if (!confirmed) return;
+
+    setSavingDebt(true);
+
+    if (debtPurchase) {
+      const { error } = await supabase
+        .from("client_purchases")
+        .update({
+          amount_paid: nextPaidAmount,
+          balance_due: numericDebtAmount,
+          debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
+          status: numericDebtAmount <= 0 ? "paid" : "confirmed",
+        })
+        .eq("id", debtPurchase.id);
+
+      if (error) {
+        alert(error.message);
+        setSavingDebt(false);
+        return;
+      }
+
+      if (shouldAddRevenue) {
+        const { data: userData } = await supabase.auth.getUser();
+
+        const { error: incomeInsertError } = await supabase
+          .from("business_transactions")
+          .insert({
+            transaction_type: "income",
+            source: "debt_payment",
+            title: `Debt fix payment - ${client.full_name}`,
+            amount: debtReductionAmount,
+            notes: [
+              `Client: ${client.full_name}`,
+              `Client Code: ${client.client_code || "-"}`,
+              `Debt Record: ${debtPurchase.plan_name || "Manual Debt"}`,
+              `Old Debt Balance: ${formatMoney(oldDebtAmount)}`,
+              `New Debt Balance: ${formatMoney(numericDebtAmount)}`,
+              `Revenue Added From Debt Fix: ${formatMoney(debtReductionAmount)}`,
+            ].join(" | "),
+            created_by: userData.user?.id || null,
+            transaction_date: debtFixRevenueDate,
+          });
+
+        if (incomeInsertError) {
+          alert(
+            `Debt was updated, but revenue was not recorded: ${incomeInsertError.message}`,
+          );
+          setSavingDebt(false);
+          await fetchClientDetail();
+          return;
+        }
+      }
+    } else {
+      const { error } = await supabase.from("client_purchases").insert({
+        client_id: client.id,
+        plan_name: "Debt - Manual Debt",
+        session_count: 0,
+        price: numericDebtAmount,
+        amount_paid: 0,
+        balance_due: numericDebtAmount,
+        debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
+        purchase_type: "debt",
+        status: "confirmed",
+        created_at: new Date().toISOString(),
       });
 
       if (error) {
-        const lowerMessage = error.message.toLowerCase();
+        alert(error.message);
+        setSavingDebt(false);
+        return;
+      }
+    }
 
-        if (
-          lowerMessage.includes("record_staff_session") ||
-          lowerMessage.includes("function") ||
-          lowerMessage.includes("schema cache")
-        ) {
-          throw new Error(
-            "The secure session function is not installed yet. Run the nutrition follow-up SQL migration in Supabase, then reload the app.",
-          );
+    alert(
+      shouldAddRevenue
+        ? "Debt fix saved and revenue income was added."
+        : "Debt details saved.",
+    );
+
+    setSelectedDebtFixId(null);
+    await fetchClientDetail();
+    setSavingDebt(false);
+  }
+
+  function startEditSessionHistory(log: SessionHistory) {
+    if (!isAdmin) {
+      alert("Only admins can edit session history.");
+      return;
+    }
+
+    setEditingSessionId(log.id);
+    setEditSessionTrainerId(log.trainer_id || "");
+    setEditSessionStatus(log.status || "success");
+    setEditSessionDateTime(formatDateTimeInput(log.created_at));
+    setEditSessionMessage(log.message || "");
+    setEditSessionNote(log.trainer_note || "");
+  }
+
+  function cancelEditSessionHistory() {
+    setEditingSessionId(null);
+    setEditSessionTrainerId("");
+    setEditSessionStatus("success");
+    setEditSessionDateTime("");
+    setEditSessionMessage("");
+    setEditSessionNote("");
+  }
+
+  async function saveSessionHistoryEdit(log: SessionHistory) {
+    if (!isAdmin) {
+      alert("Only admins can edit session history.");
+      return;
+    }
+
+    if (!editSessionDateTime) {
+      alert("Session date and time are required.");
+      return;
+    }
+
+    const currentPackage = packages[0] || null;
+    const sessionType: SessionType = log.session_type || "training";
+    const isTrainingSession = sessionType === "training";
+    const oldCompleted = log.status === "success" || log.status === "completed";
+    const nextCompleted = editSessionStatus === "success" || editSessionStatus === "completed";
+
+    // Only training sessions affect the training package balance.
+    // A failed/cancelled/reversed nutrition follow-up must never refund or deduct a training session.
+    const statusChangesSessionBalance =
+      isTrainingSession && oldCompleted !== nextCompleted;
+
+    let previousPackageNumbers: ReturnType<typeof getPackageNumbers> | null = null;
+    let nextRemainingAfter = log.remaining_after;
+
+    if (statusChangesSessionBalance) {
+      if (!currentPackage) {
+        alert("No active training package was found. The training session status cannot be changed safely.");
+        return;
+      }
+
+      previousPackageNumbers = getPackageNumbers(currentPackage);
+      let nextUsed = previousPackageNumbers.usedSessions;
+      let nextRemaining = previousPackageNumbers.remainingSessions;
+
+      if (oldCompleted && !nextCompleted) {
+        nextUsed = Math.max(previousPackageNumbers.usedSessions - 1, 0);
+        nextRemaining = previousPackageNumbers.remainingSessions + 1;
+      }
+
+      if (!oldCompleted && nextCompleted) {
+        if (previousPackageNumbers.remainingSessions <= 0) {
+          alert("This client has no remaining sessions. Add or fix sessions before marking this record as completed.");
+          return;
         }
 
-        throw error;
+        nextUsed = previousPackageNumbers.usedSessions + 1;
+        nextRemaining = previousPackageNumbers.remainingSessions - 1;
       }
 
-      const rawRow = Array.isArray(data) ? data[0] : data;
-      const row = rawRow as RecordSessionRpcRow | null;
+      const confirmed = window.confirm(
+        oldCompleted && !nextCompleted
+          ? `Change this completed session to ${editSessionStatus}?\n\nOne session will be returned to the client.\nRemaining: ${previousPackageNumbers.remainingSessions} → ${nextRemaining}`
+          : `Mark this record as completed?\n\nOne session will be deducted.\nRemaining: ${previousPackageNumbers.remainingSessions} → ${nextRemaining}`,
+      );
 
-      if (!row?.history_id) {
-        throw new Error("The session was not recorded. No result was returned.");
+      if (!confirmed) return;
+
+      setSavingSessionHistoryId(log.id);
+
+      const { error: packageError } = await supabase
+        .from("session_packages")
+        .update({
+          used_sessions: nextUsed,
+          remaining_sessions: nextRemaining,
+          status: nextRemaining <= 0 ? "completed" : "active",
+        })
+        .eq("id", currentPackage.id);
+
+      if (packageError) {
+        alert(packageError.message);
+        setSavingSessionHistoryId(null);
+        return;
       }
 
-      setLastScannedHistoryId(row.history_id);
-      setLastScannedType(row.session_type || sessionType);
-      setShowNoteBox(true);
-
-      const trainingRemaining = row.remaining_after ?? 0;
-      const nutritionRemaining = row.nutrition_remaining ?? 0;
-      const nutritionUsed = row.nutrition_used ?? 0;
-      const nutritionAllowed = row.nutrition_allowed ?? 0;
-
-      if (row.session_type === "nutrition_follow_up") {
-        setResult({
-          type: "success",
-          message: `NUTRITION FOLLOW-UP SUCCESSFUL — ${row.client_name}. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used). Training sessions remaining: ${trainingRemaining} — no training session was deducted.`,
-        });
-      } else {
-        setResult({
-          type: "success",
-          message: `TRAINING SCAN SUCCESSFUL — ${row.client_name}. Training sessions remaining: ${trainingRemaining}. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used).`,
-        });
-      }
-
-      await fetchTrainerStats(trainerId);
-    } catch (error) {
-      setResult({
-        type: "error",
-        message: getErrorMessage(error) || "Unable to process this scan.",
-      });
+      nextRemainingAfter = nextRemaining;
+    } else {
+      setSavingSessionHistoryId(log.id);
     }
+
+    const createdAtIso = new Date(editSessionDateTime).toISOString();
+
+    const { error: historyError } = await supabase
+      .from("session_history")
+      .update({
+        trainer_id: editSessionTrainerId || null,
+        status: editSessionStatus,
+        created_at: createdAtIso,
+        message: editSessionMessage.trim() || null,
+        trainer_note: editSessionNote.trim() || null,
+        remaining_after: nextRemainingAfter,
+      })
+      .eq("id", log.id)
+      .eq("client_id", clientId);
+
+    if (historyError) {
+      if (statusChangesSessionBalance && currentPackage && previousPackageNumbers) {
+        await supabase
+          .from("session_packages")
+          .update({
+            used_sessions: previousPackageNumbers.usedSessions,
+            remaining_sessions: previousPackageNumbers.remainingSessions,
+            status:
+              previousPackageNumbers.remainingSessions <= 0
+                ? "completed"
+                : "active",
+          })
+          .eq("id", currentPackage.id);
+      }
+
+      alert(`Session history was not saved: ${historyError.message}`);
+      setSavingSessionHistoryId(null);
+      return;
+    }
+
+    const balanceMessage = isTrainingSession
+      ? oldCompleted && !nextCompleted
+        ? " Training session returned to the client."
+        : !oldCompleted && nextCompleted
+          ? " One training session was deducted."
+          : " Training package balance was unchanged."
+      : " Nutrition follow-up does not affect the training package balance.";
+
+    alert(`Session history updated.${balanceMessage}`);
+    cancelEditSessionHistory();
+    await fetchClientDetail();
+    setSavingSessionHistoryId(null);
+  }
+
+  async function toggleClientStatus() {
+    if (!client) return;
+
+    if (!allowBasicInfoEdit) {
+      alert("You do not have permission to change client status.");
+      return;
+    }
+
+    const newStatus = client.status === "active" ? "inactive" : "active";
+
+    const { error } = await supabase
+      .from("clients")
+      .update({
+        status: newStatus,
+      })
+      .eq("id", client.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert(`Client is now ${newStatus}.`);
+    await fetchClientDetail();
   }
 
   useEffect(() => {
-    let alive = true;
-
-    async function protectTrainerScanPage() {
+    async function protectPage() {
       const { user, role } = await getCurrentUserRole();
-
-      if (!alive) return;
 
       if (!user) {
         setCheckingMessage("Redirecting to login...");
@@ -666,626 +1666,1882 @@ export default function TrainerScanPage() {
         return;
       }
 
-      if (role === "client") {
-        setCheckingMessage("Redirecting to client portal...");
-        router.push("/client");
-        return;
-      }
+      if (!isAdminOrManager(role)) {
+        if (role === "trainer" || role === "nutrition_coach") {
+          router.push(`/trainer/clients/${clientId}`);
+          return;
+        }
 
-      const cleanRole = normalizeScannerRole(role);
+        if (role === "client") {
+          router.push("/client");
+          return;
+        }
 
-      if (!canScanClients(cleanRole)) {
-        setCheckingMessage("Redirecting to login...");
         await supabase.auth.signOut();
         router.push("/login");
         return;
       }
 
-      setTrainerId(user.id);
-      setTrainerRole(cleanRole);
-
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("full_name, email, phone")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (profileError) console.error(profileError);
-
-      const trainerProfile = profile as TrainerProfile | null;
-      const name = trainerProfile?.full_name || user.email || "Staff";
-      const email = trainerProfile?.email || user.email || "";
-      const phone = trainerProfile?.phone || "";
-
-      setTrainerName(name);
-      setTrainerEmail(email);
-      setTrainerPhone(phone);
-      setEditName(name);
-      setEditEmail(email);
-      setEditPhone(phone);
-
-      await fetchTrainerStats(user.id);
-
-      if (alive) setCheckingRole(false);
+      setUserRole(normalizeRole(role));
+      setCheckingRole(false);
+      await fetchClientDetail();
     }
 
-    protectTrainerScanPage();
+    protectPage();
+  }, [router, clientId]);
 
-    return () => {
-      alive = false;
-      void stopScanner();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]);
+  useEffect(() => {
+    if (action === "renew" && !loading) {
+      setRenewPackageMode(true);
+      window.setTimeout(scrollToPackageSection, 300);
+    }
+  }, [action, loading]);
 
   if (checkingRole) {
     return (
-      <main className="min-h-screen bg-[#070707] p-4 text-white md:p-6">
-        <div className="mx-auto flex min-h-[80vh] max-w-6xl items-center justify-center rounded-[2rem] border border-yellow-400/20 bg-white/[0.04] p-6">
-          <div className="text-center">
-            <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-2 border-yellow-400/20 border-t-yellow-400" />
-            <p className="text-base font-semibold text-yellow-400">
-              {checkingMessage}
-            </p>
-          </div>
+      <main className="min-h-screen bg-black p-6 text-white">
+        <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+          <p className="text-sm font-semibold text-yellow-400">
+            {checkingMessage}
+          </p>
         </div>
       </main>
     );
   }
 
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-black p-6 text-white">
+        <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+          <p className="text-sm font-semibold text-yellow-400">
+            Loading client...
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!client) {
+    return (
+      <main className="min-h-screen bg-black p-6 text-white">
+        <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+          <p className="text-sm font-semibold text-yellow-400">
+            Client not found.
+          </p>
+
+          <Link
+            href="/admin/clients"
+            className="mt-5 inline-block rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black"
+          >
+            Back to Clients
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  const activePackage = packages[0] || null;
+
+  const packagePurchases = purchases.filter(isPackagePurchase);
+  const debtPurchases = purchases.filter(isDebtPurchase);
+
+  const activeDebtPurchases = debtPurchases.filter(
+    (purchase) => Number(purchase.balance_due || 0) > 0,
+  );
+
+  const completedDebtPurchases = debtPurchases.filter((purchase) => {
+    const paidAmount = Number(purchase.amount_paid || 0);
+    const balanceDue = Number(purchase.balance_due || 0);
+
+    return balanceDue <= 0 && paidAmount > 0;
+  });
+
+  const totalClientDebt = activeDebtPurchases.reduce(
+    (sum, purchase) => sum + Number(purchase.balance_due || 0),
+    0,
+  );
+
+  const totalCompletedDebt = completedDebtPurchases.reduce(
+    (sum, purchase) => sum + Number(purchase.amount_paid || 0),
+    0,
+  );
+
+  const debtPurchase = activeDebtPurchases[0] || debtPurchases[0] || null;
+  const selectedDebtFixPurchase =
+    debtPurchases.find((purchase) => purchase.id === selectedDebtFixId) ||
+    debtPurchase ||
+    null;
+
+  const currentDebtBalanceForFix = Number(
+    selectedDebtFixPurchase?.balance_due || 0,
+  );
+  const nextDebtBalanceForFix = debtAmount.trim() ? Number(debtAmount) : 0;
+  const debtFixRevenueAmount =
+    !Number.isNaN(nextDebtBalanceForFix) &&
+    currentDebtBalanceForFix > nextDebtBalanceForFix
+      ? currentDebtBalanceForFix - nextDebtBalanceForFix
+      : 0;
+  const debtFixWillAddRevenue = debtFixAddsRevenue && debtFixRevenueAmount > 0;
+
+  const debtNotice = getDebtNotice(
+    totalClientDebt,
+    debtPurchase?.debt_deadline || null,
+  );
+
+  const selectedSalesPerson = salesPeople.find(
+    (person) => person.id === client.sales_person_id,
+  );
+
+  const selectedTrainer = trainerOptions.find(
+    (person) => person.id === client.assigned_trainer_id,
+  );
+
+  const selectedNutritionCoach = nutritionCoachOptions.find(
+    (person) => person.id === client.assigned_nutrition_coach_id,
+  );
+
+  const activePackageNumbers = getPackageNumbers(activePackage);
+  const purchaseHistory = packagePurchases;
   return (
-    <main className="min-h-screen overflow-hidden bg-[#070707] text-white">
-      <style jsx global>{`
-        html,
-        body {
-          background: #070707;
-        }
-
-        @keyframes fade-up {
-          from {
-            opacity: 0;
-            transform: translateY(14px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        @keyframes pulse-glow {
-          0%,
-          100% {
-            box-shadow: 0 0 30px rgba(250, 204, 21, 0.18);
-          }
-          50% {
-            box-shadow: 0 0 70px rgba(250, 204, 21, 0.32);
-          }
-        }
-
-        .fade-up {
-          animation: fade-up 0.45s ease both;
-        }
-
-        .pulse-glow {
-          animation: pulse-glow 3s ease-in-out infinite;
-        }
-
-        ::-webkit-scrollbar {
-          width: 8px;
-          height: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-          background: #111111;
-        }
-
-        ::-webkit-scrollbar-thumb {
-          background: #facc15;
-          border-radius: 999px;
-        }
-      `}</style>
-
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute -left-32 -top-32 h-[440px] w-[440px] rounded-full bg-yellow-400/[0.08] blur-[120px]" />
-        <div className="absolute -right-28 top-1/4 h-[360px] w-[360px] rounded-full bg-amber-500/[0.06] blur-[110px]" />
-        <div className="absolute bottom-0 left-1/3 h-[320px] w-[320px] rounded-full bg-yellow-300/[0.04] blur-[90px]" />
-      </div>
-
-      <div className="relative z-10 mx-auto max-w-7xl px-4 py-5 md:px-6 md:py-7">
-        <header className="fade-up mb-5 overflow-hidden rounded-[2rem] border border-yellow-400/20 bg-[radial-gradient(circle_at_top_left,_rgba(250,204,21,0.20),_transparent_35%),linear-gradient(135deg,_rgba(24,24,27,0.96),_rgba(9,9,11,0.96))] p-5 shadow-2xl backdrop-blur md:p-7">
-          <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
+    <main className="min-h-screen bg-black p-4 text-white md:p-6">
+      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
+        <div className="mx-auto max-w-7xl">
+          <header className="mb-8 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
             <div>
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-2 rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.22em] text-yellow-300">
-                  <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />
-                  {getRoleLabel(trainerRole)} Hub
-                </span>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.45em] text-yellow-400">
+                FXA FITNESS
+              </p>
 
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
-                  {performanceLabel}
-                </span>
-              </div>
-
-              <h1 className="text-4xl font-black leading-none tracking-tight md:text-6xl">
-                {greeting},
-                <br />
-                <span className="text-yellow-400">
-                  {getFirstName(trainerName || "Coach")}
-                </span>
+              <h1 className="text-4xl font-semibold tracking-tight md:text-6xl">
+                Client Detail
               </h1>
 
-              <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-300">
-                {motivationQuote}
+              <p className="mt-3 text-sm font-normal text-gray-400 md:text-base">
+                View client profile, QR code, sale person, packages, session
+                control, debt records, completed debt, and recent sessions.
               </p>
 
-              <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-500">
-                {performanceMessage} Scan fast, coach with standards, and keep
-                notes clean so every client has a clear next step.
+              <p className="mt-3 inline-flex rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-normal text-yellow-300">
+                Signed in as {roleLabel}
               </p>
             </div>
 
-            <div className="rounded-[1.75rem] border border-white/10 bg-black/35 p-4 md:p-5">
-              <div className="mb-4 flex items-center gap-4">
-                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-3xl bg-yellow-400 text-xl font-black text-black shadow-lg shadow-yellow-400/20">
-                  {getInitials(trainerName || trainerEmail || "FX")}
-                </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={startRenewPackage}
+                  className="rounded-2xl bg-green-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-green-300"
+                >
+                  Renew Package
+                </button>
+              )}
 
-                <div className="min-w-0">
-                  <p className="truncate text-xl font-bold text-white">
-                    {trainerName || "Staff"}
-                  </p>
-                  <p className="truncate text-sm text-zinc-500">
-                    {trainerEmail || "No email saved"}
-                  </p>
-                  <p className="mt-1 text-xs font-semibold uppercase tracking-widest text-yellow-400">
-                    {getRoleLabel(trainerRole)}
-                  </p>
-                </div>
-              </div>
+              {allowPackageEdit && (
+                <button
+                  type="button"
+                  onClick={scrollToSessionControlSection}
+                  className="rounded-2xl bg-cyan-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-cyan-300"
+                >
+                  Fix Sessions
+                </button>
+              )}
 
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <div className="rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Paid Sessions
-                  </p>
-                  <p className="mt-2 text-3xl font-black text-yellow-400">
-                    {sessionsToday}
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">today</p>
-                </div>
+              {allowDebtEdit && (
+                <button
+                  type="button"
+                  onClick={scrollToDebtSection}
+                  className="rounded-2xl bg-red-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-red-300"
+                >
+                  Add Debt
+                </button>
+              )}
 
-                <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Training
-                  </p>
-                  <p className="mt-2 text-3xl font-black text-cyan-300">
-                    {trainingSessionsToday}
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">sessions</p>
-                </div>
+              {allowBasicInfoEdit && (
+                <button
+                  type="button"
+                  onClick={scrollToSalesPersonSection}
+                  className="rounded-2xl bg-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-yellow-300"
+                >
+                  Add Sale Person
+                </button>
+              )}
 
-                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Nutrition
-                  </p>
-                  <p className="mt-2 text-3xl font-black text-emerald-300">
-                    {nutritionFollowsToday}
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">follow-ups</p>
-                </div>
+              {allowBasicInfoEdit && (
+                <button
+                  type="button"
+                  onClick={scrollToStaffAssignmentSection}
+                  className="rounded-2xl bg-purple-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-purple-300"
+                >
+                  Assign PT / NC
+                </button>
+              )}
 
-                <div className="rounded-2xl border border-purple-400/20 bg-purple-400/10 p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Clients
-                  </p>
-                  <p className="mt-2 text-3xl font-black text-purple-300">
-                    {clientsToday}
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">
-                    last {formatTime(lastScan)}
-                  </p>
-                </div>
-              </div>
+              {allowBasicInfoEdit && (
+                <button
+                  type="button"
+                  onClick={toggleClientStatus}
+                  className="rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+                >
+                  {client.status === "active" ? "Deactivate" : "Reactivate"}
+                </button>
+              )}
+
+              <Link
+                href="/admin/clients"
+                className="rounded-2xl bg-yellow-400 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-black transition hover:bg-yellow-300"
+              >
+                Back
+              </Link>
             </div>
-          </div>
-        </header>
+          </header>
 
-        <section className="fade-up mb-5 grid gap-3 md:grid-cols-5">
-          <Link
-            href="/trainer/clients"
-            className="rounded-2xl bg-yellow-400 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 active:scale-[0.98]"
-          >
-            Client Management
-          </Link>
-
-          <Link
-            href="/trainer/calendar"
-            className="rounded-2xl border border-yellow-400/50 bg-yellow-400/10 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-yellow-300 transition hover:bg-yellow-400 hover:text-black active:scale-[0.98]"
-          >
-            Calendar
-          </Link>
-
-          <Link
-            href="/history"
-            className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-zinc-300 transition hover:border-yellow-400/50 hover:text-yellow-300 active:scale-[0.98]"
-          >
-            History
-          </Link>
-
-          {trainerRole === "admin" ? (
-            <Link
-              href="/admin"
-              className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-zinc-300 transition hover:border-yellow-400/50 hover:text-yellow-300 active:scale-[0.98]"
-            >
-              Admin
-            </Link>
-          ) : (
-            <div className="hidden md:block" />
-          )}
-
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="rounded-2xl border border-red-400/50 bg-red-400/10 px-4 py-3 text-xs font-black uppercase tracking-wide text-red-300 transition hover:bg-red-400 hover:text-black active:scale-[0.98]"
-          >
-            Logout
-          </button>
-        </section>
-
-        <section className="fade-up mb-6 grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-          <div className="pulse-glow overflow-hidden rounded-[2rem] border border-yellow-400/30 bg-[radial-gradient(circle_at_top,_rgba(250,204,21,0.16),_transparent_38%),linear-gradient(135deg,_#161006,_#09090b_65%)] p-4 shadow-2xl md:p-6">
-            <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <section className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.3em] text-yellow-400">
-                  Quick Scan
-                </p>
-                <h2 className="mt-2 text-3xl font-black tracking-tight text-white md:text-4xl">
-                  Scan Client QR
-                </h2>
-                <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-400">
-                  Training scan is the default and deducts 1 training session.
-                  Nutrition follow-up is a separate option and does not reduce
-                  the client&apos;s training balance.
+                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  Client
                 </p>
 
-                {scanMode === "nutrition_follow_up" && scannerStarted ? (
-                  <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-xs font-bold uppercase tracking-wider text-emerald-300">
-                    <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                    Nutrition Follow-up Mode
-                  </div>
+                <h2 className="mt-2 text-4xl font-semibold text-yellow-400">
+                  {client.full_name}
+                </h2>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Client Code:{" "}
+                  <span className="text-white">
+                    {client.client_code || "-"}
+                  </span>
+                </p>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Sale Person:{" "}
+                  <span className="text-yellow-300">
+                    {selectedSalesPerson?.full_name || "Not assigned"}
+                  </span>
+                </p>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Personal Trainer:{" "}
+                  <span className="text-purple-300">
+                    {selectedTrainer?.full_name || "Not assigned"}
+                  </span>
+                </p>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Nutrition Coach:{" "}
+                  <span className="text-green-300">
+                    {selectedNutritionCoach?.full_name || "Not assigned"}
+                  </span>
+                </p>
+              </div>
+
+              <div className="flex flex-col items-start gap-2 md:items-end">
+                <span
+                  className={`w-fit rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-wide ${getStatusClass(
+                    client.status,
+                  )}`}
+                >
+                  {client.status || "-"}
+                </span>
+
+                <span
+                  className={`w-fit rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-wide ${debtNotice.className}`}
+                >
+                  {debtNotice.label}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <section
+            id="sales-person-section"
+            className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                  Sale Person
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  Assigned Staff
+                </h2>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Choose from trainers and nutrition coaches. This name will
+                  show on the client table.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-yellow-400/20 bg-black/40 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  Current
+                </p>
+                <p className="mt-1 text-sm font-semibold text-yellow-300">
+                  {selectedSalesPerson?.full_name || "Not assigned"}
+                </p>
+              </div>
+            </div>
+
+            <form
+              onSubmit={saveSalesPerson}
+              className="mt-5 grid gap-4 md:grid-cols-[1fr_auto]"
+            >
+              <select
+                value={selectedSalesPersonId}
+                onChange={(event) =>
+                  setSelectedSalesPersonId(event.target.value)
+                }
+                disabled={!allowBasicInfoEdit}
+                className="w-full rounded-2xl border border-yellow-500/30 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-400 disabled:opacity-70"
+              >
+                <option value="">No sale person</option>
+
+                {salesPeople.map((person) => (
+                  <option key={person.id} value={person.id}>
+                    {person.full_name || "Unnamed Staff"}{" "}
+                    {person.role === "nutrition_coach"
+                      ? "(Nutrition Coach)"
+                      : "(Trainer)"}
+                  </option>
+                ))}
+              </select>
+
+              {allowBasicInfoEdit && (
+                <button
+                  type="submit"
+                  disabled={savingSalesPerson}
+                  className="rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                >
+                  {savingSalesPerson ? "Saving..." : "Save Sale Person"}
+                </button>
+              )}
+            </form>
+          </section>
+
+          <section
+            id="staff-assignment-section"
+            className="mb-6 rounded-[2rem] border border-purple-500/30 bg-purple-500/10 p-6 shadow-2xl backdrop-blur"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-purple-300">
+                  Staff Assignment
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  Assign Personal Trainer & Nutrition Coach
+                </h2>
+
+                <p className="mt-2 text-sm font-normal text-gray-300">
+                  This controls who is responsible for training and nutrition
+                  support. Staff will see these names in Client Management.
+                </p>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-2xl border border-purple-400/20 bg-black/40 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Current PT
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-purple-300">
+                    {selectedTrainer?.full_name || "Not assigned"}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-green-400/20 bg-black/40 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Current NC
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-green-300">
+                    {selectedNutritionCoach?.full_name || "Not assigned"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <form
+              onSubmit={saveStaffAssignment}
+              className="mt-5 grid gap-4 md:grid-cols-2"
+            >
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-purple-300">
+                  Personal Trainer
+                </span>
+
+                <select
+                  value={selectedTrainerId}
+                  onChange={(event) => setSelectedTrainerId(event.target.value)}
+                  disabled={!allowBasicInfoEdit}
+                  className="w-full rounded-2xl border border-purple-400 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-purple-300 disabled:opacity-70"
+                >
+                  <option value="">No personal trainer</option>
+
+                  {trainerOptions.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.full_name || "Unnamed Trainer"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-green-300">
+                  Nutrition Coach
+                </span>
+
+                <select
+                  value={selectedNutritionCoachId}
+                  onChange={(event) =>
+                    setSelectedNutritionCoachId(event.target.value)
+                  }
+                  disabled={!allowBasicInfoEdit}
+                  className="w-full rounded-2xl border border-green-400 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-green-300 disabled:opacity-70"
+                >
+                  <option value="">No nutrition coach</option>
+
+                  {nutritionCoachOptions.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.full_name || "Unnamed Nutrition Coach"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {allowBasicInfoEdit && (
+                <div className="md:col-span-2">
+                  <button
+                    type="submit"
+                    disabled={savingStaffAssignment}
+                    className="rounded-2xl bg-purple-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-purple-300 disabled:opacity-60"
+                  >
+                    {savingStaffAssignment
+                      ? "Saving..."
+                      : "Save PT / NC Assignment"}
+                  </button>
+                </div>
+              )}
+            </form>
+          </section>
+
+          <section className="mb-6 grid gap-6 lg:grid-cols-[1.35fr_0.65fr]">
+            <form
+              onSubmit={saveClientInfo}
+              className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur"
+            >
+              <h2 className="text-2xl font-semibold">Client Info</h2>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                {isAdmin && (
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Client Code
+                    </span>
+                    <input
+                      value={editClientCode}
+                      onChange={(event) =>
+                        setEditClientCode(event.target.value)
+                      }
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400"
+                    />
+                  </label>
+                )}
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Full Name
+                  </span>
+                  <input
+                    value={editName}
+                    onChange={(event) => setEditName(event.target.value)}
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    required
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Email
+                  </span>
+                  <input
+                    type="email"
+                    value={editEmail}
+                    onChange={(event) => setEditEmail(event.target.value)}
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Phone
+                  </span>
+                  <input
+                    value={editPhone}
+                    onChange={(event) => setEditPhone(event.target.value)}
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Gender
+                  </span>
+                  <input
+                    value={editGender}
+                    onChange={(event) => setEditGender(event.target.value)}
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Date of Birth
+                  </span>
+                  <input
+                    type="date"
+                    value={editDateOfBirth}
+                    onChange={(event) => setEditDateOfBirth(event.target.value)}
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Client Source
+                  </span>
+                  <select
+                    value={editClientSource}
+                    onChange={(event) =>
+                      setEditClientSource(event.target.value)
+                    }
+                    disabled={!allowBasicInfoEdit}
+                    className="w-full rounded-2xl border border-yellow-500/30 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-400 disabled:opacity-70"
+                  >
+                    {CLIENT_SOURCE_OPTIONS.map((option) => (
+                      <option
+                        key={option.value}
+                        value={option.value}
+                        className="bg-white text-black"
+                      >
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {editClientSource === "other" ? (
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Other Source
+                    </span>
+                    <input
+                      value={editClientSourceOther}
+                      onChange={(event) =>
+                        setEditClientSourceOther(event.target.value)
+                      }
+                      disabled={!allowBasicInfoEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+                ) : null}
+              </div>
+
+              {isAdmin && (
+                <label className="mt-5 block">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Client Note
+                  </span>
+                  <textarea
+                    value={editClientNote}
+                    onChange={(event) => setEditClientNote(event.target.value)}
+                    className="min-h-32 w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal leading-6 text-white outline-none focus:border-yellow-400"
+                  />
+                </label>
+              )}
+
+              {allowBasicInfoEdit && (
+                <button
+                  type="submit"
+                  disabled={savingClientInfo}
+                  className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                >
+                  {savingClientInfo ? "Saving..." : "Save Client Info"}
+                </button>
+              )}
+            </form>
+
+            <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 text-center shadow-2xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                QR Access
+              </p>
+
+              <h2 className="mt-2 text-2xl font-semibold text-white">
+                Client QR Code
+              </h2>
+
+              <div className="mt-5 inline-block rounded-2xl bg-white p-4">
+                {qrCode ? (
+                  <img
+                    src={qrCode}
+                    alt="Client QR Code"
+                    className="h-56 w-56 rounded-xl"
+                  />
                 ) : (
-                  <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-xs font-bold uppercase tracking-wider text-yellow-300">
-                    <span className="h-2 w-2 rounded-full bg-yellow-400" />
-                    Training Mode — Default
+                  <div className="flex h-56 w-56 items-center justify-center rounded-xl bg-gray-100 text-sm text-gray-500">
+                    No QR token
                   </div>
                 )}
               </div>
 
-              <div className="grid gap-3 md:min-w-64">
+              {isAdmin && (
                 <button
                   type="button"
-                  onClick={
-                    scannerStarted
-                      ? stopScanner
-                      : () => startScanner("training")
-                  }
-                  className={`rounded-2xl px-7 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] ${
-                    scannerStarted
-                      ? "bg-red-400 text-black hover:bg-red-300"
-                      : "bg-yellow-400 text-black hover:bg-yellow-300"
-                  }`}
+                  onClick={generateClientActivationCode}
+                  disabled={generatingActivationCode}
+                  className="mt-5 rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:opacity-60"
                 >
-                  {scannerStarted ? "Stop Scanner" : "Start Training Scan"}
+                  {generatingActivationCode
+                    ? "Generating..."
+                    : "Generate Activation Code"}
                 </button>
+              )}
 
-                {!scannerStarted &&
-                (trainerRole === "nutrition_coach" ||
-                  trainerRole === "admin") ? (
-                  <button
-                    type="button"
-                    onClick={() => startScanner("nutrition_follow_up")}
-                    className="rounded-2xl border border-emerald-300/60 bg-emerald-300/10 px-7 py-3 text-sm font-black uppercase tracking-wide text-emerald-300 transition hover:bg-emerald-300 hover:text-black active:scale-[0.98]"
-                  >
-                    Scan Nutrition Follow-up
-                  </button>
-                ) : null}
-              </div>
+              <p className="mt-3 text-xs text-gray-400">
+                Activation Code:{" "}
+                <span className="text-yellow-300">{activationCode || "-"}</span>
+              </p>
+            </section>
+          </section>
+
+          <section className="mb-6 grid gap-4 md:grid-cols-5">
+            <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-2xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                Current Package Sessions
+              </p>
+              <p className="mt-3 text-4xl font-semibold text-yellow-400">
+                {activePackageNumbers.totalSessions}
+              </p>
             </div>
 
-            <div className="rounded-[1.75rem] border border-yellow-400/25 bg-black/70 p-3">
-              <div
-                id="qr-reader"
-                className="min-h-[320px] w-full overflow-hidden rounded-[1.4rem] bg-white text-black md:min-h-[440px]"
-              />
+            <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-2xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                Used Sessions
+              </p>
+              <p className="mt-3 text-4xl font-semibold text-yellow-400">
+                {activePackageNumbers.usedSessions}
+              </p>
             </div>
 
-            <div
-              className={`mt-5 rounded-3xl border p-5 text-sm font-semibold leading-7 ${
-                result.message
-                  ? getResultClass(result.type)
-                  : "border-yellow-400/25 bg-yellow-400/10 text-yellow-100"
-              }`}
-            >
-              {result.message ||
-                (scanMode === "nutrition_follow_up"
-                  ? "Nutrition mode selected. Scan the client QR code. Training sessions will not be deducted."
-                  : "Training mode selected. Scan the client QR code to deduct one training session.")}
+            <div className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 text-center shadow-2xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                Remaining
+              </p>
+              <p className="mt-3 text-4xl font-semibold text-yellow-400">
+                {activePackageNumbers.remainingSessions}
+              </p>
             </div>
 
-            {showNoteBox ? (
-              <div className="mt-5 rounded-3xl border border-yellow-400/40 bg-black/75 p-5">
-                <h3 className="text-xl font-black text-yellow-400">
-                  {lastScannedType === "nutrition_follow_up"
-                    ? "Add Nutrition Follow-up Note"
-                    : "Add Training Note"}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">
-                  {lastScannedType === "nutrition_follow_up"
-                    ? "Record nutrition progress, adherence, measurements, and the next follow-up plan."
-                    : "Record training focus, injury flags, client energy, and the next-session plan."}
+            <div className="rounded-[2rem] border border-red-500/30 bg-red-500/10 p-5 text-center shadow-2xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                Active Debt
+              </p>
+              <p className="mt-3 text-4xl font-semibold text-red-300">
+                {formatMoney(totalClientDebt)}
+              </p>
+            </div>
+
+            <div className="rounded-[2rem] border border-green-500/30 bg-green-500/10 p-5 text-center shadow-2xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                Completed Debt
+              </p>
+              <p className="mt-3 text-4xl font-semibold text-green-300">
+                {formatMoney(totalCompletedDebt)}
+              </p>
+            </div>
+          </section>
+
+          <section
+            id="session-control-section"
+            className="mb-6 rounded-[2rem] border border-cyan-400/40 bg-cyan-400/10 p-6 shadow-2xl backdrop-blur"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                  Session Control
                 </p>
 
-                <textarea
-                  value={trainerNote}
-                  onChange={(event) => setTrainerNote(event.target.value)}
-                  placeholder={
-                    lastScannedType === "nutrition_follow_up"
-                      ? "Example: Protein target reviewed. Client is averaging 3 meals. Follow up on hydration next week."
-                      : "Example: Lower body today. Client had mild knee discomfort. Keep squat depth controlled next session."
-                  }
-                  className="mt-4 min-h-32 w-full rounded-2xl border border-yellow-500/30 bg-black/80 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  Add / Subtract / Fix Remaining / Fix Total
+                </h2>
 
-                {noteMessage ? (
-                  <p className="mt-3 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-3 text-sm text-yellow-300">
-                    {noteMessage}
-                  </p>
-                ) : null}
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={saveTrainerNote}
-                    disabled={savingNote}
-                    className="rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {savingNote ? "Saving Note..." : "Save Note"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={skipTrainerNote}
-                    disabled={savingNote}
-                    className="rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Skip Note
-                  </button>
-                </div>
+                <p className="mt-2 text-sm font-normal leading-6 text-gray-300">
+                  Use this only when the package session numbers need manual
+                  correction. Fix Remaining changes the current balance. Fix
+                  Total changes the full package size while keeping used
+                  sessions unchanged.
+                </p>
               </div>
-            ) : null}
-          </div>
 
-          <div className="space-y-5">
-            <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-2xl backdrop-blur">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.25em] text-yellow-400">
-                    Coach Mission
-                  </p>
-                  <h2 className="mt-2 text-2xl font-black text-white">
-                    Today&apos;s Focus
-                  </h2>
-                </div>
-                <span className="rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-bold uppercase tracking-wide text-yellow-300">
-                  Impact
+              <div className="rounded-2xl border border-cyan-400/25 bg-black/40 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                  Current
+                </p>
+                <p className="mt-1 text-sm font-semibold text-cyan-300">
+                  Total {activePackageNumbers.totalSessions} / Used{" "}
+                  {activePackageNumbers.usedSessions} / Left{" "}
+                  {activePackageNumbers.remainingSessions}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_2.5fr]">
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                  Session Number
                 </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={sessionAdjustValue}
+                  onChange={(event) =>
+                    setSessionAdjustValue(event.target.value)
+                  }
+                  disabled={!allowPackageEdit}
+                  placeholder="Example: 5"
+                  className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-cyan-300 disabled:opacity-70"
+                />
+              </label>
+
+              {allowPackageEdit && (
+                <div className="grid gap-3 md:grid-cols-4">
+                  <button
+                    type="button"
+                    onClick={() => adjustClientSessions("add")}
+                    disabled={sessionAdjustAction !== null}
+                    className="rounded-2xl bg-green-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
+                  >
+                    {sessionAdjustAction === "add"
+                      ? "Adding..."
+                      : "Add Sessions"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => adjustClientSessions("subtract")}
+                    disabled={sessionAdjustAction !== null}
+                    className="rounded-2xl bg-red-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-red-300 disabled:opacity-60"
+                  >
+                    {sessionAdjustAction === "subtract"
+                      ? "Subtracting..."
+                      : "Subtract Sessions"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => adjustClientSessions("fixRemaining")}
+                    disabled={sessionAdjustAction !== null}
+                    className="rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-cyan-300 disabled:opacity-60"
+                  >
+                    {sessionAdjustAction === "fixRemaining"
+                      ? "Fixing..."
+                      : "Fix Remaining"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => adjustClientSessions("fixTotal")}
+                    disabled={sessionAdjustAction !== null}
+                    className="rounded-2xl bg-purple-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-purple-300 disabled:opacity-60"
+                  >
+                    {sessionAdjustAction === "fixTotal"
+                      ? "Fixing..."
+                      : "Fix Total"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <div className="rounded-2xl border border-green-400/20 bg-green-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                  Add Sessions
+                </p>
+                <p className="mt-2 text-sm text-gray-300">
+                  Adds to total and remaining. Used sessions stay the same.
+                </p>
               </div>
 
-              <div className="mt-5 space-y-3">
-                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                  <p className="text-sm font-semibold text-white">
-                    1. Scan every completed session correctly.
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-500">
-                    Clean records protect client trust and your own performance.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                  <p className="text-sm font-semibold text-white">
-                    2. Add notes after meaningful sessions.
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-500">
-                    Better notes create better renewals and better outcomes.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                  <p className="text-sm font-semibold text-white">
-                    3. Watch low-session clients.
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-500">
-                    Renew conversations should start before the package ends.
-                  </p>
-                </div>
+              <div className="rounded-2xl border border-red-400/20 bg-red-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                  Subtract Sessions
+                </p>
+                <p className="mt-2 text-sm text-gray-300">
+                  Reduces remaining and increases used sessions.
+                </p>
               </div>
-            </section>
 
-            <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-2xl backdrop-blur">
-              <h2 className="text-2xl font-black text-white">Profile</h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Keep your staff profile clean for clients and admin records.
-              </p>
+              <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                  Fix Remaining
+                </p>
+                <p className="mt-2 text-sm text-gray-300">
+                  Sets exact remaining. Total stays the same.
+                </p>
+              </div>
 
-              <form onSubmit={saveProfile} className="mt-5 space-y-3">
-                <input
-                  value={editName}
-                  onChange={(event) => setEditName(event.target.value)}
-                  placeholder="Full name"
-                  className="w-full rounded-2xl border border-yellow-500/20 bg-black/60 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
-                <input
-                  value={editEmail}
-                  onChange={(event) => setEditEmail(event.target.value)}
-                  type="email"
-                  placeholder="Email"
-                  className="w-full rounded-2xl border border-yellow-500/20 bg-black/60 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
-                <input
-                  value={editPhone}
-                  onChange={(event) => setEditPhone(event.target.value)}
-                  placeholder="Phone number"
-                  className="w-full rounded-2xl border border-yellow-500/20 bg-black/60 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
-                <input
-                  value={editPassword}
-                  onChange={(event) => setEditPassword(event.target.value)}
-                  type="password"
-                  minLength={6}
-                  placeholder="New password optional"
-                  className="w-full rounded-2xl border border-yellow-500/20 bg-black/60 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
+              <div className="rounded-2xl border border-purple-400/20 bg-purple-400/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-purple-300">
+                  Fix Total
+                </p>
+                <p className="mt-2 text-sm text-gray-300">
+                  Sets exact total. Remaining becomes total minus used.
+                </p>
+              </div>
+            </div>
+          </section>
 
+          <section
+            id="package-renew-section"
+            className={`mb-6 rounded-[2rem] border p-6 shadow-2xl backdrop-blur ${
+              renewPackageMode
+                ? "border-green-400/60 bg-green-400/10"
+                : "border-yellow-500/30 bg-white/[0.07]"
+            }`}
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                  Package Management
+                </p>
+
+                <h2 className="mt-2 text-2xl font-semibold">
+                  Renew / Add Sessions
+                </h2>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Renew package adds sessions on top of the client&apos;s
+                  current remaining sessions. It keeps used sessions the same.
+                </p>
+              </div>
+
+              {isAdmin && (
                 <button
-                  disabled={savingProfile}
-                  className="w-full rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  onClick={() => setRenewPackageMode(true)}
+                  className="rounded-xl bg-green-400 px-4 py-2 text-xs font-semibold uppercase text-black transition hover:bg-green-300"
                 >
-                  {savingProfile ? "Saving..." : "Save Profile"}
+                  Renew Package
                 </button>
+              )}
+            </div>
+
+            <div className="mt-5 grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
+              <form
+                onSubmit={saveUploadedPurchaseType}
+                className="rounded-3xl border border-yellow-400/25 bg-black/40 p-5"
+              >
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-300">
+                  From Uploaded Data
+                </p>
+
+                <h3 className="mt-2 text-xl font-semibold text-white">
+                  Save As New / Renew
+                </h3>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Use this to mark the uploaded purchase record as New or Renew.
+                  This does not add sessions.
+                </p>
+
+                <label className="mt-5 block">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-yellow-300">
+                    Uploaded Purchase Type
+                  </span>
+
+                  <select
+                    value={uploadedPurchaseType}
+                    onChange={(event) =>
+                      setUploadedPurchaseType(event.target.value)
+                    }
+                    disabled={!allowPackageEdit}
+                    className="w-full rounded-2xl border border-yellow-400 bg-white px-4 py-3 text-sm font-normal text-black outline-none focus:border-yellow-300 disabled:opacity-70"
+                  >
+                    <option value="" className="bg-white text-black">
+                      Select New or Renew
+                    </option>
+                    <option value="new" className="bg-white text-black">
+                      New
+                    </option>
+                    <option value="renew" className="bg-white text-black">
+                      Renew
+                    </option>
+                  </select>
+                </label>
+
+                {allowPackageEdit && (
+                  <button
+                    type="submit"
+                    disabled={savingUploadedPurchaseType}
+                    className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                  >
+                    {savingUploadedPurchaseType
+                      ? "Saving..."
+                      : "Save Uploaded Type"}
+                  </button>
+                )}
               </form>
 
-              {profileMessage ? (
-                <p className="mt-4 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-3 text-sm text-yellow-300">
-                  {profileMessage}
+              <form
+                onSubmit={saveNewRenewPackage}
+                className="rounded-3xl border border-green-400/25 bg-black/40 p-5"
+              >
+                <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                  Renew Package
                 </p>
-              ) : null}
-            </section>
-          </div>
-        </section>
 
-        <section className="fade-up rounded-[2rem] border border-yellow-500/20 bg-white/[0.04] p-5 shadow-2xl backdrop-blur md:p-6">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.25em] text-yellow-400">
-                Recent Wins
-              </p>
-              <h2 className="mt-2 text-2xl font-black text-white">
-                Recent Session History
-              </h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Use this as your coaching memory. Every note makes the next
-                session better.
-              </p>
+                <h3 className="mt-2 text-xl font-semibold text-white">
+                  Add Sessions to Current Package
+                </h3>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  This adds sessions to the current package and records a renew
+                  purchase.
+                </p>
+
+                <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Package Name
+                    </span>
+                    <input
+                      value={packageName}
+                      onChange={(event) => setPackageName(event.target.value)}
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                      placeholder="Example: 10 Session Package"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-green-300">
+                      Sessions to Add
+                    </span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={packageTotalSessions}
+                      onChange={(event) =>
+                        setPackageTotalSessions(event.target.value)
+                      }
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-green-400/50 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-green-300 disabled:opacity-70"
+                      placeholder="Example: 10"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Package Value
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={packageValue}
+                      onChange={(event) => setPackageValue(event.target.value)}
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Amount Paid
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={packageAmountPaid}
+                      onChange={(event) =>
+                        setPackageAmountPaid(event.target.value)
+                      }
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                      placeholder="Leave blank if fully paid"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Start Date
+                    </span>
+                    <input
+                      type="date"
+                      value={packageStartDate}
+                      onChange={(event) =>
+                        setPackageStartDate(event.target.value)
+                      }
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
+                      Expire Date / Debt Deadline
+                    </span>
+                    <input
+                      type="date"
+                      value={packageExpireDate}
+                      onChange={(event) =>
+                        setPackageExpireDate(event.target.value)
+                      }
+                      disabled={!allowPackageEdit}
+                      className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+                </div>
+
+                {allowPackageEdit && (
+                  <button
+                    type="submit"
+                    disabled={savingPackage}
+                    className="mt-5 rounded-2xl bg-green-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:opacity-60"
+                  >
+                    {savingPackage ? "Saving..." : "Add Renew Sessions"}
+                  </button>
+                )}
+              </form>
             </div>
+          </section>
 
-            <Link
-              href="/trainer/clients"
-              className="rounded-2xl border border-yellow-400/60 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-yellow-300 transition hover:bg-yellow-400 hover:text-black"
-            >
-              Open Clients
-            </Link>
-          </div>
-
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
-            {historyLogs.length === 0 ? (
-              <div className="rounded-3xl border border-dashed border-white/15 bg-black/35 p-8 text-center lg:col-span-2">
-                <p className="text-3xl">🏁</p>
-                <p className="mt-3 text-sm font-semibold text-white">
-                  No session history yet.
+          <section
+            id="debt-section"
+            className="mb-6 rounded-[2rem] border border-red-500/30 bg-red-500/10 p-6 shadow-2xl backdrop-blur"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                  Debt Tools
                 </p>
-                <p className="mt-1 text-xs text-zinc-500">
-                  Scan your first client to start today&apos;s momentum.
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  Add Debt / Fix Existing Debt / Add Payment / Complete Debt
+                </h2>
+
+                <p className="mt-2 text-sm font-normal text-gray-300">
+                  Add debt when a client owes money. Use Add Payment when money
+                  is collected. Complete Debt records the full remaining balance
+                  as paid and adds the payment to Revenue.
                 </p>
               </div>
-            ) : (
-              historyLogs.map((log) => {
-                const client = clientMap.get(log.client_id);
 
-                return (
-                  <div
-                    key={log.id}
-                    className="rounded-3xl border border-yellow-500/20 bg-black/45 p-5 transition hover:border-yellow-400/45"
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Active Debt
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-red-300">
+                    {formatMoney(totalClientDebt)}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-green-400/30 bg-green-400/10 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Completed Debt
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-green-300">
+                    {formatMoney(totalCompletedDebt)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-5 xl:grid-cols-[0.95fr_1.45fr]">
+              <form
+                onSubmit={addDebtRecord}
+                className="rounded-3xl border border-red-400/30 bg-black/40 p-5"
+              >
+                <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                  Action 1
+                </p>
+
+                <h3 className="mt-1 text-xl font-semibold text-white">
+                  Add Debt
+                </h3>
+
+                <p className="mt-2 text-sm font-normal text-gray-400">
+                  Creates a new debt record only. This does not add income until
+                  a payment is recorded.
+                </p>
+
+                <div className="mt-5 grid gap-4">
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                      Debt Amount
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newDebtAmount}
+                      onChange={(event) => setNewDebtAmount(event.target.value)}
+                      disabled={!allowDebtEdit}
+                      placeholder="Example: 300"
+                      className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                      Deadline
+                    </span>
+                    <input
+                      type="date"
+                      value={newDebtDeadline}
+                      onChange={(event) => setNewDebtDeadline(event.target.value)}
+                      disabled={!allowDebtEdit}
+                      className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                      Note / Debt Name
+                    </span>
+                    <input
+                      value={newDebtNote}
+                      onChange={(event) => setNewDebtNote(event.target.value)}
+                      disabled={!allowDebtEdit}
+                      placeholder="Example: Old package debt"
+                      className="w-full rounded-2xl border border-red-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                    />
+                  </label>
+                </div>
+
+                {allowDebtEdit && (
+                  <button
+                    type="submit"
+                    disabled={addingDebt}
+                    className="mt-5 w-full rounded-2xl bg-red-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-red-300 disabled:opacity-60"
                   >
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-lg font-black text-white">
-                            {client?.full_name || "Unknown Client"}
-                          </p>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${
-                              log.session_type === "nutrition_follow_up"
-                                ? "bg-emerald-400/15 text-emerald-300"
-                                : "bg-yellow-400/15 text-yellow-300"
-                            }`}
-                          >
-                            {log.session_type === "nutrition_follow_up"
-                              ? "Nutrition Follow-up"
-                              : "Training"}
-                          </span>
+                    {addingDebt ? "Adding..." : "Add Debt"}
+                  </button>
+                )}
+              </form>
+
+              <div className="rounded-3xl border border-red-400/30 bg-black/45 p-5">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                      Actions 2 / 3 / 4
+                    </p>
+                    <h3 className="mt-1 text-lg font-semibold text-white">
+                      Active Debt Records
+                    </h3>
+                    <p className="mt-1 text-sm text-gray-400">
+                      Fix existing debt for corrections. Add payment or complete
+                      debt when money is actually collected.
+                    </p>
+                  </div>
+
+                  <span
+                    className={`w-fit rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-wide ${debtNotice.className}`}
+                  >
+                    {debtNotice.label}
+                  </span>
+                </div>
+
+                {activeDebtPurchases.length === 0 ? (
+                  <p className="mt-4 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
+                    No active debt records.
+                  </p>
+                ) : (
+                  <div className="mt-4 space-y-4">
+                    {activeDebtPurchases.map((purchase) => {
+                      const currentBalance = Number(purchase.balance_due || 0);
+                      const paymentAmountValue =
+                        debtPaymentAmounts[purchase.id] ?? String(currentBalance);
+                      const paymentDateValue =
+                        debtPaymentDates[purchase.id] || getTodayInputDate();
+                      const isSelectedForFix = selectedDebtFixId === purchase.id;
+
+                      return (
+                        <div
+                          key={purchase.id}
+                          className={`rounded-3xl border p-5 ${
+                            isSelectedForFix
+                              ? "border-yellow-400/60 bg-yellow-400/10"
+                              : "border-red-400/25 bg-red-400/10"
+                          }`}
+                        >
+                          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr_0.8fr]">
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+                                Debt Record
+                              </p>
+
+                              <h4 className="mt-2 text-xl font-semibold text-white">
+                                {purchase.plan_name || "Manual Debt"}
+                              </h4>
+
+                              <p className="mt-2 text-xs text-gray-400">
+                                Added {formatDate(purchase.created_at)}
+                              </p>
+
+                              <p className="mt-2 text-sm text-gray-300">
+                                Deadline:{" "}
+                                <span className="text-yellow-300">
+                                  {formatDate(purchase.debt_deadline)}
+                                </span>
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-red-400/20 bg-black/40 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                                Current Debt
+                              </p>
+                              <p className="mt-2 text-3xl font-semibold text-red-300">
+                                {formatMoney(currentBalance)}
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-green-400/20 bg-green-400/10 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Paid So Far
+                              </p>
+                              <p className="mt-2 text-3xl font-semibold text-green-300">
+                                {formatMoney(purchase.amount_paid)}
+                              </p>
+                            </div>
+                          </div>
+
+                          {allowDebtEdit && (
+                            <div className="mt-5 grid gap-4 rounded-3xl border border-white/10 bg-black/45 p-5 lg:grid-cols-[1fr_1fr_auto_auto_auto]">
+                              <label>
+                                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                  Payment Amount
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={currentBalance}
+                                  step="0.01"
+                                  value={paymentAmountValue}
+                                  onChange={(event) =>
+                                    setDebtPaymentAmounts((current) => ({
+                                      ...current,
+                                      [purchase.id]: event.target.value,
+                                    }))
+                                  }
+                                  className="w-full rounded-2xl border border-green-400/35 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-green-300"
+                                />
+                              </label>
+
+                              <label>
+                                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                  Payment Date
+                                </span>
+                                <input
+                                  type="date"
+                                  value={paymentDateValue}
+                                  onChange={(event) =>
+                                    setDebtPaymentDates((current) => ({
+                                      ...current,
+                                      [purchase.id]: event.target.value,
+                                    }))
+                                  }
+                                  className="w-full rounded-2xl border border-green-400/35 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-green-300"
+                                />
+                              </label>
+
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() => completeDebtRecord(purchase)}
+                                  disabled={completingDebtId === purchase.id}
+                                  className="w-full rounded-2xl bg-green-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-green-300 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {completingDebtId === purchase.id
+                                    ? "Recording..."
+                                    : "Add Payment"}
+                                </button>
+                              </div>
+
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    completeDebtRecord(purchase, currentBalance)
+                                  }
+                                  disabled={completingDebtId === purchase.id}
+                                  className="w-full rounded-2xl bg-yellow-400 px-4 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  Complete Debt
+                                </button>
+                              </div>
+
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() => startFixExistingDebt(purchase)}
+                                  className="w-full rounded-2xl border border-cyan-400 px-4 py-3 text-sm font-semibold uppercase text-cyan-300 transition hover:bg-cyan-400 hover:text-black"
+                                >
+                                  Fix Existing
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <p className="mt-1 text-xs text-zinc-500">
-                          {client?.email || "No client email"}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <form
+              id="debt-fix-section"
+              onSubmit={saveDebtDetails}
+              className="mt-5 rounded-3xl border border-cyan-400/25 bg-cyan-400/10 p-5"
+            >
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">
+                    Action 5
+                  </p>
+                  <h3 className="mt-1 text-lg font-semibold text-white">
+                    Fix Existing Debt
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-gray-300">
+                    Select a debt record above, then correct the amount or
+                    deadline here. Lowering the amount can be counted as a debt
+                    payment and added to Revenue.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-cyan-400/25 bg-black/40 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    Selected
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-cyan-300">
+                    {selectedDebtFixPurchase?.plan_name || "First active debt"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-3">
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    New Debt Amount
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={debtAmount}
+                    onChange={(event) => setDebtAmount(event.target.value)}
+                    disabled={!allowDebtEdit}
+                    placeholder="0"
+                    className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    New Deadline
+                  </span>
+                  <input
+                    type="date"
+                    value={debtDeadline}
+                    onChange={(event) => setDebtDeadline(event.target.value)}
+                    disabled={!allowDebtEdit}
+                    className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-70"
+                  />
+                </label>
+
+                <div className="rounded-2xl border border-red-400/30 bg-black/40 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-300">
+                    Current Deadline
+                  </p>
+                  <p className="mt-2 text-sm font-normal text-white">
+                    {formatDate(selectedDebtFixPurchase?.debt_deadline || null)}
+                  </p>
+                  <p className="mt-2 text-xs font-normal text-gray-400">
+                    Active debt notices appear when due within 7 days or overdue.
+                  </p>
+                </div>
+              </div>
+
+              {allowDebtEdit && (
+                <div className="mt-5 rounded-3xl border border-yellow-400/25 bg-yellow-400/10 p-5">
+                  <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr_0.9fr]">
+                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-black/40 p-4">
+                      <input
+                        type="checkbox"
+                        checked={debtFixAddsRevenue}
+                        onChange={(event) =>
+                          setDebtFixAddsRevenue(event.target.checked)
+                        }
+                        className="mt-1 h-4 w-4 accent-yellow-400"
+                      />
+
+                      <span>
+                        <span className="block text-xs font-semibold uppercase tracking-widest text-yellow-300">
+                          Add Debt Reduction to Revenue
+                        </span>
+                        <span className="mt-2 block text-sm leading-6 text-gray-300">
+                          When the new debt amount is lower than the current
+                          debt, the difference will be recorded as income.
+                        </span>
+                      </span>
+                    </label>
+
+                    <label>
+                      <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                        Revenue Date
+                      </span>
+                      <input
+                        type="date"
+                        value={debtFixRevenueDate}
+                        onChange={(event) =>
+                          setDebtFixRevenueDate(event.target.value)
+                        }
+                        disabled={!debtFixAddsRevenue}
+                        className="w-full rounded-2xl border border-yellow-400/35 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-50"
+                      />
+                    </label>
+
+                    <div className="rounded-2xl border border-green-400/25 bg-green-400/10 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                        Revenue Preview
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-green-300">
+                        {formatMoney(
+                          debtFixWillAddRevenue ? debtFixRevenueAmount : 0,
+                        )}
+                      </p>
+                      <p className="mt-2 text-xs text-gray-400">
+                        Old debt {formatMoney(currentDebtBalanceForFix)} → new
+                        debt{" "}
+                        {formatMoney(
+                          Number.isNaN(nextDebtBalanceForFix)
+                            ? 0
+                            : nextDebtBalanceForFix,
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={savingDebt}
+                    className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
+                  >
+                    {savingDebt
+                      ? "Saving..."
+                      : debtFixWillAddRevenue
+                        ? "Save Debt + Add Revenue"
+                        : "Save Debt Fix"}
+                  </button>
+                </div>
+              )}
+            </form>
+
+            <div className="mt-5 rounded-3xl border border-green-400/20 bg-green-400/10 p-5">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
+                    Debt History
+                  </p>
+                  <h3 className="mt-1 text-lg font-semibold text-white">
+                    Completed Debt Records
+                  </h3>
+                </div>
+
+                <p className="text-sm font-semibold text-green-300">
+                  Total Completed: {formatMoney(totalCompletedDebt)}
+                </p>
+              </div>
+
+              {completedDebtPurchases.length === 0 ? (
+                <p className="mt-3 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-gray-400">
+                  No completed debt records yet.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-2">
+                  {completedDebtPurchases.map((purchase) => (
+                    <div
+                      key={purchase.id}
+                      className="grid gap-3 rounded-2xl border border-green-400/20 bg-black/35 p-4 md:grid-cols-[1fr_auto_auto]"
+                    >
+                      <div>
+                        <p className="font-semibold text-white">
+                          {purchase.plan_name || "Completed Debt"}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-400">
+                          Original deadline {formatDate(purchase.debt_deadline)}
                         </p>
                       </div>
 
                       <div className="text-left md:text-right">
-                        <p className="text-sm font-semibold text-yellow-400">
-                          {formatDateTime(log.created_at)}
+                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                          Paid Amount
                         </p>
-                        <p className="mt-1 text-xs uppercase tracking-widest text-zinc-600">
-                          {log.status}
+                        <p className="mt-1 text-lg font-semibold text-green-300">
+                          {formatMoney(purchase.amount_paid)}
+                        </p>
+                      </div>
+
+                      <div className="text-left md:text-right">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                          Balance
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-green-300">
+                          Complete
                         </p>
                       </div>
                     </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
 
-                    <div className="mt-4 grid gap-3 md:grid-cols-3">
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                          {log.session_type === "nutrition_follow_up"
-                            ? "Training Balance"
-                            : "Remaining"}
-                        </p>
-                        <p className="mt-1 text-xl font-black text-cyan-300">
-                          {log.remaining_after === null
-                            ? "N/A"
-                            : log.remaining_after}
-                        </p>
-                        {log.session_type === "nutrition_follow_up" ? (
-                          <p className="mt-1 text-[10px] text-zinc-500">
-                            unchanged
-                          </p>
-                        ) : null}
-                      </div>
+          {purchaseHistory.length > 0 ? (
+            <section className="mb-6 rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                    Purchase History
+                  </p>
+                  <h2 className="mt-1 text-2xl font-semibold">
+                    New / Renew Purchases Only
+                  </h2>
+                </div>
 
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 md:col-span-2">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                          Result
-                        </p>
-                        <p className="mt-1 text-sm leading-6 text-zinc-300">
-                          {log.message || "Session scanned"}
-                        </p>
-                      </div>
+                <p className="text-sm text-gray-400">
+                  Debt-only records are hidden here and shown in Debt History.
+                </p>
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {purchaseHistory.map((purchase) => (
+                  <div
+                    key={purchase.id}
+                    className="grid gap-3 rounded-2xl border border-white/10 bg-black/40 p-4 md:grid-cols-[1.2fr_0.7fr_0.7fr_0.8fr_0.8fr_0.8fr]"
+                  >
+                    <div>
+                      <p className="font-semibold text-white">
+                        {purchase.plan_name || "Package Purchase"}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-400">
+                        {formatDate(purchase.created_at)}
+                      </p>
                     </div>
 
-                    {log.trainer_note ? (
-                      <div className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4">
-                        <p className="text-xs font-bold uppercase tracking-widest text-yellow-400">
-                          {log.session_type === "nutrition_follow_up"
-                            ? "Nutrition Note"
-                            : "Training Note"}
-                        </p>
-                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
-                          {log.trainer_note}
-                        </p>
-                      </div>
-                    ) : null}
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Type
+                      </p>
+                      <p className="mt-1 text-sm text-yellow-300">
+                        {getPurchaseTypeLabel(purchase.purchase_type)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Sessions
+                      </p>
+                      <p className="mt-1 text-sm text-cyan-300">
+                        {purchase.session_count ?? "-"}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Price
+                      </p>
+                      <p className="mt-1 text-sm text-green-300">
+                        {formatMoney(purchase.price)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Paid
+                      </p>
+                      <p className="mt-1 text-sm text-green-300">
+                        {formatMoney(purchase.amount_paid)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                        Balance
+                      </p>
+                      <p className="mt-1 text-sm text-red-300">
+                        {formatMoney(purchase.balance_due)}
+                      </p>
+                    </div>
                   </div>
-                );
-              })
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                  Session History
+                </p>
+                <h2 className="mt-1 text-2xl font-semibold">Recent Sessions</h2>
+              </div>
+
+              {isAdmin ? (
+                <p className="max-w-xl text-sm leading-6 text-gray-400">
+                  Admin can edit date, staff, status, message, and note. All statuses are shown here so corrected, failed, cancelled, and reversed records remain available for audit.
+                </p>
+              ) : null}
+            </div>
+
+            {sessionHistory.length === 0 ? (
+              <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm font-normal text-gray-400">
+                No session history yet.
+              </p>
+            ) : (
+              <div className="mt-5 space-y-3">
+                {sessionHistory.map((log) => {
+                  const isEditing = editingSessionId === log.id;
+
+                  return (
+                    <div
+                      key={log.id}
+                      className={`rounded-2xl border p-4 ${
+                        isEditing
+                          ? "border-cyan-400/50 bg-cyan-400/10"
+                          : "border-white/10 bg-black/40"
+                      }`}
+                    >
+                      {isEditing ? (
+                        <div>
+                          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <h3 className="text-lg font-semibold text-cyan-300">
+                              Edit Session
+                            </h3>
+                            <p className="text-xs text-gray-400">Session ID: {log.id}</p>
+                          </div>
+
+                          <div className="mt-4 grid gap-4 md:grid-cols-2">
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Date & Time
+                              </span>
+                              <input
+                                type="datetime-local"
+                                value={editSessionDateTime}
+                                onChange={(event) =>
+                                  setEditSessionDateTime(event.target.value)
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300"
+                              />
+                            </label>
+
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Trainer / Nutrition Coach
+                              </span>
+                              <select
+                                value={editSessionTrainerId}
+                                onChange={(event) =>
+                                  setEditSessionTrainerId(event.target.value)
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-white px-4 py-3 text-sm text-black outline-none focus:border-cyan-300"
+                              >
+                                <option value="">Admin / Manual</option>
+                                {salesPeople.map((person) => (
+                                  <option key={person.id} value={person.id}>
+                                    {person.full_name || "Unnamed Staff"}
+                                    {person.role === "nutrition_coach"
+                                      ? " (Nutrition Coach)"
+                                      : " (Trainer)"}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Status
+                              </span>
+                              <select
+                                value={editSessionStatus}
+                                onChange={(event) =>
+                                  setEditSessionStatus(event.target.value)
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-white px-4 py-3 text-sm text-black outline-none focus:border-cyan-300"
+                              >
+                                <option value="success">Completed</option>
+                                <option value="reversed">Reverse Duplicate</option>
+                                <option value="cancelled">Cancelled</option>
+                                <option value="failed">Failed</option>
+                              </select>
+                            </label>
+
+                            <label>
+                              <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                                Message
+                              </span>
+                              <input
+                                value={editSessionMessage}
+                                onChange={(event) =>
+                                  setEditSessionMessage(event.target.value)
+                                }
+                                className="w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300"
+                                placeholder="Optional system message"
+                              />
+                            </label>
+                          </div>
+
+                          <label className="mt-4 block">
+                            <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
+                              Session Note
+                            </span>
+                            <textarea
+                              value={editSessionNote}
+                              onChange={(event) =>
+                                setEditSessionNote(event.target.value)
+                              }
+                              className="min-h-28 w-full rounded-2xl border border-cyan-400/40 bg-black/70 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300"
+                              placeholder="Optional trainer note"
+                            />
+                          </label>
+
+                          <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                            <button
+                              type="button"
+                              onClick={() => saveSessionHistoryEdit(log)}
+                              disabled={savingSessionHistoryId === log.id}
+                              className="rounded-2xl bg-cyan-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-cyan-300 disabled:opacity-60"
+                            >
+                              {savingSessionHistoryId === log.id
+                                ? "Saving..."
+                                : "Save Session"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={cancelEditSessionHistory}
+                              disabled={savingSessionHistoryId === log.id}
+                              className="rounded-2xl border border-white/20 px-5 py-3 text-sm font-semibold uppercase text-white transition hover:bg-white/10 disabled:opacity-60"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div>
+                              <span
+                                className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${getStatusClass(
+                                  log.status,
+                                )}`}
+                              >
+                                {log.status === "success" ? "Completed" : log.status}
+                              </span>
+                              <span className={`ml-2 inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase ${
+                                (log.session_type || "training") === "nutrition_follow_up"
+                                  ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                                  : "border-yellow-400/30 bg-yellow-400/10 text-yellow-300"
+                              }`}>
+                                {(log.session_type || "training") === "nutrition_follow_up"
+                                  ? "Nutrition Follow-up"
+                                  : "Training"}
+                              </span>
+
+                              <p className="mt-2 text-sm text-gray-400">
+                                Staff: {log.trainer_name}
+                              </p>
+                            </div>
+
+                            <div className="flex flex-col items-start gap-3 md:items-end">
+                              <p className="text-sm text-gray-400">
+                                {formatDateTime(log.created_at)}
+                              </p>
+
+                              {isAdmin ? (
+                                <button
+                                  type="button"
+                                  onClick={() => startEditSessionHistory(log)}
+                                  className="rounded-xl border border-cyan-400 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-cyan-300 transition hover:bg-cyan-400 hover:text-black"
+                                >
+                                  Edit Session
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <p className="mt-3 text-sm text-gray-300">
+                            Remaining After: {" "}
+                            <span className="font-semibold text-yellow-400">
+                              {log.remaining_after ?? "-"}
+                            </span>
+                          </p>
+
+                          {log.message ? (
+                            <p className="mt-2 text-sm text-gray-400">
+                              {log.message}
+                            </p>
+                          ) : null}
+
+                          {log.trainer_note ? (
+                            <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
+                              <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
+                                Session Note
+                              </p>
+                              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
+                                {log.trainer_note}
+                              </p>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
     </main>
+  );
+}
+
+export default function AdminClientDetailPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-black p-6 text-white">
+          <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
+            <p className="text-sm font-semibold text-yellow-400">
+              Loading client detail...
+            </p>
+          </div>
+        </main>
+      }
+    >
+      <AdminClientDetailPageContent />
+    </Suspense>
   );
 }
