@@ -1007,9 +1007,9 @@ export default function TrainerScanPage() {
               }`}
             >
               {result.message ||
-                scanMode === "nutrition_follow_up"
+                (scanMode === "nutrition_follow_up"
                   ? "Nutrition mode selected. Scan the client QR code. Training sessions will not be deducted."
-                  : "Training mode selected. Scan the client QR code to deduct one training session."}
+                  : "Training mode selected. Scan the client QR code to deduct one training session.")}
             </div>
 
             {showNoteBox ? (
