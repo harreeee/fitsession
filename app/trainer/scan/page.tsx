@@ -1,12 +1,12 @@
 "use client";
 
 import { Suspense, useEffect, useState, type FormEvent } from "react";
-import { supabase } from "../../../../lib/supabaseClient";
+import { supabase } from "../../../lib/supabaseClient";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import QRCode from "qrcode";
 
-import { getCurrentUserRole } from "../../../../lib/checkUserRole";
+import { getCurrentUserRole } from "../../../lib/checkUserRole";
 import {
   canEditClientBasicInfo,
   canEditDebt,
@@ -15,7 +15,7 @@ import {
   isAdminOrManager,
   normalizeRole,
   type AppRole,
-} from "../../../../lib/role";
+} from "../../../lib/role";
 
 type ClientDetail = {
   id: string;
