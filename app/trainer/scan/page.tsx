@@ -16,6 +16,30 @@ type SessionType = "training" | "nutrition_follow_up";
 
 type SessionStatus = "success" | "no_show" | "late_cancel";
 
+type LeadStatus =
+  | "new"
+  | "contacted"
+  | "demo_booked"
+  | "demo_completed"
+  | "no_show"
+  | "interested"
+  | "follow_up"
+  | "converted"
+  | "lost";
+
+type AssignedDemo = {
+  id: string;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  source_type: string | null;
+  source_detail: string | null;
+  status: LeadStatus;
+  demo_at: string | null;
+  notes: string | null;
+  demo_result_note: string | null;
+};
+
 type TrainerHistoryLog = {
   id: string;
   client_id: string;
@@ -222,6 +246,33 @@ function getResultClass(type: ScanResult["type"]) {
   return "border-yellow-400/25 bg-yellow-400/10 text-yellow-100";
 }
 
+function formatDemoDateTime(value: string | null) {
+  if (!value) return "Not scheduled";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Invalid date";
+  return date.toLocaleString("en-CA", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function getLeadSourceLabel(source: string | null, detail: string | null) {
+  const labels: Record<string, string> = {
+    walk_in: "Walk-in",
+    referral: "Referral",
+    facebook: "Facebook",
+    instagram: "Instagram",
+    google: "Google",
+    other_marketing: "Other Marketing",
+    other: "Other",
+  };
+  const base = labels[source || ""] || source || "Unknown source";
+  return detail ? `${base} — ${detail}` : base;
+}
+
 export default function TrainerScanPage() {
   const router = useRouter();
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -274,10 +325,81 @@ export default function TrainerScanPage() {
   const [savingNote, setSavingNote] = useState(false);
   const [noteMessage, setNoteMessage] = useState("");
 
+  const [upcomingDemos, setUpcomingDemos] = useState<AssignedDemo[]>([]);
+  const [loadingDemos, setLoadingDemos] = useState(false);
+  const [updatingDemoId, setUpdatingDemoId] = useState<string | null>(null);
+
   const motivationQuote = useMemo(() => getDailyMotivation(), []);
   const greeting = useMemo(() => getGreeting(), []);
   const performanceLabel = getPerformanceLabel(sessionsToday);
   const performanceMessage = getPerformanceMessage(sessionsToday);
+
+  async function fetchUpcomingDemos(userId: string) {
+    if (!isValidUuid(userId)) return;
+
+    setLoadingDemos(true);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    end.setHours(23, 59, 59, 999);
+
+    const { data, error } = await supabase
+      .from("leads")
+      .select(
+        "id, full_name, email, phone, source_type, source_detail, status, demo_at, notes, demo_result_note",
+      )
+      .eq("assigned_trainer_id", userId)
+      .gte("demo_at", start.toISOString())
+      .lte("demo_at", end.toISOString())
+      .in("status", ["demo_booked", "contacted", "interested", "follow_up"])
+      .order("demo_at", { ascending: true });
+
+    if (error) {
+      console.error("Could not load upcoming demos:", error.message);
+      setUpcomingDemos([]);
+    } else {
+      setUpcomingDemos((data || []) as AssignedDemo[]);
+    }
+    setLoadingDemos(false);
+  }
+
+  async function updateDemoStatus(
+    lead: AssignedDemo,
+    nextStatus: LeadStatus,
+  ) {
+    if (!trainerId) return;
+
+    const note = window.prompt(
+      nextStatus === "demo_completed"
+        ? "Add a short demo result note (optional):"
+        : nextStatus === "no_show"
+          ? "Add a no-show note (optional):"
+          : "Add a follow-up note (optional):",
+      lead.demo_result_note || "",
+    );
+
+    if (note === null) return;
+
+    setUpdatingDemoId(lead.id);
+    const { error } = await supabase
+      .from("leads")
+      .update({
+        status: nextStatus,
+        demo_result_note: note.trim() || null,
+      })
+      .eq("id", lead.id)
+      .eq("assigned_trainer_id", trainerId);
+
+    if (error) {
+      alert(error.message);
+      setUpdatingDemoId(null);
+      return;
+    }
+
+    await fetchUpcomingDemos(trainerId);
+    setUpdatingDemoId(null);
+  }
 
   async function handleLogout() {
     await stopScanner();
@@ -815,7 +937,7 @@ export default function TrainerScanPage() {
       setEditEmail(email);
       setEditPhone(phone);
 
-      await fetchTrainerStats(user.id);
+      await Promise.all([fetchTrainerStats(user.id), fetchUpcomingDemos(user.id)]);
 
       if (alive) setCheckingRole(false);
     }
@@ -1041,6 +1163,103 @@ export default function TrainerScanPage() {
           >
             Logout
           </button>
+        </section>
+
+        <section className="fade-up mb-6 rounded-[2rem] border border-cyan-400/25 bg-cyan-400/10 p-5 shadow-2xl md:p-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-cyan-300">
+                Upcoming Demos
+              </p>
+              <h2 className="mt-2 text-2xl font-black text-white md:text-3xl">
+                Assigned Potential Clients — Next 7 Days
+              </h2>
+              <p className="mt-2 text-sm text-zinc-400">
+                These demos are assigned to your staff account. Update the result after the appointment.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => trainerId && fetchUpcomingDemos(trainerId)}
+              disabled={loadingDemos}
+              className="rounded-2xl border border-cyan-300/50 px-4 py-3 text-xs font-black uppercase tracking-wide text-cyan-300 transition hover:bg-cyan-300 hover:text-black disabled:opacity-60"
+            >
+              {loadingDemos ? "Loading..." : "Refresh Demos"}
+            </button>
+          </div>
+
+          {loadingDemos ? (
+            <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-cyan-300">
+              Loading upcoming demos...
+            </p>
+          ) : upcomingDemos.length === 0 ? (
+            <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-zinc-400">
+              No demos assigned in the next seven days.
+            </p>
+          ) : (
+            <div className="mt-5 grid gap-4 xl:grid-cols-2">
+              {upcomingDemos.map((demo) => (
+                <article
+                  key={demo.id}
+                  className="rounded-3xl border border-cyan-300/20 bg-black/45 p-5"
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-widest text-cyan-300">
+                        {formatDemoDateTime(demo.demo_at)}
+                      </p>
+                      <h3 className="mt-2 text-xl font-black text-white">
+                        {demo.full_name}
+                      </h3>
+                      <p className="mt-1 text-sm text-zinc-400">
+                        {demo.phone || demo.email || "No contact details"}
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-yellow-300">
+                        {getLeadSourceLabel(demo.source_type, demo.source_detail)}
+                      </p>
+                    </div>
+                    <span className="w-fit rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-black uppercase text-cyan-300">
+                      {demo.status.replaceAll("_", " ")}
+                    </span>
+                  </div>
+
+                  {demo.notes ? (
+                    <p className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-sm leading-6 text-zinc-300">
+                      {demo.notes}
+                    </p>
+                  ) : null}
+
+                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                    <button
+                      type="button"
+                      onClick={() => updateDemoStatus(demo, "demo_completed")}
+                      disabled={updatingDemoId === demo.id}
+                      className="rounded-xl bg-green-400 px-3 py-2 text-xs font-black uppercase text-black disabled:opacity-60"
+                    >
+                      Completed
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateDemoStatus(demo, "no_show")}
+                      disabled={updatingDemoId === demo.id}
+                      className="rounded-xl bg-red-400 px-3 py-2 text-xs font-black uppercase text-black disabled:opacity-60"
+                    >
+                      No-show
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateDemoStatus(demo, "follow_up")}
+                      disabled={updatingDemoId === demo.id}
+                      className="rounded-xl border border-yellow-400/50 bg-yellow-400/10 px-3 py-2 text-xs font-black uppercase text-yellow-300 disabled:opacity-60"
+                    >
+                      Follow-up
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="fade-up mb-6 grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">

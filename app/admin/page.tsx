@@ -494,6 +494,13 @@ export default function AdminDashboardPage() {
       adminOnly: false,
     },
     {
+      href: "/admin/leads",
+      label: "Leads & Demos",
+      icon: "🎯",
+      primary: true,
+      adminOnly: false,
+    },
+    {
       href: "/admin/clients",
       label: isManager ? "View Clients" : "Clients",
       icon: "👥",
@@ -639,6 +646,13 @@ export default function AdminDashboardPage() {
             ) : null}
 
             <Link
+              href="/admin/leads"
+              className="hidden rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-xs font-bold text-cyan-300 transition hover:bg-cyan-400 hover:text-black sm:inline-block"
+            >
+              Leads & Demos
+            </Link>
+
+            <Link
               href="/admin/clients"
               className="rounded-xl bg-yellow-400 px-4 py-2 text-xs font-bold text-black transition hover:bg-yellow-300 active:scale-[0.97]"
             >
@@ -722,6 +736,28 @@ export default function AdminDashboardPage() {
                 </div>
               </>
             ) : null}
+          </div>
+        </section>
+
+        <section className="fu fu2 mb-6 rounded-3xl border border-cyan-400/20 bg-cyan-400/[0.07] p-5">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-cyan-300/80">
+                Sales Pipeline
+              </p>
+              <h2 className="mt-1 text-xl font-bold text-white">
+                Leads, Potential Clients & Upcoming Demos
+              </h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Add walk-ins and marketing leads, schedule demos, assign PTs, and convert qualified leads into clients.
+              </p>
+            </div>
+            <Link
+              href="/admin/leads"
+              className="shrink-0 rounded-xl bg-cyan-400 px-4 py-2.5 text-xs font-bold text-black transition hover:bg-cyan-300 active:scale-[0.97]"
+            >
+              Open Leads Page →
+            </Link>
           </div>
         </section>
 
