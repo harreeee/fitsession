@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
+import AdminAiAssistant from "./AdminAiAssistant";
 
 type AdminRole = "admin" | "manager";
 type ClientRow = {
@@ -501,6 +502,13 @@ export default function AdminDashboardPage() {
       adminOnly: false,
     },
     {
+      href: "/admin/ai/clients-summary",
+      label: "AI Client Review",
+      icon: "✨",
+      primary: true,
+      adminOnly: false,
+    },
+    {
       href: "/admin/clients",
       label: isManager ? "View Clients" : "Clients",
       icon: "👥",
@@ -653,6 +661,13 @@ export default function AdminDashboardPage() {
             </Link>
 
             <Link
+              href="/admin/ai/clients-summary"
+              className="hidden rounded-xl border border-violet-400/30 bg-violet-400/10 px-4 py-2 text-xs font-bold text-violet-300 transition hover:bg-violet-400 hover:text-black lg:inline-block"
+            >
+              AI Client Review
+            </Link>
+
+            <Link
               href="/admin/clients"
               className="rounded-xl bg-yellow-400 px-4 py-2 text-xs font-bold text-black transition hover:bg-yellow-300 active:scale-[0.97]"
             >
@@ -757,6 +772,28 @@ export default function AdminDashboardPage() {
               className="shrink-0 rounded-xl bg-cyan-400 px-4 py-2.5 text-xs font-bold text-black transition hover:bg-cyan-300 active:scale-[0.97]"
             >
               Open Leads Page →
+            </Link>
+          </div>
+        </section>
+
+        <section className="fu fu2 mb-6 rounded-3xl border border-violet-400/20 bg-violet-400/[0.07] p-5">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-violet-300/80">
+                Harry 
+              </p>
+              <h2 className="mt-1 text-xl font-bold text-white">
+                Review Progress Across All Clients
+              </h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Summarize session notes, attendance, low-session clients, and documented concerns in one management view.
+              </p>
+            </div>
+            <Link
+              href="/admin/ai/clients-summary"
+              className="shrink-0 rounded-xl bg-violet-400 px-4 py-2.5 text-xs font-bold text-black transition hover:bg-violet-300 active:scale-[0.97]"
+            >
+              Open AI Review →
             </Link>
           </div>
         </section>
@@ -1184,6 +1221,7 @@ export default function AdminDashboardPage() {
           </>
         )}
       </div>
+      <AdminAiAssistant />
     </main>
   );
 }

@@ -12,6 +12,7 @@
     "ios": "npm run cap:sync && npx cap open ios"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@capacitor/android": "^8.4.1",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
@@ -19,6 +20,7 @@
     "@supabase/supabase-js": "^2.108.1",
     "html5-qrcode": "^2.3.8",
     "next": "16.2.9",
+    "openai": "^7.4.0",
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",

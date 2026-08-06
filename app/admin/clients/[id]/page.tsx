@@ -5,6 +5,7 @@ import { supabase } from "../../../../lib/supabaseClient";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import QRCode from "qrcode";
+import ClientAiSummary from "./ClientAiSummary";
 
 import { getCurrentUserRole } from "../../../../lib/checkUserRole";
 import {
@@ -65,9 +66,12 @@ type ClientPurchase = {
   created_at: string | null;
 };
 
+type SessionType = "training" | "nutrition_follow_up";
+
 type SessionHistory = {
   id: string;
   trainer_id: string | null;
+  session_type: SessionType | null;
   status: string;
   message: string | null;
   trainer_note: string | null;
@@ -442,7 +446,7 @@ function AdminClientDetailPageContent() {
     const { data: historyData, error: historyError } = await supabase
       .from("session_history")
       .select(
-        "id, trainer_id, status, message, trainer_note, remaining_after, created_at",
+        "id, trainer_id, session_type, status, message, trainer_note, remaining_after, created_at",
       )
       .eq("client_id", clientId)
       .order("created_at", { ascending: false })
@@ -1510,16 +1514,22 @@ function AdminClientDetailPageContent() {
     }
 
     const currentPackage = packages[0] || null;
-    const oldCompleted = log.status === "success";
-    const nextCompleted = editSessionStatus === "success";
-    const statusChangesSessionBalance = oldCompleted !== nextCompleted;
+    const sessionType: SessionType = log.session_type || "training";
+    const isTrainingSession = sessionType === "training";
+    const oldCompleted = log.status === "success" || log.status === "completed";
+    const nextCompleted = editSessionStatus === "success" || editSessionStatus === "completed";
+
+    // Only training sessions affect the training package balance.
+    // A failed/cancelled/reversed nutrition follow-up must never refund or deduct a training session.
+    const statusChangesSessionBalance =
+      isTrainingSession && oldCompleted !== nextCompleted;
 
     let previousPackageNumbers: ReturnType<typeof getPackageNumbers> | null = null;
     let nextRemainingAfter = log.remaining_after;
 
     if (statusChangesSessionBalance) {
       if (!currentPackage) {
-        alert("No active package was found. The session status cannot be changed safely.");
+        alert("No active training package was found. The training session status cannot be changed safely.");
         return;
       }
 
@@ -1607,11 +1617,15 @@ function AdminClientDetailPageContent() {
       return;
     }
 
-    alert(
-      editSessionStatus === "success"
-        ? "Session history updated."
-        : "Session corrected. Package balance was updated and the record remains visible for audit.",
-    );
+    const balanceMessage = isTrainingSession
+      ? oldCompleted && !nextCompleted
+        ? " Training session returned to the client."
+        : !oldCompleted && nextCompleted
+          ? " One training session was deducted."
+          : " Training package balance was unchanged."
+      : " Nutrition follow-up does not affect the training package balance.";
+
+    alert(`Session history updated.${balanceMessage}`);
     cancelEditSessionHistory();
     await fetchClientDetail();
     setSavingSessionHistoryId(null);
@@ -1940,6 +1954,11 @@ function AdminClientDetailPageContent() {
               </div>
             </div>
           </section>
+
+          <ClientAiSummary
+            clientId={client.id}
+            clientName={client.full_name}
+          />
 
           <section
             id="sales-person-section"
@@ -3445,6 +3464,15 @@ function AdminClientDetailPageContent() {
                                 )}`}
                               >
                                 {log.status === "success" ? "Completed" : log.status}
+                              </span>
+                              <span className={`ml-2 inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase ${
+                                (log.session_type || "training") === "nutrition_follow_up"
+                                  ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                                  : "border-yellow-400/30 bg-yellow-400/10 text-yellow-300"
+                              }`}>
+                                {(log.session_type || "training") === "nutrition_follow_up"
+                                  ? "Nutrition Follow-up"
+                                  : "Training"}
                               </span>
 
                               <p className="mt-2 text-sm text-gray-400">
