@@ -1,6 +1,7 @@
 export type AppRole =
   | "admin"
   | "manager"
+  | "marketing_manager"
   | "trainer"
   | "client"
   | "nutrition_coach";
@@ -11,6 +12,7 @@ export function normalizeRole(role: string | null | undefined): AppRole | null {
   if (
     role === "admin" ||
     role === "manager" ||
+    role === "marketing_manager" ||
     role === "trainer" ||
     role === "client" ||
     role === "nutrition_coach"
@@ -27,6 +29,8 @@ export function getRoleDisplayName(role: AppRoleValue): string {
       return "Admin";
     case "manager":
       return "Manager";
+    case "marketing_manager":
+      return "Marketing Manager";
     case "trainer":
       return "Trainer";
     case "nutrition_coach":
@@ -44,6 +48,8 @@ export function getDashboardPathForRole(role: AppRoleValue): string {
       return "/admin";
     case "manager":
       return "/admin";
+    case "marketing_manager":
+      return "/admin/marketing";
     case "trainer":
       return "/trainer/scan";
     case "nutrition_coach":
@@ -71,6 +77,10 @@ export function isManager(role: AppRoleValue): boolean {
   return role === "manager";
 }
 
+export function isMarketingManager(role: AppRoleValue): boolean {
+  return role === "marketing_manager";
+}
+
 export function isAdminOrManager(role: AppRoleValue): boolean {
   return role === "admin" || role === "manager";
 }
@@ -95,6 +105,7 @@ export function isInternalRole(role: AppRoleValue): boolean {
   return (
     role === "admin" ||
     role === "manager" ||
+    role === "marketing_manager" ||
     role === "trainer" ||
     role === "nutrition_coach"
   );
@@ -157,6 +168,42 @@ export function canViewPurchases(role: AppRoleValue): boolean {
 
 export function canViewFinancials(role: AppRoleValue): boolean {
   return role === "admin" || role === "manager";
+}
+
+/**
+ * Marketing permissions
+ */
+
+export function canViewMarketing(role: AppRoleValue): boolean {
+  return (
+    role === "admin" ||
+    role === "manager" ||
+    role === "marketing_manager"
+  );
+}
+
+export function canEditMarketing(role: AppRoleValue): boolean {
+  return role === "admin" || role === "marketing_manager";
+}
+
+export function canDeleteMarketing(role: AppRoleValue): boolean {
+  return role === "admin";
+}
+
+export function canViewLeads(role: AppRoleValue): boolean {
+  return (
+    role === "admin" ||
+    role === "manager" ||
+    role === "marketing_manager"
+  );
+}
+
+export function canEditLeads(role: AppRoleValue): boolean {
+  return role === "admin" || role === "manager";
+}
+
+export function canDeleteLeads(role: AppRoleValue): boolean {
+  return role === "admin";
 }
 
 /**

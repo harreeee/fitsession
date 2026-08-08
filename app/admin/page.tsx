@@ -488,9 +488,9 @@ export default function AdminDashboardPage() {
 
   const navActions = [
     {
-      href: "/admin/reports",
-      label: "Reports",
-      icon: "📊",
+      href: "/admin/clients",
+      label: isManager ? "View Clients" : "Clients",
+      icon: "👥",
       primary: true,
       adminOnly: false,
     },
@@ -502,24 +502,10 @@ export default function AdminDashboardPage() {
       adminOnly: false,
     },
     {
-      href: "/admin/ai/clients-summary",
-      label: "AI Client Review",
-      icon: "✨",
+      href: "/admin/marketing",
+      label: "Marketing",
+      icon: "📣",
       primary: true,
-      adminOnly: false,
-    },
-    {
-      href: "/admin/clients",
-      label: isManager ? "View Clients" : "Clients",
-      icon: "👥",
-      primary: true,
-      adminOnly: false,
-    },
-    {
-      href: "/admin/clients/inactive",
-      label: "Inactive Clients",
-      icon: "🚫",
-      primary: false,
       adminOnly: false,
     },
     {
@@ -530,11 +516,25 @@ export default function AdminDashboardPage() {
       adminOnly: false,
     },
     {
-      href: "/admin/membership-plans",
-      label: "Membership",
-      icon: "💳",
+      href: "/admin/reports",
+      label: "Reports",
+      icon: "📊",
+      primary: true,
+      adminOnly: false,
+    },
+    {
+      href: "/admin/ai/clients-summary",
+      label: "AI Client Review",
+      icon: "✨",
       primary: false,
-      adminOnly: true,
+      adminOnly: false,
+    },
+    {
+      href: "/admin/clients/inactive",
+      label: "Inactive Clients",
+      icon: "🚫",
+      primary: false,
+      adminOnly: false,
     },
     {
       href: "/history",
@@ -542,6 +542,13 @@ export default function AdminDashboardPage() {
       icon: "🗂️",
       primary: false,
       adminOnly: false,
+    },
+    {
+      href: "/admin/membership-plans",
+      label: "Membership",
+      icon: "💳",
+      primary: false,
+      adminOnly: true,
     },
     {
       href: "/admin/import-clients",
@@ -661,6 +668,13 @@ export default function AdminDashboardPage() {
             </Link>
 
             <Link
+              href="/admin/marketing"
+              className="hidden rounded-xl border border-fuchsia-400/30 bg-fuchsia-400/10 px-4 py-2 text-xs font-bold text-fuchsia-300 transition hover:bg-fuchsia-400 hover:text-black md:inline-block"
+            >
+              Marketing
+            </Link>
+
+            <Link
               href="/admin/ai/clients-summary"
               className="hidden rounded-xl border border-violet-400/30 bg-violet-400/10 px-4 py-2 text-xs font-bold text-violet-300 transition hover:bg-violet-400 hover:text-black lg:inline-block"
             >
@@ -702,6 +716,11 @@ export default function AdminDashboardPage() {
             {getRoleLabel(currentRole)} Overview
           </h1>
 
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-500">
+            Central management dashboard for clients, revenue, leads, marketing,
+            reports, staff and daily operational follow-up.
+          </p>
+
           {isManager ? (
             <div className="mt-3 flex items-start gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.07] px-4 py-3">
               <span className="mt-0.5 text-sm">⚠️</span>
@@ -715,86 +734,17 @@ export default function AdminDashboardPage() {
           ) : null}
         </div>
 
-        <section className="fu fu1 mb-6">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.25em] text-zinc-600">
-            Quick Actions
-          </p>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:flex lg:flex-wrap">
-            {visibleNavActions.map(({ href, label, icon, primary }) => (
-              <Link
-                key={href}
-                href={href}
-                className={`flex items-center gap-2.5 rounded-2xl border px-4 py-3 text-sm font-bold transition duration-200 active:scale-[0.97] ${
-                  primary
-                    ? "border-yellow-400/40 bg-yellow-400/15 text-yellow-300 hover:bg-yellow-400 hover:text-black"
-                    : "border-white/[0.08] bg-white/[0.04] text-zinc-300 hover:border-yellow-400/25 hover:bg-white/[0.08] hover:text-white"
-                }`}
-              >
-                <span className="text-base">{icon}</span>
-                {label}
-              </Link>
-            ))}
-
-            {isManager ? (
-              <>
-                <div className="flex cursor-not-allowed items-center gap-2.5 rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-3 text-sm font-bold text-zinc-700 opacity-50">
-                  <span className="text-base">💳</span> Membership
-                </div>
-
-                <div className="flex cursor-not-allowed items-center gap-2.5 rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-3 text-sm font-bold text-zinc-700 opacity-50">
-                  <span className="text-base">📥</span> Import
-                </div>
-
-                <div className="flex cursor-not-allowed items-center gap-2.5 rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-3 text-sm font-bold text-zinc-700 opacity-50">
-                  <span className="text-base">🏋️</span> Staff
-                </div>
-              </>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="fu fu2 mb-6 rounded-3xl border border-cyan-400/20 bg-cyan-400/[0.07] p-5">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <section className="fu fu1 mb-3">
+          <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-cyan-300/80">
-                Sales Pipeline
+              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-rose-300/80">
+                Important Alerts
               </p>
-              <h2 className="mt-1 text-xl font-bold text-white">
-                Leads, Potential Clients & Upcoming Demos
-              </h2>
               <p className="mt-1 text-sm text-zinc-500">
-                Add walk-ins and marketing leads, schedule demos, assign PTs, and convert qualified leads into clients.
+                Items requiring immediate attention appear here before daily work tools.
               </p>
             </div>
-            <Link
-              href="/admin/leads"
-              className="shrink-0 rounded-xl bg-cyan-400 px-4 py-2.5 text-xs font-bold text-black transition hover:bg-cyan-300 active:scale-[0.97]"
-            >
-              Open Leads Page →
-            </Link>
-          </div>
-        </section>
-
-        <section className="fu fu2 mb-6 rounded-3xl border border-violet-400/20 bg-violet-400/[0.07] p-5">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-violet-300/80">
-                Harry 
-              </p>
-              <h2 className="mt-1 text-xl font-bold text-white">
-                Review Progress Across All Clients
-              </h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Summarize session notes, attendance, low-session clients, and documented concerns in one management view.
-              </p>
-            </div>
-            <Link
-              href="/admin/ai/clients-summary"
-              className="shrink-0 rounded-xl bg-violet-400 px-4 py-2.5 text-xs font-bold text-black transition hover:bg-violet-300 active:scale-[0.97]"
-            >
-              Open AI Review →
-            </Link>
           </div>
         </section>
 
@@ -858,6 +808,45 @@ export default function AdminDashboardPage() {
             ) : null}
           </section>
         ) : null}
+
+        <section className="fu fu1 mb-6">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.25em] text-zinc-600">
+            Work Center
+          </p>
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:flex lg:flex-wrap">
+            {visibleNavActions.map(({ href, label, icon, primary }) => (
+              <Link
+                key={href}
+                href={href}
+                className={`flex items-center gap-2.5 rounded-2xl border px-4 py-3 text-sm font-bold transition duration-200 active:scale-[0.97] ${
+                  primary
+                    ? "border-yellow-400/40 bg-yellow-400/15 text-yellow-300 hover:bg-yellow-400 hover:text-black"
+                    : "border-white/[0.08] bg-white/[0.04] text-zinc-300 hover:border-yellow-400/25 hover:bg-white/[0.08] hover:text-white"
+                }`}
+              >
+                <span className="text-base">{icon}</span>
+                {label}
+              </Link>
+            ))}
+
+            {isManager ? (
+              <>
+                <div className="flex cursor-not-allowed items-center gap-2.5 rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-3 text-sm font-bold text-zinc-700 opacity-50">
+                  <span className="text-base">💳</span> Membership
+                </div>
+
+                <div className="flex cursor-not-allowed items-center gap-2.5 rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-3 text-sm font-bold text-zinc-700 opacity-50">
+                  <span className="text-base">📥</span> Import
+                </div>
+
+                <div className="flex cursor-not-allowed items-center gap-2.5 rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-3 text-sm font-bold text-zinc-700 opacity-50">
+                  <span className="text-base">🏋️</span> Staff
+                </div>
+              </>
+            ) : null}
+          </div>
+        </section>
 
         {loading ? (
           <div className="flex items-center justify-center py-24">

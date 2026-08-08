@@ -36,7 +36,7 @@ export default function AdminAiAssistant() {
       id: "welcome",
       role: "assistant",
       content:
-        "Hi, I am FXA AI. Ask me about clients, remaining sessions, demos, leads, attendance, debt alerts, or staff activity. I am read-only and will not change your data.",
+        "Hi, I am Angel. Ask me about clients, remaining sessions, demos, leads, attendance, debt alerts, or staff activity. I am read-only and will not change your data.",
     },
   ]);
 
@@ -153,7 +153,7 @@ export default function AdminAiAssistant() {
         <span className="text-lg" aria-hidden="true">
           ✦
         </span>
-        Ask FXA AI
+        Ask Angel 
       </button>
 
       {open ? (
@@ -164,7 +164,7 @@ export default function AdminAiAssistant() {
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-xs font-semibold uppercase tracking-[0.3em] text-violet-300">
-                      FXA AI Assistant
+                      FXA AI Assistant Angelique
                     </p>
                     <span className="rounded-full border border-green-400/25 bg-green-400/10 px-2 py-1 text-[10px] font-semibold uppercase text-green-300">
                       Read-only

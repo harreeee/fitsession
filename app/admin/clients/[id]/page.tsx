@@ -13,8 +13,6 @@ import {
   canEditDebt,
   canEditPackages,
   getRoleDisplayName,
-  isAdminOrManager,
-  normalizeRole,
   type AppRole,
 } from "../../../../lib/role";
 
@@ -1659,7 +1657,7 @@ function AdminClientDetailPageContent() {
 
   useEffect(() => {
     async function protectPage() {
-      const { user, role } = await getCurrentUserRole();
+      const { user, role, hasManagerAccess } = await getCurrentUserRole();
 
       if (!user) {
         setCheckingMessage("Redirecting to login...");
@@ -1667,7 +1665,17 @@ function AdminClientDetailPageContent() {
         return;
       }
 
-      if (!isAdminOrManager(role)) {
+      const canAccessAdminClientPage =
+        role === "admin" ||
+        role === "manager" ||
+        (role === "trainer" && hasManagerAccess);
+
+      if (!canAccessAdminClientPage) {
+        if (role === "marketing_manager") {
+          router.push("/admin/marketing");
+          return;
+        }
+
         if (role === "trainer" || role === "nutrition_coach") {
           router.push(`/trainer/clients/${clientId}`);
           return;
@@ -1683,12 +1691,15 @@ function AdminClientDetailPageContent() {
         return;
       }
 
-      setUserRole(normalizeRole(role));
+      // Keep the database role as trainer so client assignment, sessions,
+      // and payroll continue to use the correct profile ID. For this page,
+      // a trainer with Manager Access receives the manager UI permissions.
+      setUserRole(role === "admin" ? "admin" : "manager");
       setCheckingRole(false);
       await fetchClientDetail();
     }
 
-    protectPage();
+    void protectPage();
   }, [router, clientId]);
 
   useEffect(() => {

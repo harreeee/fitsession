@@ -1,48 +1,68 @@
+import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 
 export type UserRole =
   | "admin"
   | "manager"
+  | "marketing_manager"
   | "trainer"
-  | "client"
   | "nutrition_coach"
-  | null;
+  | "client";
 
-export async function getCurrentUserRole(): Promise<{
-  user: Awaited<ReturnType<typeof supabase.auth.getUser>>["data"]["user"];
-  role: UserRole;
-}> {
+export type CurrentUserRoleResult = {
+  user: User | null;
+  role: UserRole | null;
+  hasManagerAccess: boolean;
+  error: string | null;
+};
+
+function isUserRole(value: unknown): value is UserRole {
+  return (
+    value === "admin" ||
+    value === "manager" ||
+    value === "marketing_manager" ||
+    value === "trainer" ||
+    value === "nutrition_coach" ||
+    value === "client"
+  );
+}
+
+export async function getCurrentUserRole(): Promise<CurrentUserRoleResult> {
   const {
-    data: { session },
-    error: sessionError,
-  } = await supabase.auth.getSession();
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
 
-  if (sessionError || !session?.user) {
+  if (userError || !user) {
     return {
       user: null,
       role: null,
+      hasManagerAccess: false,
+      error: userError?.message || "User is not signed in.",
     };
   }
 
-  const user = session.user;
-
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, has_manager_access")
     .eq("id", user.id)
     .maybeSingle();
 
   if (profileError) {
-    console.error("getCurrentUserRole profile error:", profileError.message);
-
     return {
       user,
       role: null,
+      hasManagerAccess: false,
+      error: profileError.message,
     };
   }
 
+  const role = isUserRole(profile?.role) ? profile.role : null;
+
   return {
     user,
-    role: (profile?.role as UserRole) || null,
+    role,
+    hasManagerAccess: profile?.has_manager_access === true,
+    error: role ? null : "Invalid or missing user role.",
   };
 }

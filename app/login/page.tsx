@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
-import { getDashboardPathForRole, getRoleDisplayName } from "../../lib/role";
+import { getHomePathForRole } from "../../lib/roleHomePath";
 
 const MOTIVATION_QUOTES = [
   "Discipline beats motivation when motivation disappears.",
@@ -40,7 +40,6 @@ export default function LoginPage() {
   const [showStaffLogin, setShowStaffLogin] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [dailyQuote] = useState(() => getDailyQuote());
@@ -50,6 +49,7 @@ export default function LoginPage() {
     router.prefetch("/client/activate");
     router.prefetch("/trainer/scan");
     router.prefetch("/admin");
+    router.prefetch("/admin/marketing");
   }, [router]);
 
   async function handleStaffLogin(event: FormEvent<HTMLFormElement>) {
@@ -65,48 +65,54 @@ export default function LoginPage() {
     setLoading(true);
     setMessage("");
 
-    const { data: loginData, error: loginError } =
-      await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password,
-      });
+    try {
+      const { data: loginData, error: loginError } =
+        await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        });
 
-    if (loginError || !loginData.user) {
-      setMessage(loginError?.message || "Login failed.");
+      if (loginError || !loginData.user) {
+        setMessage(loginError?.message || "Login failed.");
+        return;
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", loginData.user.id)
+        .maybeSingle();
+
+      if (profileError || !profile?.role) {
+        await supabase.auth.signOut();
+        setMessage("No staff role found for this account.");
+        return;
+      }
+
+      if (profile.role === "client") {
+        await supabase.auth.signOut();
+        setMessage("Please use Client Login for client accounts.");
+        return;
+      }
+
+      const destination = getHomePathForRole(profile.role);
+
+      if (destination === "/login") {
+        await supabase.auth.signOut();
+        setMessage(`Unknown or unsupported staff role: ${profile.role}`);
+        return;
+      }
+
+      router.replace(destination);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "An unexpected login error occurred.",
+      );
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", loginData.user.id)
-      .maybeSingle();
-
-    if (profileError || !profile?.role) {
-      await supabase.auth.signOut();
-      setMessage("No staff role found for this account.");
-      setLoading(false);
-      return;
-    }
-
-    if (profile.role === "client") {
-      await supabase.auth.signOut();
-      setMessage("Please use Client Login for client accounts.");
-      setLoading(false);
-      return;
-    }
-
-    const destination = getDashboardPathForRole(profile.role);
-
-    if (destination === "/login") {
-      await supabase.auth.signOut();
-      setMessage(`Unknown role: ${getRoleDisplayName(profile.role)}`);
-      setLoading(false);
-      return;
-    }
-
-    router.replace(destination);
   }
 
   return (
@@ -165,8 +171,7 @@ export default function LoginPage() {
 
             <p className="mt-6 max-w-xl text-lg leading-8 text-zinc-600">
               A clean portal for FXA clients, trainers, nutrition coaches,
-              managers, and admin team members to manage sessions with
-              confidence.
+              managers, marketing managers, and admin team members.
             </p>
 
             <div className="mt-6 max-w-xl rounded-[1.6rem] border border-yellow-500/35 bg-yellow-100/75 p-5 shadow-[0_10px_30px_rgba(24,24,27,0.06)]">
@@ -177,7 +182,7 @@ export default function LoginPage() {
 
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.22em] text-yellow-700">
-                    Quote of the Day
+                    Daily Motivation
                   </p>
                   <p className="mt-2 text-lg font-black leading-7 text-zinc-950">
                     “{dailyQuote}”
@@ -227,7 +232,7 @@ export default function LoginPage() {
                 <div className="h-10 w-10 rounded-full border-2 border-white bg-zinc-200" />
               </div>
               <p className="text-sm font-semibold text-zinc-500">
-                Built for clients, trainers, managers, and the FXA team.
+                Built for clients, coaches, managers, marketing, and admin.
               </p>
             </div>
           </div>
@@ -307,7 +312,8 @@ export default function LoginPage() {
                             Staff Login
                           </p>
                           <p className="mt-1 text-xs leading-5 text-zinc-700">
-                            Admin, manager, trainer, or nutrition coach.
+                            Admin, manager, marketing manager, trainer, or
+                            nutrition coach.
                           </p>
                         </div>
                       </div>
@@ -348,8 +354,8 @@ export default function LoginPage() {
                         Staff Login
                       </p>
                       <p className="mt-1 text-xs leading-5 text-zinc-600">
-                        For admin, manager, trainer, and nutrition coach
-                        accounts only.
+                        For admin, manager, marketing manager, trainer, and
+                        nutrition coach accounts only.
                       </p>
                     </div>
 
