@@ -47,6 +47,7 @@ type TrainerHistoryLog = {
   status: string;
   message: string | null;
   trainer_note: string | null;
+  photo_path: string | null;
   remaining_after: number | null;
   created_at: string;
 };
@@ -324,6 +325,8 @@ export default function TrainerScanPage() {
   const [showNoteBox, setShowNoteBox] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
   const [noteMessage, setNoteMessage] = useState("");
+  const [sessionPhoto, setSessionPhoto] = useState<File | null>(null);
+  const [sessionPhotoPreview, setSessionPhotoPreview] = useState("");
 
   const [upcomingDemos, setUpcomingDemos] = useState<AssignedDemo[]>([]);
   const [loadingDemos, setLoadingDemos] = useState(false);
@@ -531,7 +534,7 @@ export default function TrainerScanPage() {
     const { data: recentLogs, error: recentLogsError } = await supabase
       .from("session_history")
       .select(
-        "id, client_id, session_type, status, message, trainer_note, remaining_after, created_at"
+        "id, client_id, session_type, status, message, trainer_note, photo_path, remaining_after, created_at"
       )
       .eq("trainer_id", userId)
       .order("created_at", { ascending: false })
@@ -614,33 +617,154 @@ export default function TrainerScanPage() {
     }
   }
 
+  function clearSessionPhoto() {
+    if (sessionPhotoPreview) {
+      URL.revokeObjectURL(sessionPhotoPreview);
+    }
+
+    setSessionPhoto(null);
+    setSessionPhotoPreview("");
+  }
+
+  function handleSessionPhotoChange(file: File | null) {
+    clearSessionPhoto();
+
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setNoteMessage("Please choose an image file.");
+      return;
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      setNoteMessage("Photo is too large. Please choose an image under 15 MB.");
+      return;
+    }
+
+    setNoteMessage("");
+    setSessionPhoto(file);
+    setSessionPhotoPreview(URL.createObjectURL(file));
+  }
+
+  async function compressSessionPhoto(file: File) {
+    const bitmap = await createImageBitmap(file);
+    const maxDimension = 1600;
+    const scale = Math.min(
+      1,
+      maxDimension / Math.max(bitmap.width, bitmap.height),
+    );
+
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      bitmap.close();
+      throw new Error("Could not prepare the session photo.");
+    }
+
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (result) => {
+          if (result) resolve(result);
+          else reject(new Error("Could not compress the session photo."));
+        },
+        "image/jpeg",
+        0.78,
+      );
+    });
+
+    return blob;
+  }
+
+  async function uploadSessionPhoto(historyId: string) {
+    if (!sessionPhoto) return null;
+    if (!isValidUuid(trainerId)) {
+      throw new Error("Staff account ID is invalid.");
+    }
+
+    const compressedPhoto = await compressSessionPhoto(sessionPhoto);
+    const photoPath = `${trainerId}/${historyId}/${Date.now()}.jpg`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("session-photos")
+      .upload(photoPath, compressedPhoto, {
+        contentType: "image/jpeg",
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (uploadError) throw uploadError;
+
+    return photoPath;
+  }
+
   async function saveTrainerNote() {
     if (!isValidUuid(lastScannedHistoryId)) {
-      setNoteMessage("No valid completed scan was found for this note.");
+      setNoteMessage("No valid completed scan was found for this update.");
       return;
     }
 
     setSavingNote(true);
     setNoteMessage("");
 
+    let uploadedPhotoPath: string | null = null;
+
     try {
       const cleanNote = trainerNote.trim();
 
+      if (sessionPhoto) {
+        setNoteMessage("Uploading photo...");
+        uploadedPhotoPath = await uploadSessionPhoto(lastScannedHistoryId);
+      }
+
+      const updatePayload: {
+        trainer_note: string | null;
+        photo_path?: string | null;
+      } = {
+        trainer_note: cleanNote || null,
+      };
+
+      if (uploadedPhotoPath) {
+        updatePayload.photo_path = uploadedPhotoPath;
+      }
+
       const { error } = await supabase
         .from("session_history")
-        .update({ trainer_note: cleanNote || null })
+        .update(updatePayload)
         .eq("id", lastScannedHistoryId);
 
-      if (error) throw error;
+      if (error) {
+        if (uploadedPhotoPath) {
+          await supabase.storage
+            .from("session-photos")
+            .remove([uploadedPhotoPath]);
+        }
 
-      setNoteMessage("Note saved.");
+        throw error;
+      }
+
+      setNoteMessage(
+        sessionPhoto
+          ? "Session note and photo saved."
+          : "Session note saved.",
+      );
       setShowNoteBox(false);
       setTrainerNote("");
+      clearSessionPhoto();
       setLastScannedHistoryId(null);
 
       if (isValidUuid(trainerId)) await fetchTrainerStats(trainerId);
     } catch (error) {
-      setNoteMessage(getErrorMessage(error) || "Unable to save note.");
+      setNoteMessage(getErrorMessage(error) || "Unable to save session update.");
     } finally {
       setSavingNote(false);
     }
@@ -649,6 +773,7 @@ export default function TrainerScanPage() {
   function skipTrainerNote() {
     setShowNoteBox(false);
     setTrainerNote("");
+    clearSessionPhoto();
     setLastScannedHistoryId(null);
     setNoteMessage("");
   }
@@ -675,6 +800,7 @@ export default function TrainerScanPage() {
     setNoteMessage("");
     setShowNoteBox(false);
     setTrainerNote("");
+    clearSessionPhoto();
     setLastScannedHistoryId(null);
     scanningLockRef.current = false;
     setScannerStarted(true);
@@ -740,6 +866,7 @@ export default function TrainerScanPage() {
 
     setShowNoteBox(false);
     setTrainerNote("");
+    clearSessionPhoto();
     setLastScannedHistoryId(null);
     setLastScannedStatus("success");
     setNoteMessage("");
@@ -1445,6 +1572,59 @@ export default function TrainerScanPage() {
                   className="mt-4 min-h-32 w-full rounded-2xl border border-yellow-500/30 bg-black/80 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
                 />
 
+                <div className="mt-4 rounded-2xl border border-cyan-400/25 bg-cyan-400/[0.06] p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-300">
+                        Session Photo · Optional
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-zinc-500">
+                        Take a photo or choose one from the phone. The app compresses it before upload to reduce storage.
+                      </p>
+                    </div>
+
+                    <label className="cursor-pointer rounded-xl border border-cyan-300/40 bg-cyan-300/10 px-4 py-2.5 text-center text-xs font-black uppercase tracking-wide text-cyan-200 transition hover:bg-cyan-300 hover:text-black">
+                      {sessionPhoto ? "Change Photo" : "Add Photo"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={(event) =>
+                          handleSessionPhotoChange(
+                            event.target.files?.[0] || null,
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+
+                  {sessionPhotoPreview ? (
+                    <div className="mt-4">
+                      <img
+                        src={sessionPhotoPreview}
+                        alt="Selected session preview"
+                        className="max-h-72 w-full rounded-2xl border border-white/10 object-cover"
+                      />
+
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-xs text-zinc-500">
+                          Original size: {(sessionPhoto!.size / 1024 / 1024).toFixed(2)} MB
+                        </p>
+
+                        <button
+                          type="button"
+                          onClick={clearSessionPhoto}
+                          disabled={savingNote}
+                          className="rounded-xl border border-red-400/40 px-3 py-2 text-xs font-bold text-red-300 transition hover:bg-red-400 hover:text-black disabled:opacity-50"
+                        >
+                          Remove Photo
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
                 {noteMessage ? (
                   <p className="mt-3 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-3 text-sm text-yellow-300">
                     {noteMessage}
@@ -1458,7 +1638,11 @@ export default function TrainerScanPage() {
                     disabled={savingNote}
                     className="rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {savingNote ? "Saving Note..." : "Save Note"}
+                    {savingNote
+                      ? "Saving..."
+                      : sessionPhoto
+                        ? "Save Note & Photo"
+                        : "Save Note"}
                   </button>
                   <button
                     type="button"
@@ -1679,6 +1863,12 @@ export default function TrainerScanPage() {
                         </p>
                       </div>
                     </div>
+
+                    {log.photo_path ? (
+                      <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs font-bold text-cyan-200">
+                        📷 Session photo attached
+                      </div>
+                    ) : null}
 
                     {log.trainer_note ? (
                       <div className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4">
