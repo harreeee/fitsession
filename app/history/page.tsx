@@ -14,6 +14,7 @@ type HistoryLog = {
   status: string | null;
   message: string | null;
   trainer_note: string | null;
+  photo_path: string | null;
   remaining_after: number | null;
   created_at: string;
 };
@@ -125,6 +126,7 @@ export default function HistoryPage() {
   const [logs, setLogs] = useState<HistoryLog[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [trainers, setTrainers] = useState<TrainerRow[]>([]);
+  const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
 
   const [search, setSearch] = useState("");
   const [startDate, setStartDate] = useState(getStartOfMonth());
@@ -207,6 +209,41 @@ export default function HistoryPage() {
     logs.map((log) => log.client_id).filter(Boolean)
   ).size;
 
+  async function loadPhotoUrls(historyLogs: HistoryLog[]) {
+    const rowsWithPhotos = historyLogs.filter((log) => Boolean(log.photo_path));
+
+    if (rowsWithPhotos.length === 0) {
+      setPhotoUrls(new Map());
+      return;
+    }
+
+    const nextMap = new Map<string, string>();
+
+    await Promise.all(
+      rowsWithPhotos.map(async (log) => {
+        if (!log.photo_path) return;
+
+        const { data, error } = await supabase.storage
+          .from("session-photos")
+          .createSignedUrl(log.photo_path, 60 * 60);
+
+        if (error) {
+          console.error(
+            `Could not create signed photo URL for history ${log.id}:`,
+            error.message,
+          );
+          return;
+        }
+
+        if (data?.signedUrl) {
+          nextMap.set(log.id, data.signedUrl);
+        }
+      }),
+    );
+
+    setPhotoUrls(nextMap);
+  }
+
   async function fetchHistory(filter?: DateFilter) {
     setLoading(true);
 
@@ -216,7 +253,7 @@ export default function HistoryPage() {
     let historyQuery = supabase
       .from("session_history")
       .select(
-        "id, client_id, trainer_id, package_id, status, message, trainer_note, remaining_after, created_at"
+        "id, client_id, trainer_id, package_id, status, message, trainer_note, photo_path, remaining_after, created_at"
       )
       .order("created_at", { ascending: false })
       .limit(1000);
@@ -267,7 +304,9 @@ export default function HistoryPage() {
       return;
     }
 
-    setLogs((historyResult.data || []) as HistoryLog[]);
+    const historyRows = (historyResult.data || []) as HistoryLog[];
+    setLogs(historyRows);
+    await loadPhotoUrls(historyRows);
     setCurrentPage(1);
     setClients((clientsResult.data || []) as ClientRow[]);
     setTrainers((trainersResult.data || []) as TrainerRow[]);
@@ -612,7 +651,7 @@ export default function HistoryPage() {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1150px] border-collapse text-left text-sm">
+                <table className="w-full min-w-[1300px] border-collapse text-left text-sm">
                   <thead>
                     <tr className="bg-yellow-400 text-black">
                       <th className="w-[185px] px-4 py-3 text-xs font-bold uppercase">
@@ -629,6 +668,9 @@ export default function HistoryPage() {
                       </th>
                       <th className="w-[120px] px-4 py-3 text-xs font-bold uppercase">
                         Remaining
+                      </th>
+                      <th className="w-[150px] px-4 py-3 text-xs font-bold uppercase">
+                        Photo
                       </th>
                       <th className="px-4 py-3 text-xs font-bold uppercase">
                         Message / Note
@@ -691,6 +733,39 @@ export default function HistoryPage() {
                             {log.remaining_after === null
                               ? "-"
                               : log.remaining_after}
+                          </td>
+
+                          <td className="px-4 py-4 align-top">
+                            {log.photo_path ? (
+                              photoUrls.get(log.id) ? (
+                                <a
+                                  href={photoUrls.get(log.id)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="group block"
+                                >
+                                  <img
+                                    src={photoUrls.get(log.id)}
+                                    alt={`Session photo for ${
+                                      client?.full_name || "client"
+                                    }`}
+                                    loading="lazy"
+                                    className="h-20 w-24 rounded-xl border border-cyan-400/20 bg-black/40 object-cover transition group-hover:border-cyan-300"
+                                  />
+                                  <span className="mt-2 inline-block text-[11px] font-semibold text-cyan-300">
+                                    Open full size →
+                                  </span>
+                                </a>
+                              ) : (
+                                <div className="rounded-xl border border-dashed border-cyan-400/25 bg-cyan-400/[0.05] p-3 text-xs text-zinc-500">
+                                  Photo attached
+                                  <br />
+                                  Unable to load
+                                </div>
+                              )
+                            ) : (
+                              <span className="text-xs text-zinc-600">No photo</span>
+                            )}
                           </td>
 
                           <td className="px-4 py-4 align-top">
