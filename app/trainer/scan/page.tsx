@@ -1875,6 +1875,21 @@ export default function TrainerScanPage() {
                 </p>
               </button>
             </div>
+
+            <Link
+              href="/work"
+              onClick={(event) => blockPendingSessionNavigation(event)}
+              className="mt-3 flex min-h-[64px] items-center justify-between gap-4 rounded-2xl border border-yellow-400/30 bg-yellow-400/[0.06] px-4 py-3 transition hover:border-yellow-400/60 hover:bg-yellow-400/[0.10] active:scale-[0.99]"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-yellow-400 text-lg font-black text-black">✓</div>
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-white">Daily Work Check-in</p>
+                  <p className="mt-0.5 truncate text-[11px] text-zinc-500">Scan staff QR, view assigned tasks, submit daily report</p>
+                </div>
+              </div>
+              <span className="shrink-0 text-xl text-yellow-400">›</span>
+            </Link>
           </section>
 
           <section className="mt-5 rounded-2xl border border-cyan-400/20 bg-[#0d1010] p-4">

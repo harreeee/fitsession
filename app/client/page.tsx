@@ -271,6 +271,76 @@ function ChevronRightIcon({ className = "h-5 w-5" }: { className?: string }) {
   );
 }
 
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+
+  return String(error || "Unknown error");
+}
+
+async function compressProfilePhoto(file: File): Promise<Blob> {
+  const maxDimension = 1200;
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("Could not prepare your profile photo.");
+  }
+
+  if (typeof createImageBitmap === "function") {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(
+      1,
+      maxDimension / Math.max(bitmap.width, bitmap.height),
+    );
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+  } else {
+    const objectUrl = URL.createObjectURL(file);
+
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const nextImage = new Image();
+        nextImage.onload = () => resolve(nextImage);
+        nextImage.onerror = () => reject(new Error("Could not read this image file."));
+        nextImage.src = objectUrl;
+      });
+
+      const scale = Math.min(
+        1,
+        maxDimension / Math.max(image.naturalWidth, image.naturalHeight),
+      );
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Could not compress your profile photo."));
+      },
+      "image/jpeg",
+      0.82,
+    );
+  });
+}
+
 export default function ClientPortalPage() {
   const router = useRouter();
 
@@ -283,6 +353,13 @@ export default function ClientPortalPage() {
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
   const [activeTab, setActiveTab] = useState<"home" | "qr" | "schedule" | "account">("home");
+
+  const [clientPhotoPath, setClientPhotoPath] = useState("");
+  const [clientPhotoUrl, setClientPhotoUrl] = useState("");
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
+  const [profilePhotoPreview, setProfilePhotoPreview] = useState("");
+  const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
+  const [profilePhotoMessage, setProfilePhotoMessage] = useState("");
 
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -301,6 +378,140 @@ export default function ClientPortalPage() {
   function selectTab(tab: "home" | "qr" | "schedule" | "account") {
     setActiveTab(tab);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function loadClientProfilePhoto(path: string | null | undefined) {
+    const cleanPath = String(path || "").trim();
+    setClientPhotoPath(cleanPath);
+
+    if (!cleanPath) {
+      setClientPhotoUrl("");
+      return;
+    }
+
+    const { data, error } = await supabase.storage
+      .from("profile-photos")
+      .createSignedUrl(cleanPath, 60 * 60 * 24 * 7);
+
+    if (error || !data?.signedUrl) {
+      console.error("Could not load client profile photo:", error?.message);
+      setClientPhotoUrl("");
+      return;
+    }
+
+    const separator = data.signedUrl.includes("?") ? "&" : "?";
+    setClientPhotoUrl(`${data.signedUrl}${separator}v=${Date.now()}`);
+  }
+
+  function clearProfilePhotoSelection() {
+    if (profilePhotoPreview) {
+      URL.revokeObjectURL(profilePhotoPreview);
+    }
+
+    setProfilePhotoFile(null);
+    setProfilePhotoPreview("");
+  }
+
+  function handleProfilePhotoChange(file: File | null) {
+    clearProfilePhotoSelection();
+    setProfilePhotoMessage("");
+
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setProfilePhotoMessage("Please choose an image file.");
+      return;
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      setProfilePhotoMessage("Photo is too large. Please choose an image under 15 MB.");
+      return;
+    }
+
+    setProfilePhotoFile(file);
+    setProfilePhotoPreview(URL.createObjectURL(file));
+  }
+
+  async function saveProfilePhoto() {
+    if (!profilePhotoFile) return;
+
+    setUploadingProfilePhoto(true);
+    setProfilePhotoMessage("");
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        throw new Error("Your login session expired. Please sign in again.");
+      }
+
+      const compressedPhoto = await compressProfilePhoto(profilePhotoFile);
+      const photoPath = `${user.id}/avatar.jpg`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("profile-photos")
+        .upload(photoPath, compressedPhoto, {
+          contentType: "image/jpeg",
+          cacheControl: "3600",
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { error: pathError } = await supabase.rpc("set_own_profile_photo", {
+        p_photo_path: photoPath,
+      });
+
+      if (pathError) {
+        throw new Error(
+          `${pathError.message}. Run the Client Profile Photo SQL migration in Supabase first.`,
+        );
+      }
+
+      await loadClientProfilePhoto(photoPath);
+      clearProfilePhotoSelection();
+      setProfilePhotoMessage("Profile photo updated successfully.");
+    } catch (error) {
+      setProfilePhotoMessage(getErrorMessage(error));
+    } finally {
+      setUploadingProfilePhoto(false);
+    }
+  }
+
+  async function removeProfilePhoto() {
+    if (!clientPhotoPath) return;
+
+    setUploadingProfilePhoto(true);
+    setProfilePhotoMessage("");
+
+    try {
+      const oldPath = clientPhotoPath;
+      const { error: pathError } = await supabase.rpc("set_own_profile_photo", {
+        p_photo_path: null,
+      });
+
+      if (pathError) throw pathError;
+
+      const { error: removeError } = await supabase.storage
+        .from("profile-photos")
+        .remove([oldPath]);
+
+      if (removeError) {
+        console.warn("Profile photo path cleared but Storage cleanup failed:", removeError.message);
+      }
+
+      clearProfilePhotoSelection();
+      setClientPhotoPath("");
+      setClientPhotoUrl("");
+      setProfilePhotoMessage("Profile photo removed.");
+    } catch (error) {
+      setProfilePhotoMessage(getErrorMessage(error));
+    } finally {
+      setUploadingProfilePhoto(false);
+    }
   }
 
   async function changePassword(event: FormEvent<HTMLFormElement>) {
@@ -448,6 +659,25 @@ export default function ClientPortalPage() {
       setQrCode(qrImage);
     } else {
       setQrCode("");
+    }
+
+    const { data: profileData, error: profileError } = await supabase
+      .from("profiles")
+      .select("profile_photo_path")
+      .eq("id", userData.user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      console.warn(
+        "Could not load client profile photo. Run the Client Profile Photo SQL migration if the column is missing:",
+        profileError.message,
+      );
+      setClientPhotoPath("");
+      setClientPhotoUrl("");
+    } else {
+      await loadClientProfilePhoto(
+        (profileData as { profile_photo_path?: string | null } | null)?.profile_photo_path,
+      );
     }
 
     await fetchUpcomingBookings(cleanClient.id);
@@ -613,14 +843,22 @@ export default function ClientPortalPage() {
           <button
             type="button"
             onClick={() => selectTab("account")}
-            className={`flex h-10 w-10 items-center justify-center rounded-full border text-xs font-black transition active:scale-95 ${
+            className={`flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border text-xs font-black transition active:scale-95 ${
               activeTab === "account"
                 ? "border-yellow-400 bg-yellow-400 text-black"
                 : "border-white/10 bg-white/[0.05] text-white"
             }`}
             aria-label="Open account"
           >
-            {getInitials(client.full_name) || "FX"}
+            {clientPhotoUrl ? (
+              <img
+                src={clientPhotoUrl}
+                alt={`${client.full_name} profile`}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              getInitials(client.full_name) || "FX"
+            )}
           </button>
         </div>
       </header>
@@ -640,7 +878,25 @@ export default function ClientPortalPage() {
                   </p>
                 </div>
 
-                <StatusPill status={client.status} />
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => selectTab("account")}
+                    className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border-2 border-yellow-400/70 bg-yellow-400 text-sm font-black text-black shadow-[0_0_28px_rgba(250,204,21,0.10)]"
+                    aria-label="Open profile photo settings"
+                  >
+                    {clientPhotoUrl ? (
+                      <img
+                        src={clientPhotoUrl}
+                        alt={`${client.full_name} profile`}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      getInitials(client.full_name) || "FX"
+                    )}
+                  </button>
+                  <StatusPill status={client.status} />
+                </div>
               </div>
 
               <div className="mt-5 rounded-3xl border border-white/[0.08] bg-black/35 p-4">
@@ -943,14 +1199,79 @@ export default function ClientPortalPage() {
             </section>
 
             <section className="rounded-[28px] border border-white/[0.08] bg-[#0e0e0e] p-5">
-              <div className="flex items-center gap-4">
-                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-yellow-400 text-xl font-black text-black">
-                  {getInitials(client.full_name) || "FX"}
+              <div className="flex flex-col items-center text-center">
+                <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-yellow-400 bg-yellow-400 text-2xl font-black text-black shadow-[0_0_32px_rgba(250,204,21,0.12)]">
+                  {profilePhotoPreview || clientPhotoUrl ? (
+                    <img
+                      src={profilePhotoPreview || clientPhotoUrl}
+                      alt={`${client.full_name} profile preview`}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    getInitials(client.full_name) || "FX"
+                  )}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h2 className="truncate text-xl font-semibold text-white">{client.full_name}</h2>
-                  <div className="mt-2"><StatusPill status={client.status} /></div>
-                </div>
+
+                <h2 className="mt-4 max-w-full truncate text-xl font-semibold text-white">
+                  {client.full_name}
+                </h2>
+                <div className="mt-2"><StatusPill status={client.status} /></div>
+
+                <label className="mt-5 flex min-h-12 w-full cursor-pointer items-center justify-center rounded-2xl border border-yellow-400/40 bg-yellow-400/[0.08] px-4 text-sm font-semibold text-yellow-300 transition active:scale-[0.98]">
+                  {profilePhotoFile
+                    ? "Choose Different Photo"
+                    : clientPhotoUrl
+                      ? "Change Profile Photo"
+                      : "Add Profile Photo"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(event) =>
+                      handleProfilePhotoChange(event.target.files?.[0] || null)
+                    }
+                  />
+                </label>
+
+                {profilePhotoFile ? (
+                  <div className="mt-3 grid w-full grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={saveProfilePhoto}
+                      disabled={uploadingProfilePhoto}
+                      className="min-h-12 rounded-2xl bg-yellow-400 px-3 text-sm font-bold text-black disabled:opacity-50"
+                    >
+                      {uploadingProfilePhoto ? "Uploading..." : "Save Photo"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearProfilePhotoSelection}
+                      disabled={uploadingProfilePhoto}
+                      className="min-h-12 rounded-2xl border border-white/10 bg-black px-3 text-sm font-semibold text-zinc-300 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : clientPhotoUrl ? (
+                  <button
+                    type="button"
+                    onClick={removeProfilePhoto}
+                    disabled={uploadingProfilePhoto}
+                    className="mt-3 min-h-11 w-full rounded-2xl border border-rose-400/20 bg-rose-400/[0.05] px-4 text-xs font-semibold text-rose-300 disabled:opacity-50"
+                  >
+                    {uploadingProfilePhoto ? "Removing..." : "Remove Photo"}
+                  </button>
+                ) : null}
+
+                <p className="mt-3 text-[11px] leading-5 text-zinc-600">
+                  Choose a clear square or portrait photo. Large photos are compressed before upload.
+                </p>
+
+                {profilePhotoMessage ? (
+                  <p className="mt-3 w-full rounded-2xl border border-yellow-400/20 bg-yellow-400/[0.06] p-3 text-left text-xs leading-5 text-yellow-200">
+                    {profilePhotoMessage}
+                  </p>
+                ) : null}
               </div>
 
               <div className="mt-5 divide-y divide-white/[0.07] border-t border-white/[0.07]">

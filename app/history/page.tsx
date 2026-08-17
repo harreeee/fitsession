@@ -115,6 +115,7 @@ function getRoleLabel(role: string | null) {
   if (role === "manager") return "Manager";
   if (role === "trainer") return "Trainer";
   if (role === "nutrition_coach") return "Nutrition Coach";
+  if (role === "marketing_manager") return "Marketing";
   if (role === "client") return "Client";
 
   return "Staff";
@@ -392,6 +393,11 @@ export default function HistoryPage() {
         return;
       }
 
+      if (userRole === "marketing_manager") {
+        router.push("/history/work");
+        return;
+      }
+
       if (
         userRole !== "admin" &&
         userRole !== "manager" &&
@@ -478,6 +484,13 @@ export default function HistoryPage() {
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row">
+              <Link
+                href="/history/work"
+                className="rounded-2xl border border-cyan-400/40 bg-cyan-400/10 px-5 py-3 text-center text-sm font-semibold uppercase tracking-wide text-cyan-300 transition hover:bg-cyan-400 hover:text-black"
+              >
+                Daily Work
+              </Link>
+
               <button
                 type="button"
                 onClick={() => fetchHistory()}

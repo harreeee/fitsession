@@ -544,6 +544,13 @@ export default function AdminDashboardPage() {
       adminOnly: false,
     },
     {
+      href: isManager ? "/history/work" : "/admin/work-tasks",
+      label: "Daily Work",
+      icon: "✅",
+      primary: false,
+      adminOnly: false,
+    },
+    {
       href: "/admin/membership-plans",
       label: "Membership",
       icon: "💳",

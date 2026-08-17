@@ -1254,6 +1254,12 @@ export default function MarketingDashboardPage() {
               >
                 Lead Management
               </Link>
+              <Link
+                href="/work"
+                className="rounded-xl border border-yellow-400/35 bg-yellow-400/10 px-4 py-2 text-sm font-semibold text-yellow-200 transition hover:bg-yellow-400 hover:text-black"
+              >
+                Daily Work
+              </Link>
               {role !== "marketing_manager" ? (
                 <Link
                   href="/admin"
