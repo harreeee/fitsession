@@ -46,6 +46,8 @@ type TrainerHistoryLog = {
   session_type: SessionType | null;
   status: string;
   message: string | null;
+  session_topic: string | null;
+  session_content: string | null;
   trainer_note: string | null;
   photo_path: string | null;
   remaining_after: number | null;
@@ -310,6 +312,9 @@ export default function TrainerScanPage() {
 
   const [historyLogs, setHistoryLogs] = useState<TrainerHistoryLog[]>([]);
   const [clientMap, setClientMap] = useState<Map<string, ClientInfo>>(new Map());
+  const [historyPhotoUrls, setHistoryPhotoUrls] = useState<Map<string, string>>(
+    new Map(),
+  );
 
   const [checkingRole, setCheckingRole] = useState(true);
   const [checkingMessage, setCheckingMessage] = useState(
@@ -321,6 +326,8 @@ export default function TrainerScanPage() {
   const [lastScannedHistoryId, setLastScannedHistoryId] = useState<
     string | null
   >(null);
+  const [sessionTopic, setSessionTopic] = useState("");
+  const [sessionContent, setSessionContent] = useState("");
   const [trainerNote, setTrainerNote] = useState("");
   const [showNoteBox, setShowNoteBox] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
@@ -331,6 +338,14 @@ export default function TrainerScanPage() {
   const [upcomingDemos, setUpcomingDemos] = useState<AssignedDemo[]>([]);
   const [loadingDemos, setLoadingDemos] = useState(false);
   const [updatingDemoId, setUpdatingDemoId] = useState<string | null>(null);
+
+  const [noteClients, setNoteClients] = useState<ClientInfo[]>([]);
+  const [selectedNoteClientId, setSelectedNoteClientId] = useState("");
+  const [selectedClientHistory, setSelectedClientHistory] = useState<
+    TrainerHistoryLog[]
+  >([]);
+  const [loadingClientHistory, setLoadingClientHistory] = useState(false);
+  const [clientHistoryMessage, setClientHistoryMessage] = useState("");
 
   const motivationQuote = useMemo(() => getDailyMotivation(), []);
   const greeting = useMemo(() => getGreeting(), []);
@@ -404,7 +419,19 @@ export default function TrainerScanPage() {
     setUpdatingDemoId(null);
   }
 
+  function blockPendingSessionNavigation(event?: { preventDefault: () => void }) {
+    if (!showNoteBox || !lastScannedHistoryId) return false;
+
+    event?.preventDefault();
+    setNoteMessage(
+      "Complete the required session record before leaving this page.",
+    );
+    return true;
+  }
+
   async function handleLogout() {
+    if (blockPendingSessionNavigation()) return;
+
     await stopScanner();
     await supabase.auth.signOut();
     router.push("/login");
@@ -480,6 +507,123 @@ export default function TrainerScanPage() {
     setClientMap(nextClientMap);
   }
 
+  async function loadHistoryPhotoUrls(logs: TrainerHistoryLog[]) {
+    const photoLogs = logs.filter((log) => Boolean(log.photo_path));
+
+    if (photoLogs.length === 0) {
+      setHistoryPhotoUrls(new Map());
+      return;
+    }
+
+    const nextMap = new Map<string, string>();
+
+    await Promise.all(
+      photoLogs.map(async (log) => {
+        if (!log.photo_path) return;
+
+        const { data, error } = await supabase.storage
+          .from("session-photos")
+          .createSignedUrl(log.photo_path, 60 * 60);
+
+        if (error) {
+          console.error(
+            `Could not create signed photo URL for history ${log.id}:`,
+            error.message,
+          );
+          return;
+        }
+
+        if (data?.signedUrl) {
+          nextMap.set(log.id, data.signedUrl);
+        }
+      }),
+    );
+
+    setHistoryPhotoUrls(nextMap);
+  }
+
+  function getRequiredTopicLabel() {
+    if (lastScannedType === "nutrition_follow_up") return "Follow-up topic";
+    if (lastScannedStatus === "no_show") return "No-show topic / reason";
+    if (lastScannedStatus === "late_cancel") return "Late-cancel topic / reason";
+    return "Session topic";
+  }
+
+  function getRequiredContentLabel() {
+    if (lastScannedType === "nutrition_follow_up") return "Follow-up content";
+    if (lastScannedStatus === "no_show") return "Contact / follow-up action";
+    if (lastScannedStatus === "late_cancel") return "Cancellation details / next action";
+    return "Session content";
+  }
+
+  function getRequiredContentPlaceholder() {
+    if (lastScannedType === "nutrition_follow_up") {
+      return "Example: Reviewed protein target, meal timing, hydration and next-week action items.";
+    }
+
+    if (lastScannedStatus === "no_show") {
+      return "Example: Client did not arrive. Called at 6:10 PM, left a message and requested a new booking.";
+    }
+
+    if (lastScannedStatus === "late_cancel") {
+      return "Example: Client cancelled 45 minutes before the session due to work. Rebook for Thursday.";
+    }
+
+    return "Example: Goblet squat 4x10, RDL 4x8, split squat 3x10/side, sled push 6 rounds. Keep squat depth controlled next time.";
+  }
+
+  async function fetchNoteClients() {
+    const { data, error } = await supabase
+      .from("clients")
+      .select("id, profile_id, full_name, email")
+      .order("full_name", { ascending: true });
+
+    if (error) {
+      console.error("Could not load clients for note history:", error.message);
+      setNoteClients([]);
+      return;
+    }
+
+    setNoteClients((data || []) as ClientInfo[]);
+  }
+
+  async function fetchClientLessonHistory(clientId: string) {
+    const client = noteClients.find((item) => item.id === clientId);
+
+    if (!client) {
+      setSelectedClientHistory([]);
+      setClientHistoryMessage("");
+      return;
+    }
+
+    setLoadingClientHistory(true);
+    setClientHistoryMessage("");
+
+    const clientKeys = [client.id, client.profile_id].filter(
+      (value): value is string => Boolean(value),
+    );
+
+    const { data, error } = await supabase
+      .from("session_history")
+      .select(
+        "id, client_id, session_type, status, message, session_topic, session_content, trainer_note, photo_path, remaining_after, created_at",
+      )
+      .in("client_id", clientKeys)
+      .order("created_at", { ascending: false })
+      .limit(12);
+
+    if (error) {
+      console.error("Could not load client lesson history:", error.message);
+      setSelectedClientHistory([]);
+      setClientHistoryMessage(error.message);
+      setLoadingClientHistory(false);
+      return;
+    }
+
+    setSelectedClientHistory((data || []) as TrainerHistoryLog[]);
+    setLoadingClientHistory(false);
+  }
+
   async function fetchTrainerStats(userId: string) {
     if (!isValidUuid(userId)) {
       console.error("Invalid staff UUID passed to fetchTrainerStats:", userId);
@@ -534,7 +678,7 @@ export default function TrainerScanPage() {
     const { data: recentLogs, error: recentLogsError } = await supabase
       .from("session_history")
       .select(
-        "id, client_id, session_type, status, message, trainer_note, photo_path, remaining_after, created_at"
+        "id, client_id, session_type, status, message, session_topic, session_content, trainer_note, photo_path, remaining_after, created_at"
       )
       .eq("trainer_id", userId)
       .order("created_at", { ascending: false })
@@ -551,6 +695,7 @@ export default function TrainerScanPage() {
 
     const cleanLogs = (recentLogs || []) as TrainerHistoryLog[];
     setHistoryLogs(cleanLogs);
+    await loadHistoryPhotoUrls(cleanLogs);
 
     const clientIds = Array.from(
       new Set(
@@ -713,23 +858,36 @@ export default function TrainerScanPage() {
       return;
     }
 
+    const cleanTopic = sessionTopic.trim();
+    const cleanContent = sessionContent.trim();
+    const cleanNote = trainerNote.trim();
+
+    if (!cleanTopic || !cleanContent) {
+      setNoteMessage(
+        "Session Topic and Session Content are required before this session can be completed.",
+      );
+      return;
+    }
+
     setSavingNote(true);
     setNoteMessage("");
 
     let uploadedPhotoPath: string | null = null;
 
     try {
-      const cleanNote = trainerNote.trim();
-
       if (sessionPhoto) {
         setNoteMessage("Uploading photo...");
         uploadedPhotoPath = await uploadSessionPhoto(lastScannedHistoryId);
       }
 
       const updatePayload: {
+        session_topic: string;
+        session_content: string;
         trainer_note: string | null;
         photo_path?: string | null;
       } = {
+        session_topic: cleanTopic,
+        session_content: cleanContent,
         trainer_note: cleanNote || null,
       };
 
@@ -754,15 +912,20 @@ export default function TrainerScanPage() {
 
       setNoteMessage(
         sessionPhoto
-          ? "Session note and photo saved."
-          : "Session note saved.",
+          ? "Session record and photo saved. This session is complete."
+          : "Session record saved. This session is complete.",
       );
       setShowNoteBox(false);
+      setSessionTopic("");
+      setSessionContent("");
       setTrainerNote("");
       clearSessionPhoto();
       setLastScannedHistoryId(null);
-
+  
       if (isValidUuid(trainerId)) await fetchTrainerStats(trainerId);
+      if (selectedNoteClientId) {
+        await fetchClientLessonHistory(selectedNoteClientId);
+      }
     } catch (error) {
       setNoteMessage(getErrorMessage(error) || "Unable to save session update.");
     } finally {
@@ -770,18 +933,19 @@ export default function TrainerScanPage() {
     }
   }
 
-  function skipTrainerNote() {
-    setShowNoteBox(false);
-    setTrainerNote("");
-    clearSessionPhoto();
-    setLastScannedHistoryId(null);
-    setNoteMessage("");
-  }
-
   async function startScanner(
     requestedMode: SessionType = "training",
     requestedStatus: SessionStatus = selectedSessionStatus,
   ) {
+    if (showNoteBox || lastScannedHistoryId) {
+      setResult({
+        type: "error",
+        message:
+          "Complete the required session record before scanning another client.",
+      });
+      return;
+    }
+
     if (scannerStarted || scannerRef.current) return;
 
     const nextMode: SessionType =
@@ -799,6 +963,8 @@ export default function TrainerScanPage() {
     setResult({ type: "", message: "" });
     setNoteMessage("");
     setShowNoteBox(false);
+    setSessionTopic("");
+    setSessionContent("");
     setTrainerNote("");
     clearSessionPhoto();
     setLastScannedHistoryId(null);
@@ -865,6 +1031,8 @@ export default function TrainerScanPage() {
     const cleanQrToken = qrToken.trim();
 
     setShowNoteBox(false);
+    setSessionTopic("");
+    setSessionContent("");
     setTrainerNote("");
     clearSessionPhoto();
     setLastScannedHistoryId(null);
@@ -975,22 +1143,22 @@ export default function TrainerScanPage() {
       if (row.session_type === "nutrition_follow_up") {
         setResult({
           type: "success",
-          message: `NUTRITION FOLLOW-UP SUCCESSFUL — ${row.client_name}. Status: Success. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used). Training sessions remaining: ${trainingRemaining} — no training session was deducted.`,
+          message: `QR RECORDED — ${row.client_name}. Nutrition follow-up was recorded and no training session was deducted. Complete the required Topic + Follow-up Content below before continuing. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used). Training sessions remaining: ${trainingRemaining}.`,
         });
       } else if (savedStatus === "no_show") {
         setResult({
           type: "success",
-          message: `NO-SHOW RECORDED — ${row.client_name}. Status: No-show. 1 training session was deducted. Training sessions remaining: ${trainingRemaining}. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used).`,
+          message: `NO-SHOW RECORDED — ${row.client_name}. 1 training session was deducted. Complete the required Topic + Follow-up Action below before continuing. Training sessions remaining: ${trainingRemaining}.`,
         });
       } else if (savedStatus === "late_cancel") {
         setResult({
           type: "success",
-          message: `LATE CANCEL RECORDED — ${row.client_name}. Status: Late cancel. 1 training session was deducted. Training sessions remaining: ${trainingRemaining}. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used).`,
+          message: `LATE CANCEL RECORDED — ${row.client_name}. 1 training session was deducted. Complete the required Topic + Cancellation Details below before continuing. Training sessions remaining: ${trainingRemaining}.`,
         });
       } else {
         setResult({
           type: "success",
-          message: `TRAINING SUCCESSFUL — ${row.client_name}. Status: Success. 1 training session was deducted. Training sessions remaining: ${trainingRemaining}. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used).`,
+          message: `QR RECORDED — ${row.client_name}. 1 training session was deducted. Complete the required Session Topic + Session Content below before this workflow is finished. Training sessions remaining: ${trainingRemaining}.`,
         });
       }
 
@@ -1064,7 +1232,11 @@ export default function TrainerScanPage() {
       setEditEmail(email);
       setEditPhone(phone);
 
-      await Promise.all([fetchTrainerStats(user.id), fetchUpcomingDemos(user.id)]);
+      await Promise.all([
+        fetchTrainerStats(user.id),
+        fetchUpcomingDemos(user.id),
+        fetchNoteClients(),
+      ]);
 
       if (alive) setCheckingRole(false);
     }
@@ -1077,6 +1249,18 @@ export default function TrainerScanPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
+
+  useEffect(() => {
+    if (!showNoteBox || !lastScannedHistoryId) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [showNoteBox, lastScannedHistoryId]);
 
   if (checkingRole) {
     return (
@@ -1253,6 +1437,7 @@ export default function TrainerScanPage() {
         <section className="fade-up mb-5 grid gap-3 md:grid-cols-5">
           <Link
             href="/trainer/clients"
+            onClick={(event) => blockPendingSessionNavigation(event)}
             className="rounded-2xl bg-yellow-400 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 active:scale-[0.98]"
           >
             Client Management
@@ -1260,6 +1445,7 @@ export default function TrainerScanPage() {
 
           <Link
             href="/trainer/calendar"
+            onClick={(event) => blockPendingSessionNavigation(event)}
             className="rounded-2xl border border-yellow-400/50 bg-yellow-400/10 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-yellow-300 transition hover:bg-yellow-400 hover:text-black active:scale-[0.98]"
           >
             Calendar
@@ -1267,6 +1453,7 @@ export default function TrainerScanPage() {
 
           <Link
             href="/history"
+            onClick={(event) => blockPendingSessionNavigation(event)}
             className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-zinc-300 transition hover:border-yellow-400/50 hover:text-yellow-300 active:scale-[0.98]"
           >
             History
@@ -1275,6 +1462,7 @@ export default function TrainerScanPage() {
           {trainerRole === "admin" ? (
             <Link
               href="/admin"
+              onClick={(event) => blockPendingSessionNavigation(event)}
               className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-zinc-300 transition hover:border-yellow-400/50 hover:text-yellow-300 active:scale-[0.98]"
             >
               Admin
@@ -1433,7 +1621,8 @@ export default function TrainerScanPage() {
                       ? stopScanner
                       : () => startScanner("training", selectedSessionStatus)
                   }
-                  className={`rounded-2xl px-7 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] ${
+                  disabled={showNoteBox}
+                  className={`rounded-2xl px-7 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${
                     scannerStarted
                       ? "bg-red-400 text-black hover:bg-red-300"
                       : "bg-yellow-400 text-black hover:bg-yellow-300"
@@ -1441,7 +1630,9 @@ export default function TrainerScanPage() {
                 >
                   {scannerStarted
                     ? "Stop Scanner"
-                    : `Start ${getSessionStatusLabel(selectedSessionStatus)} Scan`}
+                    : showNoteBox
+                      ? "Complete Session Record First"
+                      : `Start ${getSessionStatusLabel(selectedSessionStatus)} Scan`}
                 </button>
 
                 {!scannerStarted &&
@@ -1450,7 +1641,8 @@ export default function TrainerScanPage() {
                   <button
                     type="button"
                     onClick={() => startScanner("nutrition_follow_up", "success")}
-                    className="rounded-2xl border border-emerald-300/60 bg-emerald-300/10 px-7 py-3 text-sm font-black uppercase tracking-wide text-emerald-300 transition hover:bg-emerald-300 hover:text-black active:scale-[0.98]"
+                    disabled={showNoteBox}
+                    className="rounded-2xl border border-emerald-300/60 bg-emerald-300/10 px-7 py-3 text-sm font-black uppercase tracking-wide text-emerald-300 transition hover:bg-emerald-300 hover:text-black active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Scan Nutrition Follow-up
                   </button>
@@ -1537,40 +1729,70 @@ export default function TrainerScanPage() {
             </div>
 
             {showNoteBox ? (
-              <div className="mt-5 rounded-3xl border border-yellow-400/40 bg-black/75 p-5">
-                <h3 className="text-xl font-black text-yellow-400">
-                  {lastScannedType === "nutrition_follow_up"
-                    ? "Add Nutrition Follow-up Note"
-                    : lastScannedStatus === "no_show"
-                      ? "Add No-show Note"
-                      : lastScannedStatus === "late_cancel"
-                        ? "Add Late Cancel Note"
-                        : "Add Training Note"}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">
-                  {lastScannedType === "nutrition_follow_up"
-                    ? "Record nutrition progress, adherence, measurements, and the next follow-up plan."
-                    : lastScannedStatus === "no_show"
-                      ? "Add any contact attempt or reason provided for the no-show."
-                      : lastScannedStatus === "late_cancel"
-                        ? "Add the cancellation time, reason, or follow-up action."
-                        : "Record training focus, injury flags, client energy, and the next-session plan."}
-                </p>
+              <div className="mt-5 rounded-3xl border border-yellow-400/55 bg-[linear-gradient(145deg,_rgba(250,204,21,0.13),_rgba(0,0,0,0.88)_38%)] p-5 shadow-2xl md:p-6">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
+                      Required Before Next Scan
+                    </p>
+                    <h3 className="mt-2 text-2xl font-black text-white">
+                      Complete Session Record
+                    </h3>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+                      Topic and session content are mandatory. Optional note and photo can be added for extra context.
+                    </p>
+                  </div>
 
-                <textarea
-                  value={trainerNote}
-                  onChange={(event) => setTrainerNote(event.target.value)}
-                  placeholder={
-                    lastScannedType === "nutrition_follow_up"
-                      ? "Example: Protein target reviewed. Client is averaging 3 meals. Follow up on hydration next week."
-                      : lastScannedStatus === "no_show"
-                        ? "Example: Client did not arrive. Called at 6:10 PM and left a message."
-                        : lastScannedStatus === "late_cancel"
-                          ? "Example: Client cancelled 45 minutes before the session due to work."
-                          : "Example: Lower body today. Client had mild knee discomfort. Keep squat depth controlled next session."
-                  }
-                  className="mt-4 min-h-32 w-full rounded-2xl border border-yellow-500/30 bg-black/80 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
+                  <span className="w-fit rounded-full border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs font-black uppercase tracking-wider text-red-300">
+                    Incomplete
+                  </span>
+                </div>
+
+                <div className="mt-5 grid gap-4">
+                  <div>
+                    <label className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-yellow-300">
+                      {getRequiredTopicLabel()} <span className="text-red-300">*</span>
+                    </label>
+                    <input
+                      value={sessionTopic}
+                      onChange={(event) => setSessionTopic(event.target.value)}
+                      placeholder={
+                        lastScannedType === "nutrition_follow_up"
+                          ? "Example: Protein & hydration review"
+                          : lastScannedStatus === "no_show"
+                            ? "Example: No-show follow-up"
+                            : lastScannedStatus === "late_cancel"
+                              ? "Example: Late cancellation follow-up"
+                              : "Example: Lower Body Strength — Squat Focus"
+                      }
+                      className="w-full rounded-2xl border border-yellow-500/35 bg-black/80 px-4 py-3.5 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-yellow-300">
+                      {getRequiredContentLabel()} <span className="text-red-300">*</span>
+                    </label>
+                    <textarea
+                      value={sessionContent}
+                      onChange={(event) => setSessionContent(event.target.value)}
+                      placeholder={getRequiredContentPlaceholder()}
+                      className="min-h-40 w-full rounded-2xl border border-yellow-500/35 bg-black/80 px-4 py-3.5 text-sm leading-6 text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-zinc-300">
+                      Additional Note <span className="font-semibold normal-case tracking-normal text-zinc-600">(optional)</span>
+                    </label>
+                    <textarea
+                      value={trainerNote}
+                      onChange={(event) => setTrainerNote(event.target.value)}
+                      placeholder="Optional: pain flags, client energy, technique cue, mood, next-session reminder..."
+                      className="min-h-28 w-full rounded-2xl border border-white/10 bg-black/70 px-4 py-3.5 text-sm leading-6 text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
+                    />
+                  </div>
+                </div>
 
                 <div className="mt-4 rounded-2xl border border-cyan-400/25 bg-cyan-400/[0.06] p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1579,7 +1801,7 @@ export default function TrainerScanPage() {
                         Session Photo · Optional
                       </p>
                       <p className="mt-1 text-xs leading-5 text-zinc-500">
-                        Take a photo or choose one from the phone. The app compresses it before upload to reduce storage.
+                        Take a photo or choose one from the phone. The app compresses it before upload.
                       </p>
                     </div>
 
@@ -1631,28 +1853,24 @@ export default function TrainerScanPage() {
                   </p>
                 ) : null}
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={saveTrainerNote}
-                    disabled={savingNote}
-                    className="rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {savingNote
-                      ? "Saving..."
-                      : sessionPhoto
-                        ? "Save Note & Photo"
-                        : "Save Note"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={skipTrainerNote}
-                    disabled={savingNote}
-                    className="rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Skip Note
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={saveTrainerNote}
+                  disabled={
+                    savingNote || !sessionTopic.trim() || !sessionContent.trim()
+                  }
+                  className="mt-4 w-full rounded-2xl bg-yellow-400 px-5 py-4 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingNote
+                    ? "Saving Session Record..."
+                    : sessionPhoto
+                      ? "Complete Session & Save Photo"
+                      : "Complete Session"}
+                </button>
+
+                <p className="mt-3 text-center text-xs leading-5 text-zinc-600">
+                  Another QR scan is locked until the required fields are saved.
+                </p>
               </div>
             ) : null}
           </div>
@@ -1685,10 +1903,10 @@ export default function TrainerScanPage() {
 
                 <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
                   <p className="text-sm font-semibold text-white">
-                    2. Add notes after meaningful sessions.
+                    2. Complete every session record before the next scan.
                   </p>
                   <p className="mt-1 text-xs leading-5 text-zinc-500">
-                    Better notes create better renewals and better outcomes.
+                    Topic + session content are required; optional notes add coaching context.
                   </p>
                 </div>
 
@@ -1701,6 +1919,131 @@ export default function TrainerScanPage() {
                   </p>
                 </div>
               </div>
+            </section>
+
+            <section className="rounded-[2rem] border border-yellow-400/20 bg-white/[0.04] p-5 shadow-2xl backdrop-blur">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.24em] text-yellow-400">
+                    Previous Lesson Plans
+                  </p>
+                  <h2 className="mt-2 text-2xl font-black text-white">
+                    Client Note History
+                  </h2>
+                  <p className="mt-1 text-sm leading-6 text-zinc-500">
+                    Select a client to review previous topics, workout content and coaching notes before planning the next session.
+                  </p>
+                </div>
+              </div>
+
+              <select
+                value={selectedNoteClientId}
+                onChange={async (event) => {
+                  const clientId = event.target.value;
+                  setSelectedNoteClientId(clientId);
+                  setSelectedClientHistory([]);
+                  if (clientId) await fetchClientLessonHistory(clientId);
+                }}
+                className="mt-5 w-full rounded-2xl border border-yellow-400/25 bg-black/70 px-4 py-3.5 text-sm text-white outline-none focus:border-yellow-400"
+              >
+                <option value="">Choose a client...</option>
+                {noteClients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.full_name}
+                    {client.email ? ` — ${client.email}` : ""}
+                  </option>
+                ))}
+              </select>
+
+              {loadingClientHistory ? (
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-yellow-300">
+                  Loading previous lesson plans...
+                </div>
+              ) : clientHistoryMessage ? (
+                <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-400/10 p-4 text-sm text-red-200">
+                  {clientHistoryMessage}
+                </div>
+              ) : selectedNoteClientId && selectedClientHistory.length === 0 ? (
+                <div className="mt-4 rounded-2xl border border-dashed border-white/15 bg-black/35 p-5 text-sm text-zinc-500">
+                  No previous session notes found for this client.
+                </div>
+              ) : null}
+
+              {selectedClientHistory.length > 0 ? (
+                <div className="mt-4 max-h-[620px] space-y-3 overflow-y-auto pr-1">
+                  {selectedClientHistory.map((log) => (
+                    <article
+                      key={log.id}
+                      className="rounded-2xl border border-white/10 bg-black/45 p-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${
+                              log.session_type === "nutrition_follow_up"
+                                ? "bg-emerald-400/15 text-emerald-300"
+                                : "bg-yellow-400/15 text-yellow-300"
+                            }`}
+                          >
+                            {log.session_type === "nutrition_follow_up"
+                              ? "Nutrition"
+                              : "Training"}
+                          </span>
+                          <span
+                            className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${getSessionStatusClass(
+                              log.status,
+                            )}`}
+                          >
+                            {getSessionStatusLabel(log.status)}
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-semibold text-zinc-500">
+                          {formatDateTime(log.created_at)}
+                        </span>
+                      </div>
+
+                      {log.session_topic ? (
+                        <div className="mt-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-yellow-400">
+                            Topic
+                          </p>
+                          <p className="mt-1 text-sm font-semibold text-white">
+                            {log.session_topic}
+                          </p>
+                        </div>
+                      ) : null}
+
+                      {log.session_content ? (
+                        <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                            Session Content
+                          </p>
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
+                            {log.session_content}
+                          </p>
+                        </div>
+                      ) : null}
+
+                    {log.trainer_note ? (
+                        <div className="mt-3 rounded-xl border border-yellow-400/15 bg-yellow-400/[0.06] p-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-yellow-400">
+                            Optional Note
+                          </p>
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
+                            {log.trainer_note}
+                          </p>
+                        </div>
+                      ) : null}
+
+                      {!log.session_topic && !log.session_content && !log.trainer_note ? (
+                        <p className="mt-3 text-xs text-zinc-600">
+                          This older session does not have a saved lesson plan.
+                        </p>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              ) : null}
             </section>
 
             <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-2xl backdrop-blur">
@@ -1772,6 +2115,7 @@ export default function TrainerScanPage() {
 
             <Link
               href="/trainer/clients"
+              onClick={(event) => blockPendingSessionNavigation(event)}
               className="rounded-2xl border border-yellow-400/60 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-yellow-300 transition hover:bg-yellow-400 hover:text-black"
             >
               Open Clients
@@ -1865,17 +2209,77 @@ export default function TrainerScanPage() {
                     </div>
 
                     {log.photo_path ? (
-                      <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs font-bold text-cyan-200">
-                        📷 Session photo attached
+                      <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.06] p-4">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <p className="text-xs font-bold uppercase tracking-widest text-cyan-300">
+                            Session Photo
+                          </p>
+
+                          {historyPhotoUrls.get(log.id) ? (
+                            <a
+                              href={historyPhotoUrls.get(log.id)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="rounded-xl border border-cyan-400/30 px-3 py-1.5 text-xs font-bold text-cyan-200 transition hover:bg-cyan-300 hover:text-black"
+                            >
+                              Open Full Size
+                            </a>
+                          ) : null}
+                        </div>
+
+                        {historyPhotoUrls.get(log.id) ? (
+                          <a
+                            href={historyPhotoUrls.get(log.id)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block overflow-hidden rounded-2xl border border-white/10 bg-black/40"
+                          >
+                            <img
+                              src={historyPhotoUrls.get(log.id)}
+                              alt={`Session for ${client?.full_name || "client"}`}
+                              loading="lazy"
+                              className="max-h-[420px] w-full object-contain"
+                            />
+                          </a>
+                        ) : (
+                          <div className="rounded-xl border border-dashed border-cyan-400/25 bg-black/30 p-4 text-sm text-zinc-500">
+                            Photo is attached, but it could not be loaded. Check
+                            the session-photos Storage read policy.
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {log.session_topic || log.session_content ? (
+                      <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                        {log.session_topic ? (
+                          <div>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-yellow-400">
+                              Topic
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-white">
+                              {log.session_topic}
+                            </p>
+                          </div>
+                        ) : null}
+
+                        {log.session_content ? (
+                          <div className={log.session_topic ? "mt-3" : ""}>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                              Session Content
+                            </p>
+                            <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
+                              {log.session_content}
+                            </p>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
 
                     {log.trainer_note ? (
                       <div className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4">
                         <p className="text-xs font-bold uppercase tracking-widest text-yellow-400">
-                          {log.session_type === "nutrition_follow_up"
-                            ? "Nutrition Note"
-                            : "Training Note"}
+                          Additional Note
                         </p>
                         <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
                           {log.trainer_note}

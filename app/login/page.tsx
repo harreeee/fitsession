@@ -3,7 +3,11 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
+import {
+  getRememberLoginPreference,
+  setRememberLoginPreference,
+  supabase,
+} from "../../lib/supabaseClient";
 import { getHomePathForRole } from "../../lib/roleHomePath";
 
 const MOTIVATION_QUOTES = [
@@ -42,14 +46,72 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
+  const [checkingSavedSession, setCheckingSavedSession] = useState(true);
   const [dailyQuote] = useState(() => getDailyQuote());
 
   useEffect(() => {
+    let alive = true;
+
     router.prefetch("/client/login");
     router.prefetch("/client/activate");
     router.prefetch("/trainer/scan");
     router.prefetch("/admin");
     router.prefetch("/admin/marketing");
+
+    setRememberMe(getRememberLoginPreference());
+
+    async function restoreSavedSession() {
+      try {
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+
+        if (!alive) return;
+
+        if (sessionError || !session?.user) {
+          setCheckingSavedSession(false);
+          return;
+        }
+
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .maybeSingle();
+
+        if (!alive) return;
+
+        if (profileError || !profile?.role) {
+          await supabase.auth.signOut();
+          if (alive) setCheckingSavedSession(false);
+          return;
+        }
+
+        const destination = getHomePathForRole(profile.role);
+
+        if (destination === "/login") {
+          await supabase.auth.signOut();
+          if (alive) {
+            setMessage(`Unknown or unsupported role: ${profile.role}`);
+            setCheckingSavedSession(false);
+          }
+          return;
+        }
+
+        router.replace(destination);
+      } catch (error) {
+        console.error("Could not restore saved login session:", error);
+        if (alive) setCheckingSavedSession(false);
+      }
+    }
+
+    void restoreSavedSession();
+
+    return () => {
+      alive = false;
+    };
   }, [router]);
 
   async function handleStaffLogin(event: FormEvent<HTMLFormElement>) {
@@ -66,6 +128,7 @@ export default function LoginPage() {
     setMessage("");
 
     try {
+      setRememberLoginPreference(rememberMe);
       const { data: loginData, error: loginError } =
         await supabase.auth.signInWithPassword({
           email: cleanEmail,
@@ -113,6 +176,22 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (checkingSavedSession) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#fff8df] px-4 text-zinc-950">
+        <div className="w-full max-w-sm rounded-[2rem] border border-zinc-900/10 bg-white p-7 text-center shadow-[0_22px_65px_rgba(24,24,27,0.13)]">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-black text-lg font-black text-yellow-300">
+            FXA
+          </div>
+          <div className="mx-auto mt-5 h-8 w-8 animate-spin rounded-full border-2 border-yellow-300 border-t-black" />
+          <p className="mt-4 text-sm font-bold text-zinc-700">
+            Restoring your session...
+          </p>
+        </div>
+      </main>
+    );
   }
 
   return (
@@ -270,6 +349,27 @@ export default function LoginPage() {
                     “{dailyQuote}”
                   </p>
                 </div>
+
+                <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-[1.25rem] border border-zinc-900/10 bg-zinc-50 px-4 py-3.5 text-left transition hover:border-yellow-400/60 hover:bg-yellow-50/70">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setRememberMe(checked);
+                      setRememberLoginPreference(checked);
+                    }}
+                    className="mt-0.5 h-5 w-5 shrink-0 accent-black"
+                  />
+                  <span>
+                    <span className="block text-sm font-black text-zinc-950">
+                      Remember me
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-zinc-500">
+                      Keep me signed in on this device. Turn this off to keep the login only for the current browser session.
+                    </span>
+                  </span>
+                </label>
 
                 {!showStaffLogin ? (
                   <div className="mt-7 grid gap-3">
