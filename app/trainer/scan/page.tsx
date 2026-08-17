@@ -15,6 +15,7 @@ type ScanResult = {
 type SessionType = "training" | "nutrition_follow_up";
 
 type SessionStatus = "success" | "no_show" | "late_cancel";
+type MobileTab = "home" | "scan" | "client" | "profile";
 
 type LeadStatus =
   | "new"
@@ -65,6 +66,7 @@ type TrainerProfile = {
   full_name: string | null;
   email: string | null;
   phone: string | null;
+  profile_photo_path: string | null;
 };
 
 type RecordSessionRpcRow = {
@@ -283,6 +285,7 @@ export default function TrainerScanPage() {
 
   const [result, setResult] = useState<ScanResult>({ type: "", message: "" });
   const [scannerStarted, setScannerStarted] = useState(false);
+  const [activeMobileTab, setActiveMobileTab] = useState<MobileTab>("home");
 
   const [trainerId, setTrainerId] = useState<string | null>(null);
   const [trainerName, setTrainerName] = useState("");
@@ -326,6 +329,10 @@ export default function TrainerScanPage() {
   );
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMessage, setProfileMessage] = useState("");
+  const [trainerPhotoUrl, setTrainerPhotoUrl] = useState("");
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
+  const [profilePhotoPreview, setProfilePhotoPreview] = useState("");
+  const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
 
   const [lastScannedHistoryId, setLastScannedHistoryId] = useState<
     string | null
@@ -344,6 +351,7 @@ export default function TrainerScanPage() {
   const [updatingDemoId, setUpdatingDemoId] = useState<string | null>(null);
 
   const [noteClients, setNoteClients] = useState<ClientInfo[]>([]);
+  const [clientHistorySearch, setClientHistorySearch] = useState("");
   const [selectedNoteClientId, setSelectedNoteClientId] = useState("");
   const [selectedClientHistory, setSelectedClientHistory] = useState<
     TrainerHistoryLog[]
@@ -355,6 +363,199 @@ export default function TrainerScanPage() {
   const greeting = useMemo(() => getGreeting(), []);
   const performanceLabel = getPerformanceLabel(sessionsToday);
   const performanceMessage = getPerformanceMessage(sessionsToday);
+  const filteredNoteClients = useMemo(() => {
+    const query = clientHistorySearch.trim().toLowerCase();
+    if (!query) return noteClients;
+
+    return noteClients.filter((client) => {
+      return (
+        client.full_name.toLowerCase().includes(query) ||
+        String(client.email || "").toLowerCase().includes(query)
+      );
+    });
+  }, [clientHistorySearch, noteClients]);
+
+
+  async function openMobileTab(tab: MobileTab) {
+    if (tab !== "scan" && showNoteBox && lastScannedHistoryId) {
+      setActiveMobileTab("scan");
+      setNoteMessage(
+        "Complete the required session record before opening another tab.",
+      );
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    if (tab !== "scan" && scannerStarted) {
+      await stopScanner();
+    }
+
+    setActiveMobileTab(tab);
+
+    window.requestAnimationFrame(() => {
+      if (window.innerWidth < 768) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+
+      const targetId = tab === "client" ? "client" : tab;
+      document.getElementById(targetId)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
+
+  function getCameraEnvironmentIssue() {
+    if (typeof window === "undefined") return null;
+
+    if (!window.isSecureContext) {
+      const currentOrigin = window.location.origin;
+      return `Camera access is blocked because this page is not a secure context (${currentOrigin}). Open the app over HTTPS. For local development, localhost on the same device is allowed; a phone opening http://192.168.x.x:3000 is not.`;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return "This browser does not expose the camera API. Try Safari or Chrome with camera permission enabled.";
+    }
+
+    return null;
+  }
+
+  function getCameraStartErrorMessage(error: unknown) {
+    const environmentIssue = getCameraEnvironmentIssue();
+    if (environmentIssue) return environmentIssue;
+
+    const rawMessage = getErrorMessage(error);
+    const cleanMessage = rawMessage.toLowerCase();
+    const errorName =
+      typeof error === "object" && error !== null && "name" in error
+        ? String((error as { name?: unknown }).name || "").toLowerCase()
+        : "";
+
+    if (
+      errorName.includes("notallowed") ||
+      cleanMessage.includes("notallowed") ||
+      cleanMessage.includes("permission") ||
+      cleanMessage.includes("denied")
+    ) {
+      return "Camera permission was denied. Allow camera access for this site in your browser settings, then tap Start Scan again.";
+    }
+
+    if (
+      errorName.includes("notfound") ||
+      cleanMessage.includes("notfound") ||
+      cleanMessage.includes("no camera") ||
+      cleanMessage.includes("requested device not found")
+    ) {
+      return "No available camera was found on this device. Check that the camera is enabled and available to the browser.";
+    }
+
+    if (
+      errorName.includes("notreadable") ||
+      cleanMessage.includes("notreadable") ||
+      cleanMessage.includes("could not start video") ||
+      cleanMessage.includes("in use")
+    ) {
+      return "The camera exists but could not be opened. Close other apps using the camera, then try again.";
+    }
+
+    if (
+      errorName.includes("overconstrained") ||
+      cleanMessage.includes("overconstrained") ||
+      cleanMessage.includes("facingmode")
+    ) {
+      return "The preferred rear camera could not be selected. The app also tried the available camera list, but none could start.";
+    }
+
+    return `Camera could not start: ${rawMessage}. Check camera permission and try again.`;
+  }
+
+  async function loadTrainerPhoto(path: string | null | undefined) {
+    const cleanPath = String(path || "").trim();
+    if (!cleanPath) {
+      setTrainerPhotoUrl("");
+      return;
+    }
+
+    const { data, error } = await supabase.storage
+      .from("profile-photos")
+      .createSignedUrl(cleanPath, 60 * 60 * 24 * 7);
+
+    if (error || !data?.signedUrl) {
+      console.error("Could not load trainer profile photo:", error?.message);
+      setTrainerPhotoUrl("");
+      return;
+    }
+
+    const versionSeparator = data.signedUrl.includes("?") ? "&" : "?";
+    setTrainerPhotoUrl(`${data.signedUrl}${versionSeparator}v=${Date.now()}`);
+  }
+
+  function clearProfilePhotoPreview() {
+    if (profilePhotoPreview) URL.revokeObjectURL(profilePhotoPreview);
+    setProfilePhotoFile(null);
+    setProfilePhotoPreview("");
+  }
+
+  function handleProfilePhotoChange(file: File | null) {
+    clearProfilePhotoPreview();
+    setProfileMessage("");
+
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setProfileMessage("Please choose an image file.");
+      return;
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      setProfileMessage("Profile photo is too large. Please choose an image under 15 MB.");
+      return;
+    }
+
+    setProfilePhotoFile(file);
+    setProfilePhotoPreview(URL.createObjectURL(file));
+  }
+
+  async function saveProfilePhoto() {
+    if (!profilePhotoFile || !isValidUuid(trainerId)) return;
+
+    setUploadingProfilePhoto(true);
+    setProfileMessage("");
+
+    try {
+      const compressedPhoto = await compressSessionPhoto(profilePhotoFile);
+      const photoPath = `${trainerId}/avatar.jpg`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("profile-photos")
+        .upload(photoPath, compressedPhoto, {
+          contentType: "image/jpeg",
+          cacheControl: "3600",
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { error: pathError } = await supabase.rpc("set_own_profile_photo", {
+        p_photo_path: photoPath,
+      });
+
+      if (pathError) {
+        throw new Error(
+          `${pathError.message}. Run the profile-photo SQL migration if the RPC or bucket has not been installed yet.`,
+        );
+      }
+
+      await loadTrainerPhoto(photoPath);
+      clearProfilePhotoPreview();
+      setProfileMessage("Profile photo updated. It now appears at the top of your trainer home screen.");
+    } catch (error) {
+      setProfileMessage(getErrorMessage(error));
+    } finally {
+      setUploadingProfilePhoto(false);
+    }
+  }
 
   async function fetchUpcomingDemos(userId: string) {
     if (!isValidUuid(userId)) return;
@@ -947,10 +1148,18 @@ export default function TrainerScanPage() {
         message:
           "Complete the required session record before scanning another client.",
       });
+      setActiveMobileTab("scan");
       return;
     }
 
     if (scannerStarted || scannerRef.current) return;
+
+    const environmentIssue = getCameraEnvironmentIssue();
+    if (environmentIssue) {
+      setActiveMobileTab("scan");
+      setResult({ type: "error", message: environmentIssue });
+      return;
+    }
 
     const nextMode: SessionType =
       requestedMode === "nutrition_follow_up" &&
@@ -961,9 +1170,9 @@ export default function TrainerScanPage() {
     const nextStatus: SessionStatus =
       nextMode === "nutrition_follow_up" ? "success" : requestedStatus;
 
+    setActiveMobileTab("scan");
     setScanMode(nextMode);
     setActiveScanStatus(nextStatus);
-
     setResult({ type: "", message: "" });
     setNoteMessage("");
     setShowNoteBox(false);
@@ -977,56 +1186,95 @@ export default function TrainerScanPage() {
     setLastScannedRemaining(null);
     setLastScannedAt(null);
     scanningLockRef.current = false;
-    setScannerStarted(true);
+
+    const qrSize = Math.min(
+      320,
+      Math.max(
+        220,
+        Math.floor(
+          (typeof window !== "undefined" ? Math.min(window.innerWidth, 430) : 360) *
+            0.72,
+        ),
+      ),
+    );
+
+    const config = {
+      fps: 12,
+      qrbox: { width: qrSize, height: qrSize },
+      aspectRatio: 1,
+    };
+
+    const onScanSuccess = async (decodedText: string) => {
+      if (scanningLockRef.current) return;
+      scanningLockRef.current = true;
+
+      const qrToken = extractQrToken(decodedText);
+
+      try {
+        await stopScanner();
+        await markSession(qrToken, nextMode, nextStatus);
+      } catch (error) {
+        console.error("Scan processing error:", error);
+        setResult({
+          type: "error",
+          message: getErrorMessage(error) || "Unable to process this scan.",
+        });
+      }
+    };
 
     try {
       const scanner = new Html5Qrcode("qr-reader");
       scannerRef.current = scanner;
+      setScannerStarted(true);
 
-      const qrSize = Math.min(
-        340,
-        Math.max(
-          240,
-          Math.floor(
-            (typeof window !== "undefined" ? window.innerWidth : 360) * 0.72
-          )
-        )
-      );
+      try {
+        await scanner.start(
+          { facingMode: "environment" },
+          config,
+          onScanSuccess,
+          () => {},
+        );
+      } catch (firstError) {
+        const firstMessage = getCameraStartErrorMessage(firstError).toLowerCase();
+        const shouldNotRetry =
+          firstMessage.includes("permission was denied") ||
+          firstMessage.includes("not a secure context") ||
+          firstMessage.includes("no available camera was found");
 
-      await scanner.start(
-        { facingMode: "environment" },
-        {
-          fps: 12,
-          qrbox: { width: qrSize, height: qrSize },
-        },
-        async (decodedText) => {
-          if (scanningLockRef.current) return;
-          scanningLockRef.current = true;
+        if (shouldNotRetry) throw firstError;
 
-          const qrToken = extractQrToken(decodedText);
+        const cameras = await Html5Qrcode.getCameras();
+        if (!cameras.length) throw firstError;
 
-          try {
-            await stopScanner();
-            await markSession(qrToken, nextMode, nextStatus);
-          } catch (error) {
-            console.error("Scan processing error:", error);
-            setResult({
-              type: "error",
-              message: getErrorMessage(error) || "Unable to process this scan.",
-            });
-          }
-        },
-        () => {}
-      );
+        const preferredCamera =
+          cameras.find((camera) =>
+            /(back|rear|environment)/i.test(camera.label || ""),
+          ) || cameras[cameras.length - 1];
+
+        await scanner.start(
+          preferredCamera.id,
+          config,
+          onScanSuccess,
+          () => {},
+        );
+      }
     } catch (error) {
-      console.error(error);
+      console.error("Camera start error:", error);
+      const scanner = scannerRef.current;
+
+      try {
+        if (scanner?.isScanning) await scanner.stop();
+        if (scanner) await scanner.clear();
+      } catch (cleanupError) {
+        console.log("Scanner cleanup error:", cleanupError);
+      }
+
       scannerRef.current = null;
       scanningLockRef.current = false;
       setScannerStarted(false);
       setResult({
         type: "error",
-        message:
-          "Camera could not start. Allow camera permission and use localhost or HTTPS.",
+        message: getCameraStartErrorMessage(error),
       });
     }
   }
@@ -1224,15 +1472,37 @@ export default function TrainerScanPage() {
       setTrainerId(user.id);
       setTrainerRole(cleanRole);
 
-      const { data: profile, error: profileError } = await supabase
+      let trainerProfile: TrainerProfile | null = null;
+
+      const profileWithPhoto = await supabase
         .from("profiles")
-        .select("full_name, email, phone")
+        .select("full_name, email, phone, profile_photo_path")
         .eq("id", user.id)
         .maybeSingle();
 
-      if (profileError) console.error(profileError);
+      if (!profileWithPhoto.error) {
+        trainerProfile = profileWithPhoto.data as TrainerProfile | null;
+      } else {
+        console.warn(
+          "Profile photo column is not available yet. Falling back to the existing profile fields:",
+          profileWithPhoto.error.message,
+        );
 
-      const trainerProfile = profile as TrainerProfile | null;
+        const fallbackProfile = await supabase
+          .from("profiles")
+          .select("full_name, email, phone")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (fallbackProfile.error) console.error(fallbackProfile.error);
+        trainerProfile = fallbackProfile.data
+          ? {
+              ...fallbackProfile.data,
+              profile_photo_path: null,
+            }
+          : null;
+      }
+
       const name = trainerProfile?.full_name || user.email || "Staff";
       const email = trainerProfile?.email || user.email || "";
       const phone = trainerProfile?.phone || "";
@@ -1243,6 +1513,7 @@ export default function TrainerScanPage() {
       setEditName(name);
       setEditEmail(email);
       setEditPhone(phone);
+      await loadTrainerPhoto(trainerProfile?.profile_photo_path);
 
       await Promise.all([
         fetchTrainerStats(user.id),
@@ -1356,7 +1627,7 @@ export default function TrainerScanPage() {
       `}</style>
 
       <div className="mx-auto max-w-6xl px-4 pb-8 pt-4 md:px-6 md:pt-6">
-        <header id="home" className="mb-5 md:mb-7">
+        <header id="home" className={`${activeMobileTab === "home" ? "block" : "hidden"} mb-5 md:mb-7 md:block`}>
           <div className="flex items-center justify-between gap-4">
             <div className="leading-none">
               <div className="text-[28px] font-black italic tracking-[-0.08em] text-white">
@@ -1401,8 +1672,18 @@ export default function TrainerScanPage() {
             </div>
 
             <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#111] p-3 lg:flex-col lg:items-stretch lg:text-center">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-yellow-400 text-lg font-black text-black lg:mx-auto">
-                {getInitials(trainerName || trainerEmail || "FX")}
+              <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-full border-2 border-yellow-400 bg-yellow-400 text-black lg:mx-auto">
+                {trainerPhotoUrl ? (
+                  <img
+                    src={trainerPhotoUrl}
+                    alt={`${trainerName || "Trainer"} profile`}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-lg font-black">
+                    {getInitials(trainerName || trainerEmail || "FX")}
+                  </div>
+                )}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-bold text-white">
@@ -1485,45 +1766,46 @@ export default function TrainerScanPage() {
               Quick Actions
             </p>
             <div className="grid grid-cols-4 gap-2 md:max-w-2xl md:gap-3">
-              <a
-                href="#scan"
-                className="rounded-2xl border border-yellow-400/35 bg-[#121212] px-2 py-4 text-center transition hover:border-yellow-400 hover:bg-yellow-400/10"
+              <button
+                type="button"
+                onClick={() => openMobileTab("scan")}
+                className="min-h-[78px] rounded-2xl border border-yellow-400/35 bg-[#121212] px-2 py-3 text-center transition hover:border-yellow-400 hover:bg-yellow-400/10 active:scale-[0.98]"
               >
                 <div className="text-xl text-yellow-400">⌗</div>
                 <p className="mt-2 text-[10px] font-bold text-white sm:text-xs">
                   Scan QR
                 </p>
-              </a>
-              <Link
-                href="/trainer/clients"
-                onClick={(event) => blockPendingSessionNavigation(event)}
-                className="rounded-2xl border border-white/10 bg-[#121212] px-2 py-4 text-center transition hover:border-yellow-400/50"
+              </button>
+              <button
+                type="button"
+                onClick={() => openMobileTab("client")}
+                className="min-h-[78px] rounded-2xl border border-white/10 bg-[#121212] px-2 py-3 text-center transition hover:border-yellow-400/50 active:scale-[0.98]"
               >
-                <div className="text-xl text-yellow-400">♙</div>
-                <p className="mt-2 text-[10px] font-bold text-white sm:text-xs">
-                  Clients
+                <div className="text-xl text-yellow-400">▤</div>
+                <p className="mt-2 text-[10px] font-bold leading-4 text-white sm:text-xs">
+                  Client History
                 </p>
-              </Link>
+              </button>
               <Link
                 href="/trainer/calendar"
                 onClick={(event) => blockPendingSessionNavigation(event)}
-                className="rounded-2xl border border-white/10 bg-[#121212] px-2 py-4 text-center transition hover:border-yellow-400/50"
+                className="flex min-h-[78px] flex-col items-center justify-center rounded-2xl border border-white/10 bg-[#121212] px-2 py-3 text-center transition hover:border-yellow-400/50 active:scale-[0.98]"
               >
                 <div className="text-xl text-yellow-400">□</div>
                 <p className="mt-2 text-[10px] font-bold text-white sm:text-xs">
                   Calendar
                 </p>
               </Link>
-              <Link
-                href="/history"
-                onClick={(event) => blockPendingSessionNavigation(event)}
-                className="rounded-2xl border border-white/10 bg-[#121212] px-2 py-4 text-center transition hover:border-yellow-400/50"
+              <button
+                type="button"
+                onClick={() => openMobileTab("profile")}
+                className="min-h-[78px] rounded-2xl border border-white/10 bg-[#121212] px-2 py-3 text-center transition hover:border-yellow-400/50 active:scale-[0.98]"
               >
-                <div className="text-xl text-yellow-400">▤</div>
+                <div className="text-xl text-yellow-400">●</div>
                 <p className="mt-2 text-[10px] font-bold text-white sm:text-xs">
-                  History
+                  Profile
                 </p>
-              </Link>
+              </button>
             </div>
           </section>
 
@@ -1578,7 +1860,7 @@ export default function TrainerScanPage() {
 
         <section
           id="scan"
-          className="scroll-mt-4 border-t border-white/10 pt-8 md:pt-10"
+          className={`${activeMobileTab === "scan" ? "block" : "hidden"} scroll-mt-4 pt-2 md:block md:border-t md:border-white/10 md:pt-10`}
         >
           <div className="mx-auto max-w-2xl">
             {!scannerStarted && !showNoteBox ? (
@@ -2006,34 +2288,66 @@ export default function TrainerScanPage() {
           </div>
         </section>
 
-        <section className="mt-10 grid gap-5 border-t border-white/10 pt-8 lg:grid-cols-[0.9fr_1.1fr]">
-          <div id="notes" className="rounded-3xl border border-white/10 bg-[#0e0e0e] p-5">
+        <section
+          id="client"
+          className={`${activeMobileTab === "client" ? "block" : "hidden"} mt-2 scroll-mt-4 md:mt-10 md:block md:border-t md:border-white/10 md:pt-8`}
+        >
+          <div className="mx-auto max-w-2xl rounded-3xl border border-white/10 bg-[#0e0e0e] p-5">
             <p className="text-[11px] font-black uppercase tracking-[0.12em] text-yellow-400">
-              Previous Lesson Plans
+              Client History
             </p>
-            <h2 className="mt-2 text-xl font-black">Client Note History</h2>
+            <h2 className="mt-2 text-xl font-black">Check Client Training History</h2>
             <p className="mt-2 text-xs leading-5 text-zinc-500">
-              Select a client to review previous session topics and coaching notes.
+              Choose a client to review past training topics, session content, notes, and attendance before the next session.
             </p>
 
-            <select
-              value={selectedNoteClientId}
-              onChange={async (event) => {
-                const clientId = event.target.value;
-                setSelectedNoteClientId(clientId);
-                setSelectedClientHistory([]);
-                if (clientId) await fetchClientLessonHistory(clientId);
-              }}
-              className="mt-4 w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-            >
-              <option value="">Choose a client...</option>
-              {noteClients.map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.full_name}
-                  {client.email ? ` — ${client.email}` : ""}
-                </option>
-              ))}
-            </select>
+            <div className="mt-5 space-y-3">
+              <div>
+                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">
+                  Find Client
+                </label>
+                <input
+                  value={clientHistorySearch}
+                  onChange={(event) => {
+                    setClientHistorySearch(event.target.value);
+                    setSelectedNoteClientId("");
+                    setSelectedClientHistory([]);
+                    setClientHistoryMessage("");
+                  }}
+                  type="search"
+                  placeholder="Search name or email..."
+                  className="min-h-12 w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-base text-white outline-none placeholder:text-zinc-700 focus:border-yellow-400"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">
+                  Client
+                </label>
+                <select
+                  value={selectedNoteClientId}
+                  onChange={async (event) => {
+                    const clientId = event.target.value;
+                    setSelectedNoteClientId(clientId);
+                    setSelectedClientHistory([]);
+                    if (clientId) await fetchClientLessonHistory(clientId);
+                  }}
+                  className="min-h-12 w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-base text-white outline-none focus:border-yellow-400"
+                >
+                  <option value="">
+                    {filteredNoteClients.length
+                      ? `Choose a client (${filteredNoteClients.length})...`
+                      : "No matching clients"}
+                  </option>
+                  {filteredNoteClients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.full_name}
+                      {client.email ? ` — ${client.email}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             {loadingClientHistory ? (
               <p className="mt-4 text-xs text-yellow-400">Loading history...</p>
@@ -2089,87 +2403,9 @@ export default function TrainerScanPage() {
             ) : null}
           </div>
 
-          <div id="demos" className="rounded-3xl border border-cyan-400/15 bg-[#0d0f0f] p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-black uppercase tracking-[0.12em] text-cyan-300">
-                  Upcoming Demos
-                </p>
-                <h2 className="mt-2 text-xl font-black">Assigned Potential Clients</h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => trainerId && fetchUpcomingDemos(trainerId)}
-                disabled={loadingDemos}
-                className="rounded-xl border border-cyan-300/30 px-3 py-2 text-[10px] font-black uppercase text-cyan-300 disabled:opacity-50"
-              >
-                Refresh
-              </button>
-            </div>
-
-            {upcomingDemos.length === 0 ? (
-              <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-4 text-xs text-zinc-500">
-                No demos assigned in the next seven days.
-              </p>
-            ) : (
-              <div className="mt-5 space-y-3">
-                {upcomingDemos.map((demo) => (
-                  <article
-                    key={demo.id}
-                    className="rounded-2xl border border-white/10 bg-black/45 p-4"
-                  >
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <p className="text-sm font-black text-white">{demo.full_name}</p>
-                        <p className="mt-1 text-xs font-semibold text-cyan-300">
-                          {formatDemoDateTime(demo.demo_at)}
-                        </p>
-                        <p className="mt-1 text-[11px] text-zinc-500">
-                          {demo.phone || demo.email || "No contact details"}
-                        </p>
-                        <p className="mt-1 text-[11px] text-yellow-400">
-                          {getLeadSourceLabel(demo.source_type, demo.source_detail)}
-                        </p>
-                      </div>
-                      <span className="w-fit rounded-full border border-white/10 px-2 py-1 text-[9px] font-black uppercase text-zinc-400">
-                        {demo.status.replaceAll("_", " ")}
-                      </span>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-3 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => updateDemoStatus(demo, "demo_completed")}
-                        disabled={updatingDemoId === demo.id}
-                        className="rounded-xl bg-emerald-400 px-2 py-2.5 text-[10px] font-black uppercase text-black disabled:opacity-50"
-                      >
-                        Completed
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => updateDemoStatus(demo, "no_show")}
-                        disabled={updatingDemoId === demo.id}
-                        className="rounded-xl bg-orange-500 px-2 py-2.5 text-[10px] font-black uppercase text-black disabled:opacity-50"
-                      >
-                        No-show
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => updateDemoStatus(demo, "follow_up")}
-                        disabled={updatingDemoId === demo.id}
-                        className="rounded-xl border border-yellow-400/40 px-2 py-2.5 text-[10px] font-black uppercase text-yellow-400 disabled:opacity-50"
-                      >
-                        Follow-up
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </div>
         </section>
 
-        <section id="history" className="mt-8 rounded-3xl border border-white/10 bg-[#0d0d0d] p-5">
+        <section id="history" className={`${activeMobileTab === "client" ? "block" : "hidden"} mt-5 rounded-3xl border border-white/10 bg-[#0d0d0d] p-5 md:mt-8 md:block`}>
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-[11px] font-black uppercase tracking-[0.12em] text-yellow-400">
@@ -2259,94 +2495,199 @@ export default function TrainerScanPage() {
           </div>
         </section>
 
-        <section id="profile" className="mt-8 rounded-3xl border border-white/10 bg-[#0d0d0d] p-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-yellow-400 text-lg font-black text-black">
-              {getInitials(trainerName || trainerEmail || "FX")}
-            </div>
-            <div>
-              <h2 className="text-lg font-black">{trainerName || "Staff"}</h2>
-              <p className="mt-1 text-xs text-zinc-500">{trainerEmail}</p>
-              <p className="mt-1 text-[10px] font-black uppercase tracking-[0.12em] text-yellow-400">
+        <section
+          id="profile"
+          className={`${activeMobileTab === "profile" ? "block" : "hidden"} mt-2 rounded-3xl border border-white/10 bg-[#0d0d0d] p-4 md:mt-8 md:block md:p-6`}
+        >
+          <div className="mx-auto max-w-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-yellow-400">
+                  Trainer Profile
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-white">
+                  Your Profile
+                </h2>
+                <p className="mt-1 text-sm leading-5 text-zinc-500">
+                  Update your information and the photo shown on your trainer home screen.
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-yellow-300">
                 {getRoleLabel(trainerRole)}
-              </p>
+              </span>
             </div>
-          </div>
 
-          <form onSubmit={saveProfile} className="mt-5 grid gap-3 md:grid-cols-2">
-            <input
-              value={editName}
-              onChange={(event) => setEditName(event.target.value)}
-              placeholder="Full name"
-              className="rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-            />
-            <input
-              value={editEmail}
-              onChange={(event) => setEditEmail(event.target.value)}
-              type="email"
-              placeholder="Email"
-              className="rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-            />
-            <input
-              value={editPhone}
-              onChange={(event) => setEditPhone(event.target.value)}
-              placeholder="Phone number"
-              className="rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-            />
-            <input
-              value={editPassword}
-              onChange={(event) => setEditPassword(event.target.value)}
-              type="password"
-              minLength={6}
-              placeholder="New password optional"
-              className="rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-            />
+            <div className="mt-6 rounded-3xl border border-yellow-400/20 bg-[#111] p-5">
+              <div className="flex flex-col items-center text-center">
+                <div className="relative h-24 w-24 overflow-hidden rounded-full border-2 border-yellow-400 bg-yellow-400 text-black shadow-[0_0_28px_rgba(250,204,21,0.12)]">
+                  {profilePhotoPreview || trainerPhotoUrl ? (
+                    <img
+                      src={profilePhotoPreview || trainerPhotoUrl}
+                      alt={`${trainerName || "Trainer"} profile preview`}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-2xl font-black">
+                      {getInitials(trainerName || trainerEmail || "FX")}
+                    </div>
+                  )}
+                </div>
+
+                <p className="mt-4 text-lg font-black text-white">
+                  {trainerName || "Staff"}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {trainerEmail || "No email saved"}
+                </p>
+
+                <label className="mt-4 inline-flex min-h-11 cursor-pointer items-center justify-center rounded-xl border border-yellow-400/45 bg-yellow-400/10 px-4 py-2.5 text-xs font-black uppercase tracking-wide text-yellow-300 transition active:scale-[0.98]">
+                  {profilePhotoFile ? "Choose Different Photo" : trainerPhotoUrl ? "Change Profile Photo" : "Add Profile Photo"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(event) =>
+                      handleProfilePhotoChange(event.target.files?.[0] || null)
+                    }
+                  />
+                </label>
+
+                {profilePhotoFile ? (
+                  <div className="mt-3 grid w-full grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={saveProfilePhoto}
+                      disabled={uploadingProfilePhoto}
+                      className="min-h-11 rounded-xl bg-yellow-400 px-3 py-2.5 text-xs font-black uppercase text-black disabled:opacity-50"
+                    >
+                      {uploadingProfilePhoto ? "Uploading..." : "Save Photo"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearProfilePhotoPreview}
+                      disabled={uploadingProfilePhoto}
+                      className="min-h-11 rounded-xl border border-white/15 bg-black px-3 py-2.5 text-xs font-black uppercase text-zinc-300 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
+
+                <p className="mt-3 text-[11px] leading-5 text-zinc-600">
+                  Square or portrait photos work best. The image is compressed before upload.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={saveProfile} className="mt-5 space-y-4">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-zinc-400">
+                  Full Name
+                </label>
+                <input
+                  value={editName}
+                  onChange={(event) => setEditName(event.target.value)}
+                  placeholder="Full name"
+                  autoComplete="name"
+                  className="min-h-12 w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-base text-white outline-none placeholder:text-zinc-700 focus:border-yellow-400"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-zinc-400">
+                  Email
+                </label>
+                <input
+                  value={editEmail}
+                  onChange={(event) => setEditEmail(event.target.value)}
+                  type="email"
+                  placeholder="Email"
+                  autoComplete="email"
+                  className="min-h-12 w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-base text-white outline-none placeholder:text-zinc-700 focus:border-yellow-400"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-zinc-400">
+                  Phone
+                </label>
+                <input
+                  value={editPhone}
+                  onChange={(event) => setEditPhone(event.target.value)}
+                  type="tel"
+                  placeholder="Phone number"
+                  autoComplete="tel"
+                  className="min-h-12 w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-base text-white outline-none placeholder:text-zinc-700 focus:border-yellow-400"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-zinc-400">
+                  New Password <span className="normal-case tracking-normal text-zinc-600">(optional)</span>
+                </label>
+                <input
+                  value={editPassword}
+                  onChange={(event) => setEditPassword(event.target.value)}
+                  type="password"
+                  minLength={6}
+                  placeholder="Leave blank to keep current password"
+                  autoComplete="new-password"
+                  className="min-h-12 w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-base text-white outline-none placeholder:text-zinc-700 focus:border-yellow-400"
+                />
+              </div>
+
+              <button
+                disabled={savingProfile}
+                className="min-h-12 w-full rounded-xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition active:scale-[0.99] disabled:opacity-50"
+              >
+                {savingProfile ? "Saving..." : "Save Profile Changes"}
+              </button>
+            </form>
+
+            {profileMessage ? (
+              <p className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-400/[0.06] p-3 text-sm leading-5 text-yellow-200">
+                {profileMessage}
+              </p>
+            ) : null}
+
             <button
-              disabled={savingProfile}
-              className="rounded-xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase text-black disabled:opacity-50 md:col-span-2"
+              type="button"
+              onClick={handleLogout}
+              className="mt-6 min-h-12 w-full rounded-xl border border-red-400/35 bg-red-400/[0.06] px-5 py-3 text-sm font-black uppercase tracking-wide text-red-300 transition active:scale-[0.99]"
             >
-              {savingProfile ? "Saving..." : "Save Profile"}
+              Log Out
             </button>
-          </form>
-
-          {profileMessage ? (
-            <p className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-400/[0.06] p-3 text-xs text-yellow-300">
-              {profileMessage}
-            </p>
-          ) : null}
+          </div>
         </section>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-black/95 px-2 pb-[max(8px,env(safe-area-inset-bottom))] pt-2 backdrop-blur md:hidden">
-        <div className="mx-auto grid max-w-md grid-cols-5">
-          <a href="#home" className="px-1 py-1.5 text-center text-yellow-400">
-            <div className="text-lg">⌂</div>
-            <div className="mt-1 text-[9px] font-bold">Home</div>
-          </a>
-          <a href="#scan" className="px-1 py-1.5 text-center text-zinc-300">
-            <div className="text-lg">⌗</div>
-            <div className="mt-1 text-[9px] font-bold">Scan</div>
-          </a>
-          <Link
-            href="/trainer/clients"
-            onClick={(event) => blockPendingSessionNavigation(event)}
-            className="px-1 py-1.5 text-center text-zinc-300"
-          >
-            <div className="text-lg">♙</div>
-            <div className="mt-1 text-[9px] font-bold">Clients</div>
-          </Link>
-          <Link
-            href="/trainer/calendar"
-            onClick={(event) => blockPendingSessionNavigation(event)}
-            className="px-1 py-1.5 text-center text-zinc-300"
-          >
-            <div className="text-lg">□</div>
-            <div className="mt-1 text-[9px] font-bold">Calendar</div>
-          </Link>
-          <a href="#profile" className="px-1 py-1.5 text-center text-zinc-300">
-            <div className="text-lg">☰</div>
-            <div className="mt-1 text-[9px] font-bold">Menu</div>
-          </a>
+      <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-black/95 px-2 pb-[max(8px,env(safe-area-inset-bottom))] pt-2 shadow-[0_-10px_30px_rgba(0,0,0,0.35)] backdrop-blur md:hidden">
+        <div className="mx-auto grid max-w-md grid-cols-4 gap-1">
+          {([
+            ["home", "⌂", "Home"],
+            ["scan", "⌗", "Scan"],
+            ["client", "▤", "Client"],
+            ["profile", "●", "Profile"],
+          ] as Array<[MobileTab, string, string]>).map(([tab, icon, label]) => {
+            const isActive = activeMobileTab === tab;
+
+            return (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => openMobileTab(tab)}
+                aria-current={isActive ? "page" : undefined}
+                className={`min-h-[58px] rounded-xl px-1 py-1.5 text-center transition active:scale-[0.97] ${
+                  isActive
+                    ? "bg-yellow-400/10 text-yellow-400"
+                    : "text-zinc-400"
+                }`}
+              >
+                <div className="text-xl leading-none">{icon}</div>
+                <div className="mt-1.5 text-[10px] font-black">{label}</div>
+              </button>
+            );
+          })}
         </div>
       </nav>
     </main>
