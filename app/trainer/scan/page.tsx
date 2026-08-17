@@ -309,6 +309,10 @@ export default function TrainerScanPage() {
     useState<SessionType>("training");
   const [lastScannedStatus, setLastScannedStatus] =
     useState<SessionStatus>("success");
+  const [lastScannedClientId, setLastScannedClientId] = useState("");
+  const [lastScannedClientName, setLastScannedClientName] = useState("");
+  const [lastScannedRemaining, setLastScannedRemaining] = useState<number | null>(null);
+  const [lastScannedAt, setLastScannedAt] = useState<string | null>(null);
 
   const [historyLogs, setHistoryLogs] = useState<TrainerHistoryLog[]>([]);
   const [clientMap, setClientMap] = useState<Map<string, ClientInfo>>(new Map());
@@ -968,6 +972,10 @@ export default function TrainerScanPage() {
     setTrainerNote("");
     clearSessionPhoto();
     setLastScannedHistoryId(null);
+    setLastScannedClientId("");
+    setLastScannedClientName("");
+    setLastScannedRemaining(null);
+    setLastScannedAt(null);
     scanningLockRef.current = false;
     setScannerStarted(true);
 
@@ -1133,6 +1141,10 @@ export default function TrainerScanPage() {
       setLastScannedHistoryId(row.history_id);
       setLastScannedType(row.session_type || sessionType);
       setLastScannedStatus(savedStatus);
+      setLastScannedClientId(row.client_id || "");
+      setLastScannedClientName(row.client_name || "Client");
+      setLastScannedRemaining(row.remaining_after ?? null);
+      setLastScannedAt(new Date().toISOString());
       setShowNoteBox(true);
 
       const trainingRemaining = row.remaining_after ?? 0;
@@ -1264,11 +1276,11 @@ export default function TrainerScanPage() {
 
   if (checkingRole) {
     return (
-      <main className="min-h-screen bg-[#070707] p-4 text-white md:p-6">
-        <div className="mx-auto flex min-h-[80vh] max-w-6xl items-center justify-center rounded-[2rem] border border-yellow-400/20 bg-white/[0.04] p-6">
+      <main className="min-h-screen bg-black px-4 py-6 text-white">
+        <div className="mx-auto flex min-h-[75vh] max-w-md items-center justify-center">
           <div className="text-center">
-            <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-2 border-yellow-400/20 border-t-yellow-400" />
-            <p className="text-base font-semibold text-yellow-400">
+            <div className="mx-auto h-12 w-12 animate-spin rounded-full border-2 border-white/10 border-t-yellow-400" />
+            <p className="mt-4 text-sm font-semibold text-yellow-400">
               {checkingMessage}
             </p>
           </div>
@@ -1277,50 +1289,64 @@ export default function TrainerScanPage() {
     );
   }
 
+  const canUseNutrition =
+    trainerRole === "nutrition_coach" || trainerRole === "admin";
+
+  const selectedStatusDescription =
+    selectedSessionStatus === "no_show"
+      ? "Client did not show up. Deducts 1 training session."
+      : selectedSessionStatus === "late_cancel"
+        ? "Client cancelled late. Deducts 1 training session."
+        : "Client attended successfully. Deducts 1 training session.";
+
   return (
-    <main className="min-h-screen overflow-hidden bg-[#070707] text-white">
+    <main className="min-h-screen bg-black pb-24 text-white md:pb-8">
       <style jsx global>{`
         html,
         body {
-          background: #070707;
+          background: #000;
         }
 
-        @keyframes fade-up {
-          from {
-            opacity: 0;
-            transform: translateY(14px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+        * {
+          -webkit-tap-highlight-color: transparent;
         }
 
-        @keyframes pulse-glow {
-          0%,
-          100% {
-            box-shadow: 0 0 30px rgba(250, 204, 21, 0.18);
-          }
-          50% {
-            box-shadow: 0 0 70px rgba(250, 204, 21, 0.32);
-          }
+        #qr-reader {
+          border: 0 !important;
         }
 
-        .fade-up {
-          animation: fade-up 0.45s ease both;
+        #qr-reader video {
+          border-radius: 22px !important;
+          object-fit: cover !important;
         }
 
-        .pulse-glow {
-          animation: pulse-glow 3s ease-in-out infinite;
+        #qr-reader img {
+          display: none !important;
+        }
+
+        #qr-reader__scan_region {
+          background: #080808 !important;
+        }
+
+        #qr-reader__dashboard {
+          border: 0 !important;
+          background: #080808 !important;
+          color: #fff !important;
+          padding: 12px !important;
+        }
+
+        #qr-reader__dashboard button,
+        #qr-reader__dashboard select {
+          border-radius: 12px !important;
         }
 
         ::-webkit-scrollbar {
-          width: 8px;
-          height: 8px;
+          width: 6px;
+          height: 6px;
         }
 
         ::-webkit-scrollbar-track {
-          background: #111111;
+          background: #090909;
         }
 
         ::-webkit-scrollbar-thumb {
@@ -1329,526 +1355,618 @@ export default function TrainerScanPage() {
         }
       `}</style>
 
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute -left-32 -top-32 h-[440px] w-[440px] rounded-full bg-yellow-400/[0.08] blur-[120px]" />
-        <div className="absolute -right-28 top-1/4 h-[360px] w-[360px] rounded-full bg-amber-500/[0.06] blur-[110px]" />
-        <div className="absolute bottom-0 left-1/3 h-[320px] w-[320px] rounded-full bg-yellow-300/[0.04] blur-[90px]" />
-      </div>
-
-      <div className="relative z-10 mx-auto max-w-7xl px-4 py-5 md:px-6 md:py-7">
-        <header className="fade-up mb-5 overflow-hidden rounded-[2rem] border border-yellow-400/20 bg-[radial-gradient(circle_at_top_left,_rgba(250,204,21,0.20),_transparent_35%),linear-gradient(135deg,_rgba(24,24,27,0.96),_rgba(9,9,11,0.96))] p-5 shadow-2xl backdrop-blur md:p-7">
-          <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
-            <div>
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-2 rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.22em] text-yellow-300">
-                  <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />
-                  {getRoleLabel(trainerRole)} Hub
-                </span>
-
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
-                  {performanceLabel}
-                </span>
+      <div className="mx-auto max-w-6xl px-4 pb-8 pt-4 md:px-6 md:pt-6">
+        <header id="home" className="mb-5 md:mb-7">
+          <div className="flex items-center justify-between gap-4">
+            <div className="leading-none">
+              <div className="text-[28px] font-black italic tracking-[-0.08em] text-white">
+                F<span className="text-yellow-400">X</span>A
               </div>
+              <div className="mt-1 text-[9px] font-black tracking-[0.36em] text-white">
+                FITNESS
+              </div>
+              <div className="mt-1 text-[7px] font-bold uppercase tracking-[0.18em] text-yellow-400">
+                Stronger everyday
+              </div>
+            </div>
 
-              <h1 className="text-4xl font-black leading-none tracking-tight md:text-6xl">
+            <div className="flex items-center gap-2">
+              <span className="hidden rounded-full border border-white/10 bg-[#101010] px-3 py-2 text-[11px] font-bold uppercase tracking-[0.16em] text-zinc-400 sm:inline-flex">
+                {getRoleLabel(trainerRole)}
+              </span>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="rounded-xl border border-white/10 bg-[#101010] px-3 py-2 text-xs font-bold text-zinc-300 transition hover:border-red-400/50 hover:text-red-300"
+              >
+                Log out
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-7 grid gap-5 lg:grid-cols-[1fr_230px] lg:items-end">
+            <div>
+              <p className="text-xl font-medium text-zinc-400 md:text-2xl">
                 {greeting},
-                <br />
-                <span className="text-yellow-400">
-                  {getFirstName(trainerName || "Coach")}
-                </span>
+              </p>
+              <h1 className="mt-1 text-4xl font-black tracking-tight text-yellow-400 md:text-5xl">
+                {getFirstName(trainerName || "Coach")} 👋
               </h1>
-
-              <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-300">
+              <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-300 md:text-base">
                 {motivationQuote}
               </p>
-
-              <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-500">
-                {performanceMessage} Scan fast, coach with standards, and keep
-                notes clean so every client has a clear next step.
+              <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-600">
+                {performanceLabel} · {performanceMessage}
               </p>
             </div>
 
-            <div className="rounded-[1.75rem] border border-white/10 bg-black/35 p-4 md:p-5">
-              <div className="mb-4 flex items-center gap-4">
-                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-3xl bg-yellow-400 text-xl font-black text-black shadow-lg shadow-yellow-400/20">
-                  {getInitials(trainerName || trainerEmail || "FX")}
-                </div>
-
-                <div className="min-w-0">
-                  <p className="truncate text-xl font-bold text-white">
-                    {trainerName || "Staff"}
-                  </p>
-                  <p className="truncate text-sm text-zinc-500">
-                    {trainerEmail || "No email saved"}
-                  </p>
-                  <p className="mt-1 text-xs font-semibold uppercase tracking-widest text-yellow-400">
-                    {getRoleLabel(trainerRole)}
-                  </p>
-                </div>
+            <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#111] p-3 lg:flex-col lg:items-stretch lg:text-center">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-yellow-400 text-lg font-black text-black lg:mx-auto">
+                {getInitials(trainerName || trainerEmail || "FX")}
               </div>
-
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <div className="rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Paid Sessions
-                  </p>
-                  <p className="mt-2 text-3xl font-black text-yellow-400">
-                    {sessionsToday}
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">today</p>
-                </div>
-
-                <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Training
-                  </p>
-                  <p className="mt-2 text-3xl font-black text-cyan-300">
-                    {trainingSessionsToday}
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">sessions</p>
-                </div>
-
-                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Nutrition
-                  </p>
-                  <p className="mt-2 text-3xl font-black text-emerald-300">
-                    {nutritionFollowsToday}
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">follow-ups</p>
-                </div>
-
-                <div className="rounded-2xl border border-purple-400/20 bg-purple-400/10 p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                    Clients
-                  </p>
-                  <p className="mt-2 text-3xl font-black text-purple-300">
-                    {clientsToday}
-                  </p>
-                  <p className="mt-1 text-[11px] text-zinc-500">
-                    last {formatTime(lastScan)}
-                  </p>
-                </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-bold text-white">
+                  {trainerName || "Staff"}
+                </p>
+                <p className="mt-1 text-[10px] font-black uppercase tracking-[0.12em] text-yellow-400">
+                  {getRoleLabel(trainerRole)}
+                </p>
               </div>
             </div>
           </div>
-        </header>
 
-        <section className="fade-up mb-5 grid gap-3 md:grid-cols-5">
-          <Link
-            href="/trainer/clients"
-            onClick={(event) => blockPendingSessionNavigation(event)}
-            className="rounded-2xl bg-yellow-400 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 active:scale-[0.98]"
-          >
-            Client Management
-          </Link>
-
-          <Link
-            href="/trainer/calendar"
-            onClick={(event) => blockPendingSessionNavigation(event)}
-            className="rounded-2xl border border-yellow-400/50 bg-yellow-400/10 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-yellow-300 transition hover:bg-yellow-400 hover:text-black active:scale-[0.98]"
-          >
-            Calendar
-          </Link>
-
-          <Link
-            href="/history"
-            onClick={(event) => blockPendingSessionNavigation(event)}
-            className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-zinc-300 transition hover:border-yellow-400/50 hover:text-yellow-300 active:scale-[0.98]"
-          >
-            History
-          </Link>
-
-          {trainerRole === "admin" ? (
-            <Link
-              href="/admin"
-              onClick={(event) => blockPendingSessionNavigation(event)}
-              className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-zinc-300 transition hover:border-yellow-400/50 hover:text-yellow-300 active:scale-[0.98]"
-            >
-              Admin
-            </Link>
-          ) : (
-            <div className="hidden md:block" />
-          )}
-
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="rounded-2xl border border-red-400/50 bg-red-400/10 px-4 py-3 text-xs font-black uppercase tracking-wide text-red-300 transition hover:bg-red-400 hover:text-black active:scale-[0.98]"
-          >
-            Logout
-          </button>
-        </section>
-
-        <section className="fade-up mb-6 rounded-[2rem] border border-cyan-400/25 bg-cyan-400/10 p-5 shadow-2xl md:p-6">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.28em] text-cyan-300">
-                Upcoming Demos
+          <section className="mt-8">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-zinc-300">
+                Today Overview
               </p>
-              <h2 className="mt-2 text-2xl font-black text-white md:text-3xl">
-                Assigned Potential Clients — Next 7 Days
-              </h2>
-              <p className="mt-2 text-sm text-zinc-400">
-                These demos are assigned to your staff account. Update the result after the appointment.
-              </p>
+              <Link
+                href="/history"
+                onClick={(event) => blockPendingSessionNavigation(event)}
+                className="text-xs font-bold text-yellow-400 hover:text-yellow-300"
+              >
+                See all
+              </Link>
             </div>
 
-            <button
-              type="button"
-              onClick={() => trainerId && fetchUpcomingDemos(trainerId)}
-              disabled={loadingDemos}
-              className="rounded-2xl border border-cyan-300/50 px-4 py-3 text-xs font-black uppercase tracking-wide text-cyan-300 transition hover:bg-cyan-300 hover:text-black disabled:opacity-60"
-            >
-              {loadingDemos ? "Loading..." : "Refresh Demos"}
-            </button>
-          </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:gap-3">
+              <div className="rounded-2xl border border-yellow-400/35 bg-[#10100c] p-4 text-center">
+                <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-yellow-400/10 text-lg text-yellow-400">
+                  ◫
+                </div>
+                <p className="mt-2 text-2xl font-black text-yellow-400">
+                  {sessionsToday}
+                </p>
+                <p className="mt-1 text-[10px] font-semibold text-zinc-300">
+                  Paid Sessions
+                </p>
+              </div>
 
-          {loadingDemos ? (
-            <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-cyan-300">
-              Loading upcoming demos...
+              <div className="rounded-2xl border border-emerald-400/25 bg-[#0b110d] p-4 text-center">
+                <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-400/10 text-lg text-emerald-300">
+                  ✓
+                </div>
+                <p className="mt-2 text-2xl font-black text-emerald-300">
+                  {trainingSessionsToday}
+                </p>
+                <p className="mt-1 text-[10px] font-semibold text-zinc-300">
+                  Training Sessions
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-cyan-400/25 bg-[#091011] p-4 text-center">
+                <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-400/10 text-lg text-cyan-300">
+                  ◌
+                </div>
+                <p className="mt-2 text-2xl font-black text-cyan-300">
+                  {nutritionFollowsToday}
+                </p>
+                <p className="mt-1 text-[10px] font-semibold text-zinc-300">
+                  Nutrition Follow-ups
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-purple-400/25 bg-[#100b12] p-4 text-center">
+                <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-purple-400/10 text-lg text-purple-300">
+                  ●
+                </div>
+                <p className="mt-2 text-2xl font-black text-purple-300">
+                  {clientsToday}
+                </p>
+                <p className="mt-1 text-[10px] font-semibold text-zinc-300">
+                  Active Clients
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section className="mt-7">
+            <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-zinc-300">
+              Quick Actions
             </p>
-          ) : upcomingDemos.length === 0 ? (
-            <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-5 text-sm text-zinc-400">
-              No demos assigned in the next seven days.
-            </p>
-          ) : (
-            <div className="mt-5 grid gap-4 xl:grid-cols-2">
-              {upcomingDemos.map((demo) => (
-                <article
-                  key={demo.id}
-                  className="rounded-3xl border border-cyan-300/20 bg-black/45 p-5"
-                >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-widest text-cyan-300">
+            <div className="grid grid-cols-4 gap-2 md:max-w-2xl md:gap-3">
+              <a
+                href="#scan"
+                className="rounded-2xl border border-yellow-400/35 bg-[#121212] px-2 py-4 text-center transition hover:border-yellow-400 hover:bg-yellow-400/10"
+              >
+                <div className="text-xl text-yellow-400">⌗</div>
+                <p className="mt-2 text-[10px] font-bold text-white sm:text-xs">
+                  Scan QR
+                </p>
+              </a>
+              <Link
+                href="/trainer/clients"
+                onClick={(event) => blockPendingSessionNavigation(event)}
+                className="rounded-2xl border border-white/10 bg-[#121212] px-2 py-4 text-center transition hover:border-yellow-400/50"
+              >
+                <div className="text-xl text-yellow-400">♙</div>
+                <p className="mt-2 text-[10px] font-bold text-white sm:text-xs">
+                  Clients
+                </p>
+              </Link>
+              <Link
+                href="/trainer/calendar"
+                onClick={(event) => blockPendingSessionNavigation(event)}
+                className="rounded-2xl border border-white/10 bg-[#121212] px-2 py-4 text-center transition hover:border-yellow-400/50"
+              >
+                <div className="text-xl text-yellow-400">□</div>
+                <p className="mt-2 text-[10px] font-bold text-white sm:text-xs">
+                  Calendar
+                </p>
+              </Link>
+              <Link
+                href="/history"
+                onClick={(event) => blockPendingSessionNavigation(event)}
+                className="rounded-2xl border border-white/10 bg-[#121212] px-2 py-4 text-center transition hover:border-yellow-400/50"
+              >
+                <div className="text-xl text-yellow-400">▤</div>
+                <p className="mt-2 text-[10px] font-bold text-white sm:text-xs">
+                  History
+                </p>
+              </Link>
+            </div>
+          </section>
+
+          <section className="mt-5 rounded-2xl border border-cyan-400/20 bg-[#0d1010] p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.13em] text-cyan-300">
+                  Upcoming Demos
+                </p>
+                <p className="mt-1 text-xs font-semibold text-emerald-300">
+                  Next 7 days
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-3xl font-black text-emerald-300">
+                  {upcomingDemos.length}
+                </p>
+                <p className="text-[10px] text-zinc-500">assigned</p>
+              </div>
+            </div>
+
+            {loadingDemos ? (
+              <p className="mt-3 text-xs text-zinc-500">Loading demos...</p>
+            ) : upcomingDemos.length === 0 ? (
+              <p className="mt-3 text-xs text-zinc-500">
+                No demos assigned in the next seven days.
+              </p>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {upcomingDemos.slice(0, 3).map((demo) => (
+                  <div
+                    key={demo.id}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/40 p-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-white">
+                        {demo.full_name}
+                      </p>
+                      <p className="mt-1 text-[11px] text-zinc-500">
                         {formatDemoDateTime(demo.demo_at)}
                       </p>
-                      <h3 className="mt-2 text-xl font-black text-white">
-                        {demo.full_name}
-                      </h3>
-                      <p className="mt-1 text-sm text-zinc-400">
-                        {demo.phone || demo.email || "No contact details"}
-                      </p>
-                      <p className="mt-2 text-sm font-semibold text-yellow-300">
-                        {getLeadSourceLabel(demo.source_type, demo.source_detail)}
-                      </p>
                     </div>
-                    <span className="w-fit rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-black uppercase text-cyan-300">
+                    <span className="shrink-0 rounded-full border border-cyan-300/25 px-2 py-1 text-[9px] font-black uppercase text-cyan-300">
                       {demo.status.replaceAll("_", " ")}
                     </span>
                   </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </header>
 
-                  {demo.notes ? (
-                    <p className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-sm leading-6 text-zinc-300">
-                      {demo.notes}
-                    </p>
-                  ) : null}
-
-                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                    <button
-                      type="button"
-                      onClick={() => updateDemoStatus(demo, "demo_completed")}
-                      disabled={updatingDemoId === demo.id}
-                      className="rounded-xl bg-green-400 px-3 py-2 text-xs font-black uppercase text-black disabled:opacity-60"
-                    >
-                      Completed
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateDemoStatus(demo, "no_show")}
-                      disabled={updatingDemoId === demo.id}
-                      className="rounded-xl bg-red-400 px-3 py-2 text-xs font-black uppercase text-black disabled:opacity-60"
-                    >
-                      No-show
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateDemoStatus(demo, "follow_up")}
-                      disabled={updatingDemoId === demo.id}
-                      className="rounded-xl border border-yellow-400/50 bg-yellow-400/10 px-3 py-2 text-xs font-black uppercase text-yellow-300 disabled:opacity-60"
-                    >
-                      Follow-up
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="fade-up mb-6 grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-          <div className="pulse-glow overflow-hidden rounded-[2rem] border border-yellow-400/30 bg-[radial-gradient(circle_at_top,_rgba(250,204,21,0.16),_transparent_38%),linear-gradient(135deg,_#161006,_#09090b_65%)] p-4 shadow-2xl md:p-6">
-            <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <section
+          id="scan"
+          className="scroll-mt-4 border-t border-white/10 pt-8 md:pt-10"
+        >
+          <div className="mx-auto max-w-2xl">
+            {!scannerStarted && !showNoteBox ? (
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.3em] text-yellow-400">
-                  Quick Scan
-                </p>
-                <h2 className="mt-2 text-3xl font-black tracking-tight text-white md:text-4xl">
-                  Scan Client QR
-                </h2>
-                <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-400">
-                  Choose the training result before scanning. Success is selected
-                  by default. Success, no-show, and late cancel each deduct 1
-                  training session. Nutrition follow-up remains separate and does
-                  not reduce the training balance.
-                </p>
-
-                {scanMode === "nutrition_follow_up" && scannerStarted ? (
-                  <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-xs font-bold uppercase tracking-wider text-emerald-300">
-                    <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                    Nutrition Follow-up — Success
+                <div className="text-center">
+                  <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl border border-yellow-400/15 bg-yellow-400/[0.05] text-5xl text-yellow-400">
+                    ▣
                   </div>
-                ) : (
-                  <div
-                    className={`mt-4 inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-bold uppercase tracking-wider ${getSessionStatusClass(
-                      scannerStarted ? activeScanStatus : selectedSessionStatus,
-                    )}`}
-                  >
-                    <span className="h-2 w-2 rounded-full bg-current" />
-                    Training — {getSessionStatusLabel(
-                      scannerStarted ? activeScanStatus : selectedSessionStatus,
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="grid gap-3 md:min-w-72">
-                <button
-                  type="button"
-                  onClick={
-                    scannerStarted
-                      ? stopScanner
-                      : () => startScanner("training", selectedSessionStatus)
-                  }
-                  disabled={showNoteBox}
-                  className={`rounded-2xl px-7 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${
-                    scannerStarted
-                      ? "bg-red-400 text-black hover:bg-red-300"
-                      : "bg-yellow-400 text-black hover:bg-yellow-300"
-                  }`}
-                >
-                  {scannerStarted
-                    ? "Stop Scanner"
-                    : showNoteBox
-                      ? "Complete Session Record First"
-                      : `Start ${getSessionStatusLabel(selectedSessionStatus)} Scan`}
-                </button>
-
-                {!scannerStarted &&
-                (trainerRole === "nutrition_coach" ||
-                  trainerRole === "admin") ? (
-                  <button
-                    type="button"
-                    onClick={() => startScanner("nutrition_follow_up", "success")}
-                    disabled={showNoteBox}
-                    className="rounded-2xl border border-emerald-300/60 bg-emerald-300/10 px-7 py-3 text-sm font-black uppercase tracking-wide text-emerald-300 transition hover:bg-emerald-300 hover:text-black active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Scan Nutrition Follow-up
-                  </button>
-                ) : null}
-              </div>
-            </div>
-
-            {!scannerStarted ? (
-              <div className="mb-5 rounded-3xl border border-white/10 bg-black/45 p-4">
-                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-[0.25em] text-yellow-400">
-                      Training Result
-                    </p>
-                    <p className="mt-1 text-sm text-zinc-400">
-                      Success is the priority/default option. All three options deduct 1 training session.
-                    </p>
-                  </div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                    Selected: {getSessionStatusLabel(selectedSessionStatus)}
+                  <h2 className="mt-5 text-2xl font-black md:text-3xl">
+                    Scan Client QR
+                  </h2>
+                  <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-zinc-400">
+                    Choose the training result before scanning. Each training option
+                    deducts 1 training session.
                   </p>
                 </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-4">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSessionStatus("success")}
-                    className={`rounded-2xl border px-5 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] md:col-span-2 ${
-                      selectedSessionStatus === "success"
-                        ? "border-yellow-300 bg-yellow-400 text-black shadow-lg shadow-yellow-400/15"
-                        : "border-yellow-400/35 bg-yellow-400/10 text-yellow-300 hover:bg-yellow-400 hover:text-black"
-                    }`}
-                  >
-                    ✓ Success — Default
-                  </button>
+                <div className="mt-8">
+                  <p className="mb-3 text-xs font-black uppercase tracking-[0.13em] text-zinc-400">
+                    Select Training Result
+                  </p>
+
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSessionStatus("success")}
+                      className={`w-full rounded-2xl border p-4 text-left transition ${
+                        selectedSessionStatus === "success"
+                          ? "border-yellow-400 bg-yellow-400/[0.08] shadow-[0_0_0_1px_rgba(250,204,21,0.12)]"
+                          : "border-white/15 bg-[#101010] hover:border-white/30"
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${selectedSessionStatus === "success" ? "bg-yellow-400 text-black" : "border border-white/20 text-white"}`}>
+                          ✓
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className={`text-base font-black ${selectedSessionStatus === "success" ? "text-yellow-400" : "text-white"}`}>
+                              Success
+                            </p>
+                            <span className="rounded-full bg-yellow-400/10 px-2 py-1 text-[9px] font-black uppercase text-yellow-400">
+                              Default
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-zinc-400">
+                            Client attended successfully.
+                          </p>
+                        </div>
+                        <span className={`h-5 w-5 shrink-0 rounded-full border-2 ${selectedSessionStatus === "success" ? "border-yellow-400 bg-yellow-400 shadow-[inset_0_0_0_4px_#000]" : "border-zinc-500"}`} />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSessionStatus("no_show")}
+                      className={`w-full rounded-2xl border p-4 text-left transition ${
+                        selectedSessionStatus === "no_show"
+                          ? "border-orange-400 bg-orange-400/[0.08]"
+                          : "border-white/15 bg-[#101010] hover:border-white/30"
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 text-lg text-white">
+                          ✓
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-base font-black text-white">No-Show</p>
+                          <p className="mt-1 text-xs text-zinc-400">
+                            Client did not show up.
+                          </p>
+                        </div>
+                        <span className={`h-5 w-5 shrink-0 rounded-full border-2 ${selectedSessionStatus === "no_show" ? "border-orange-400 bg-orange-400 shadow-[inset_0_0_0_4px_#000]" : "border-zinc-500"}`} />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSessionStatus("late_cancel")}
+                      className={`w-full rounded-2xl border p-4 text-left transition ${
+                        selectedSessionStatus === "late_cancel"
+                          ? "border-orange-500 bg-orange-500/[0.08]"
+                          : "border-white/15 bg-[#101010] hover:border-white/30"
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-orange-500/60 text-lg text-orange-400">
+                          ◷
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-base font-black text-white">Late Cancel</p>
+                          <p className="mt-1 text-xs text-zinc-400">
+                            Client cancelled late.
+                          </p>
+                        </div>
+                        <span className={`h-5 w-5 shrink-0 rounded-full border-2 ${selectedSessionStatus === "late_cancel" ? "border-orange-500 bg-orange-500 shadow-[inset_0_0_0_4px_#000]" : "border-zinc-500"}`} />
+                      </div>
+                    </button>
+
+                    {canUseNutrition ? (
+                      <button
+                        type="button"
+                        onClick={() => startScanner("nutrition_follow_up", "success")}
+                        className="w-full rounded-2xl border border-emerald-400/35 bg-emerald-400/[0.06] p-4 text-left transition hover:border-emerald-400/70"
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-400/40 text-lg text-emerald-300">
+                            ◇
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-base font-black text-emerald-300">
+                              Nutrition Follow-Up
+                            </p>
+                            <p className="mt-1 text-xs text-zinc-400">
+                              Does not deduct a training session. Tap to scan now.
+                            </p>
+                          </div>
+                          <span className="text-lg text-emerald-300">›</span>
+                        </div>
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 rounded-xl border border-white/10 bg-[#0c0c0c] p-3 text-xs leading-5 text-zinc-500">
+                    Selected: <span className="font-bold text-white">{getSessionStatusLabel(selectedSessionStatus)}</span> · {selectedStatusDescription}
+                  </div>
 
                   <button
                     type="button"
-                    onClick={() => setSelectedSessionStatus("no_show")}
-                    className={`rounded-2xl border px-4 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] ${
-                      selectedSessionStatus === "no_show"
-                        ? "border-orange-300 bg-orange-400 text-black"
-                        : "border-orange-400/40 bg-orange-400/10 text-orange-300 hover:bg-orange-400 hover:text-black"
-                    }`}
+                    onClick={() => startScanner("training", selectedSessionStatus)}
+                    className="mt-5 flex w-full items-center justify-center gap-3 rounded-2xl bg-yellow-400 px-5 py-4 text-sm font-black uppercase tracking-[0.08em] text-black transition hover:bg-yellow-300 active:scale-[0.99]"
                   >
-                    No-show
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSessionStatus("late_cancel")}
-                    className={`rounded-2xl border px-4 py-4 text-sm font-black uppercase tracking-wide transition active:scale-[0.98] ${
-                      selectedSessionStatus === "late_cancel"
-                        ? "border-red-300 bg-red-400 text-black"
-                        : "border-red-400/40 bg-red-400/10 text-red-300 hover:bg-red-400 hover:text-black"
-                    }`}
-                  >
-                    Late Cancel
+                    <span className="text-xl">⌗</span>
+                    Start Scan
                   </button>
                 </div>
               </div>
             ) : null}
 
-            <div className="rounded-[1.75rem] border border-yellow-400/25 bg-black/70 p-3">
-              <div
-                id="qr-reader"
-                className="min-h-[320px] w-full overflow-hidden rounded-[1.4rem] bg-white text-black md:min-h-[440px]"
-              />
-            </div>
-
-            <div
-              className={`mt-5 rounded-3xl border p-5 text-sm font-semibold leading-7 ${
-                result.message
-                  ? getResultClass(result.type)
-                  : "border-yellow-400/25 bg-yellow-400/10 text-yellow-100"
-              }`}
-            >
-              {result.message ||
-                (scanMode === "nutrition_follow_up" && scannerStarted
-                  ? "Nutrition follow-up selected. Scan the client QR code. Training sessions will not be deducted."
-                  : `Training status: ${getSessionStatusLabel(
-                      scannerStarted ? activeScanStatus : selectedSessionStatus,
-                    )}. Scan the client QR code. One training session will be deducted.`)}
-            </div>
-
-            {showNoteBox ? (
-              <div className="mt-5 rounded-3xl border border-yellow-400/55 bg-[linear-gradient(145deg,_rgba(250,204,21,0.13),_rgba(0,0,0,0.88)_38%)] p-5 shadow-2xl md:p-6">
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-[0.28em] text-yellow-400">
-                      Required Before Next Scan
-                    </p>
-                    <h3 className="mt-2 text-2xl font-black text-white">
-                      Complete Session Record
-                    </h3>
-                    <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                      Topic and session content are mandatory. Optional note and photo can be added for extra context.
+            {scannerStarted ? (
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={stopScanner}
+                    className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-[#111] text-xl text-white"
+                    aria-label="Back"
+                  >
+                    ‹
+                  </button>
+                  <div className="text-center">
+                    <h2 className="text-xl font-black">Scan QR Code</h2>
+                    <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-yellow-400">
+                      {scanMode === "nutrition_follow_up"
+                        ? "Nutrition Follow-Up"
+                        : getSessionStatusLabel(activeScanStatus)}
                     </p>
                   </div>
+                  <div className="h-10 w-10" />
+                </div>
 
-                  <span className="w-fit rounded-full border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs font-black uppercase tracking-wider text-red-300">
+                <p className="mx-auto mt-5 max-w-sm text-center text-sm leading-6 text-zinc-400">
+                  Position the client&apos;s QR code within the frame.
+                </p>
+
+                <div className="relative mt-7 rounded-[28px] border border-yellow-400/25 bg-[#0a0a0a] p-2 shadow-[0_0_50px_rgba(250,204,21,0.08)]">
+                  <span className="absolute left-0 top-0 z-20 h-8 w-8 rounded-tl-[24px] border-l-4 border-t-4 border-yellow-400" />
+                  <span className="absolute right-0 top-0 z-20 h-8 w-8 rounded-tr-[24px] border-r-4 border-t-4 border-yellow-400" />
+                  <span className="absolute bottom-0 left-0 z-20 h-8 w-8 rounded-bl-[24px] border-b-4 border-l-4 border-yellow-400" />
+                  <span className="absolute bottom-0 right-0 z-20 h-8 w-8 rounded-br-[24px] border-b-4 border-r-4 border-yellow-400" />
+                  <div
+                    id="qr-reader"
+                    className="min-h-[360px] w-full overflow-hidden rounded-[22px] bg-[#080808] text-white md:min-h-[500px]"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={stopScanner}
+                  className="mt-6 w-full rounded-2xl border border-yellow-400/50 bg-yellow-400/[0.05] px-5 py-3.5 text-sm font-bold text-yellow-400"
+                >
+                  Stop Scanner
+                </button>
+              </div>
+            ) : null}
+
+            {!scannerStarted && result.message ? (
+              <div className="mt-7">
+                <div
+                  className={`rounded-2xl border p-4 text-sm leading-6 ${getResultClass(
+                    result.type,
+                  )}`}
+                >
+                  {result.message}
+                </div>
+              </div>
+            ) : null}
+
+            {!scannerStarted && result.type === "success" && lastScannedClientName ? (
+              <section className="mt-6">
+                <div className="text-center">
+                  <div className="text-5xl">🎉</div>
+                  <h2 className="mt-3 text-3xl font-black text-emerald-300">
+                    {lastScannedType === "nutrition_follow_up"
+                      ? "Recorded!"
+                      : getSessionStatusLabel(lastScannedStatus)}
+                  </h2>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    {lastScannedType === "nutrition_follow_up"
+                      ? "Nutrition follow-up recorded."
+                      : "Training session recorded."}
+                  </p>
+                </div>
+
+                <div className="mt-5 rounded-2xl border border-white/15 bg-[#111] p-4">
+                  <div className="flex items-center gap-3 border-b border-white/10 pb-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-yellow-400 text-sm font-black text-black">
+                      {getInitials(lastScannedClientName)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-base font-black text-white">
+                        {lastScannedClientName}
+                      </p>
+                      <p className="mt-1 text-xs text-zinc-500">
+                        {lastScannedClientId
+                          ? `Client ID: ${lastScannedClientId.slice(0, 8)}…`
+                          : "Client"}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-emerald-400/10 px-2 py-1 text-[10px] font-black uppercase text-emerald-300">
+                      Recorded
+                    </span>
+                  </div>
+
+                  <div className="mt-4 space-y-3 text-sm">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-zinc-500">Result</span>
+                      <span className="font-semibold text-white">
+                        {lastScannedType === "nutrition_follow_up"
+                          ? "Nutrition Follow-Up"
+                          : getSessionStatusLabel(lastScannedStatus)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-zinc-500">Deducted</span>
+                      <span className="font-semibold text-white">
+                        {lastScannedType === "nutrition_follow_up"
+                          ? "0 training sessions"
+                          : "1 training session"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-zinc-500">Remaining sessions</span>
+                      <span className="text-lg font-black text-emerald-300">
+                        {lastScannedRemaining === null
+                          ? "—"
+                          : lastScannedRemaining}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-zinc-500">Scanned at</span>
+                      <span className="font-semibold text-white">
+                        {formatDateTime(lastScannedAt)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {lastScannedClientId ? (
+                    <Link
+                      href={`/trainer/clients/${lastScannedClientId}`}
+                      onClick={(event) => blockPendingSessionNavigation(event)}
+                      className="mt-4 block rounded-xl border border-yellow-400/40 px-4 py-3 text-center text-xs font-black uppercase tracking-[0.08em] text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
+                    >
+                      View Client Profile
+                    </Link>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+
+            {showNoteBox ? (
+              <section className="mt-6">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.12em] text-yellow-400">
+                      Required Session Record
+                    </p>
+                    <h3 className="mt-1 text-xl font-black">Save & Finish</h3>
+                  </div>
+                  <span className="rounded-full border border-orange-400/30 bg-orange-400/10 px-2 py-1 text-[9px] font-black uppercase text-orange-300">
                     Incomplete
                   </span>
                 </div>
 
-                <div className="mt-5 grid gap-4">
+                <div className="space-y-4">
                   <div>
-                    <label className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-yellow-300">
-                      {getRequiredTopicLabel()} <span className="text-red-300">*</span>
+                    <label className="mb-2 block text-[11px] font-black uppercase tracking-[0.1em] text-yellow-400">
+                      {getRequiredTopicLabel()} *
                     </label>
                     <input
                       value={sessionTopic}
                       onChange={(event) => setSessionTopic(event.target.value)}
                       placeholder={
                         lastScannedType === "nutrition_follow_up"
-                          ? "Example: Protein & hydration review"
+                          ? "Protein & hydration review"
                           : lastScannedStatus === "no_show"
-                            ? "Example: No-show follow-up"
+                            ? "No-show follow-up"
                             : lastScannedStatus === "late_cancel"
-                              ? "Example: Late cancellation follow-up"
-                              : "Example: Lower Body Strength — Squat Focus"
+                              ? "Late cancellation follow-up"
+                              : "Lower Body Strength — Squat Focus"
                       }
-                      className="w-full rounded-2xl border border-yellow-500/35 bg-black/80 px-4 py-3.5 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
+                      className="w-full rounded-2xl border border-white/15 bg-[#111] px-4 py-3.5 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
                     />
                   </div>
 
                   <div>
-                    <label className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-yellow-300">
-                      {getRequiredContentLabel()} <span className="text-red-300">*</span>
+                    <label className="mb-2 block text-[11px] font-black uppercase tracking-[0.1em] text-yellow-400">
+                      {getRequiredContentLabel()} *
                     </label>
                     <textarea
                       value={sessionContent}
                       onChange={(event) => setSessionContent(event.target.value)}
                       placeholder={getRequiredContentPlaceholder()}
-                      className="min-h-40 w-full rounded-2xl border border-yellow-500/35 bg-black/80 px-4 py-3.5 text-sm leading-6 text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
+                      className="min-h-36 w-full rounded-2xl border border-white/15 bg-[#111] px-4 py-3.5 text-sm leading-6 text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
                     />
                   </div>
 
                   <div>
-                    <label className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-zinc-300">
-                      Additional Note <span className="font-semibold normal-case tracking-normal text-zinc-600">(optional)</span>
-                    </label>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <label className="text-[11px] font-black uppercase tracking-[0.1em] text-yellow-400">
+                        Add Note
+                      </label>
+                      <span className="text-[10px] font-semibold uppercase text-zinc-600">
+                        Optional
+                      </span>
+                    </div>
                     <textarea
                       value={trainerNote}
                       onChange={(event) => setTrainerNote(event.target.value)}
-                      placeholder="Optional: pain flags, client energy, technique cue, mood, next-session reminder..."
-                      className="min-h-28 w-full rounded-2xl border border-white/10 bg-black/70 px-4 py-3.5 text-sm leading-6 text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
+                      placeholder="Add a quick note..."
+                      className="min-h-24 w-full rounded-2xl border border-white/15 bg-[#111] px-4 py-3.5 text-sm leading-6 text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
                     />
                   </div>
-                </div>
 
-                <div className="mt-4 rounded-2xl border border-cyan-400/25 bg-cyan-400/[0.06] p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-300">
-                        Session Photo · Optional
-                      </p>
-                      <p className="mt-1 text-xs leading-5 text-zinc-500">
-                        Take a photo or choose one from the phone. The app compresses it before upload.
-                      </p>
+                  <div className="rounded-2xl border border-white/10 bg-[#0e0e0e] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold text-white">Session Photo</p>
+                        <p className="mt-1 text-[11px] text-zinc-500">Optional</p>
+                      </div>
+                      <label className="cursor-pointer rounded-xl border border-yellow-400/40 px-3 py-2 text-xs font-bold text-yellow-400 transition hover:bg-yellow-400 hover:text-black">
+                        {sessionPhoto ? "Change Photo" : "Add Photo"}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(event) =>
+                            handleSessionPhotoChange(
+                              event.target.files?.[0] || null,
+                            )
+                          }
+                        />
+                      </label>
                     </div>
 
-                    <label className="cursor-pointer rounded-xl border border-cyan-300/40 bg-cyan-300/10 px-4 py-2.5 text-center text-xs font-black uppercase tracking-wide text-cyan-200 transition hover:bg-cyan-300 hover:text-black">
-                      {sessionPhoto ? "Change Photo" : "Add Photo"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        onChange={(event) =>
-                          handleSessionPhotoChange(
-                            event.target.files?.[0] || null,
-                          )
-                        }
-                      />
-                    </label>
-                  </div>
-
-                  {sessionPhotoPreview ? (
-                    <div className="mt-4">
-                      <img
-                        src={sessionPhotoPreview}
-                        alt="Selected session preview"
-                        className="max-h-72 w-full rounded-2xl border border-white/10 object-cover"
-                      />
-
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-xs text-zinc-500">
-                          Original size: {(sessionPhoto!.size / 1024 / 1024).toFixed(2)} MB
-                        </p>
-
+                    {sessionPhotoPreview ? (
+                      <div className="mt-4">
+                        <img
+                          src={sessionPhotoPreview}
+                          alt="Selected session preview"
+                          className="max-h-72 w-full rounded-2xl border border-white/10 object-cover"
+                        />
                         <button
                           type="button"
                           onClick={clearSessionPhoto}
                           disabled={savingNote}
-                          className="rounded-xl border border-red-400/40 px-3 py-2 text-xs font-bold text-red-300 transition hover:bg-red-400 hover:text-black disabled:opacity-50"
+                          className="mt-3 text-xs font-bold text-red-300 disabled:opacity-50"
                         >
-                          Remove Photo
+                          Remove photo
                         </button>
                       </div>
-                    </div>
-                  ) : null}
+                    ) : null}
+                  </div>
                 </div>
 
                 {noteMessage ? (
-                  <p className="mt-3 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-3 text-sm text-yellow-300">
+                  <p className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-400/[0.06] p-3 text-xs leading-5 text-yellow-300">
                     {noteMessage}
                   </p>
                 ) : null}
@@ -1859,440 +1977,378 @@ export default function TrainerScanPage() {
                   disabled={
                     savingNote || !sessionTopic.trim() || !sessionContent.trim()
                   }
-                  className="mt-4 w-full rounded-2xl bg-yellow-400 px-5 py-4 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="mt-5 w-full rounded-2xl bg-yellow-400 px-5 py-4 text-sm font-black uppercase tracking-[0.08em] text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {savingNote
-                    ? "Saving Session Record..."
-                    : sessionPhoto
-                      ? "Complete Session & Save Photo"
-                      : "Complete Session"}
+                  {savingNote ? "Saving..." : "Save & Finish"}
                 </button>
+              </section>
+            ) : null}
 
-                <p className="mt-3 text-center text-xs leading-5 text-zinc-600">
-                  Another QR scan is locked until the required fields are saved.
-                </p>
+            {!scannerStarted && !showNoteBox && result.type === "success" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setResult({ type: "", message: "" });
+                  setLastScannedClientId("");
+                  setLastScannedClientName("");
+                  setLastScannedRemaining(null);
+                  setLastScannedAt(null);
+                  document.getElementById("scan")?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                  });
+                }}
+                className="mt-4 w-full rounded-2xl border border-yellow-400/60 px-5 py-3.5 text-sm font-black uppercase tracking-[0.08em] text-white transition hover:bg-yellow-400 hover:text-black"
+              >
+                Scan Another
+              </button>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="mt-10 grid gap-5 border-t border-white/10 pt-8 lg:grid-cols-[0.9fr_1.1fr]">
+          <div id="notes" className="rounded-3xl border border-white/10 bg-[#0e0e0e] p-5">
+            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-yellow-400">
+              Previous Lesson Plans
+            </p>
+            <h2 className="mt-2 text-xl font-black">Client Note History</h2>
+            <p className="mt-2 text-xs leading-5 text-zinc-500">
+              Select a client to review previous session topics and coaching notes.
+            </p>
+
+            <select
+              value={selectedNoteClientId}
+              onChange={async (event) => {
+                const clientId = event.target.value;
+                setSelectedNoteClientId(clientId);
+                setSelectedClientHistory([]);
+                if (clientId) await fetchClientLessonHistory(clientId);
+              }}
+              className="mt-4 w-full rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+            >
+              <option value="">Choose a client...</option>
+              {noteClients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.full_name}
+                  {client.email ? ` — ${client.email}` : ""}
+                </option>
+              ))}
+            </select>
+
+            {loadingClientHistory ? (
+              <p className="mt-4 text-xs text-yellow-400">Loading history...</p>
+            ) : clientHistoryMessage ? (
+              <p className="mt-4 text-xs text-red-300">{clientHistoryMessage}</p>
+            ) : selectedNoteClientId && selectedClientHistory.length === 0 ? (
+              <p className="mt-4 text-xs text-zinc-600">
+                No previous session notes found.
+              </p>
+            ) : null}
+
+            {selectedClientHistory.length > 0 ? (
+              <div className="mt-4 max-h-[560px] space-y-3 overflow-y-auto pr-1">
+                {selectedClientHistory.map((log) => (
+                  <article
+                    key={log.id}
+                    className="rounded-2xl border border-white/10 bg-black/50 p-4"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${log.session_type === "nutrition_follow_up" ? "bg-emerald-400/10 text-emerald-300" : "bg-yellow-400/10 text-yellow-400"}`}>
+                          {log.session_type === "nutrition_follow_up"
+                            ? "Nutrition"
+                            : "Training"}
+                        </span>
+                        <span className={`rounded-full border px-2 py-1 text-[9px] font-black uppercase ${getSessionStatusClass(log.status)}`}>
+                          {getSessionStatusLabel(log.status)}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-zinc-600">
+                        {formatDateTime(log.created_at)}
+                      </span>
+                    </div>
+
+                    {log.session_topic ? (
+                      <p className="mt-3 text-sm font-bold text-white">
+                        {log.session_topic}
+                      </p>
+                    ) : null}
+                    {log.session_content ? (
+                      <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-zinc-400">
+                        {log.session_content}
+                      </p>
+                    ) : null}
+                    {log.trainer_note ? (
+                      <p className="mt-2 rounded-xl bg-yellow-400/[0.05] p-3 text-xs leading-5 text-yellow-100">
+                        {log.trainer_note}
+                      </p>
+                    ) : null}
+                  </article>
+                ))}
               </div>
             ) : null}
           </div>
 
-          <div className="space-y-5">
-            <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-2xl backdrop-blur">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.25em] text-yellow-400">
-                    Coach Mission
-                  </p>
-                  <h2 className="mt-2 text-2xl font-black text-white">
-                    Today&apos;s Focus
-                  </h2>
-                </div>
-                <span className="rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-bold uppercase tracking-wide text-yellow-300">
-                  Impact
-                </span>
-              </div>
-
-              <div className="mt-5 space-y-3">
-                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                  <p className="text-sm font-semibold text-white">
-                    1. Scan every completed session correctly.
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-500">
-                    Clean records protect client trust and your own performance.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                  <p className="text-sm font-semibold text-white">
-                    2. Complete every session record before the next scan.
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-500">
-                    Topic + session content are required; optional notes add coaching context.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                  <p className="text-sm font-semibold text-white">
-                    3. Watch low-session clients.
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-500">
-                    Renew conversations should start before the package ends.
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-[2rem] border border-yellow-400/20 bg-white/[0.04] p-5 shadow-2xl backdrop-blur">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.24em] text-yellow-400">
-                    Previous Lesson Plans
-                  </p>
-                  <h2 className="mt-2 text-2xl font-black text-white">
-                    Client Note History
-                  </h2>
-                  <p className="mt-1 text-sm leading-6 text-zinc-500">
-                    Select a client to review previous topics, workout content and coaching notes before planning the next session.
-                  </p>
-                </div>
-              </div>
-
-              <select
-                value={selectedNoteClientId}
-                onChange={async (event) => {
-                  const clientId = event.target.value;
-                  setSelectedNoteClientId(clientId);
-                  setSelectedClientHistory([]);
-                  if (clientId) await fetchClientLessonHistory(clientId);
-                }}
-                className="mt-5 w-full rounded-2xl border border-yellow-400/25 bg-black/70 px-4 py-3.5 text-sm text-white outline-none focus:border-yellow-400"
-              >
-                <option value="">Choose a client...</option>
-                {noteClients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.full_name}
-                    {client.email ? ` — ${client.email}` : ""}
-                  </option>
-                ))}
-              </select>
-
-              {loadingClientHistory ? (
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-yellow-300">
-                  Loading previous lesson plans...
-                </div>
-              ) : clientHistoryMessage ? (
-                <div className="mt-4 rounded-2xl border border-red-400/25 bg-red-400/10 p-4 text-sm text-red-200">
-                  {clientHistoryMessage}
-                </div>
-              ) : selectedNoteClientId && selectedClientHistory.length === 0 ? (
-                <div className="mt-4 rounded-2xl border border-dashed border-white/15 bg-black/35 p-5 text-sm text-zinc-500">
-                  No previous session notes found for this client.
-                </div>
-              ) : null}
-
-              {selectedClientHistory.length > 0 ? (
-                <div className="mt-4 max-h-[620px] space-y-3 overflow-y-auto pr-1">
-                  {selectedClientHistory.map((log) => (
-                    <article
-                      key={log.id}
-                      className="rounded-2xl border border-white/10 bg-black/45 p-4"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${
-                              log.session_type === "nutrition_follow_up"
-                                ? "bg-emerald-400/15 text-emerald-300"
-                                : "bg-yellow-400/15 text-yellow-300"
-                            }`}
-                          >
-                            {log.session_type === "nutrition_follow_up"
-                              ? "Nutrition"
-                              : "Training"}
-                          </span>
-                          <span
-                            className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${getSessionStatusClass(
-                              log.status,
-                            )}`}
-                          >
-                            {getSessionStatusLabel(log.status)}
-                          </span>
-                        </div>
-                        <span className="text-[11px] font-semibold text-zinc-500">
-                          {formatDateTime(log.created_at)}
-                        </span>
-                      </div>
-
-                      {log.session_topic ? (
-                        <div className="mt-3">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-yellow-400">
-                            Topic
-                          </p>
-                          <p className="mt-1 text-sm font-semibold text-white">
-                            {log.session_topic}
-                          </p>
-                        </div>
-                      ) : null}
-
-                      {log.session_content ? (
-                        <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                            Session Content
-                          </p>
-                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
-                            {log.session_content}
-                          </p>
-                        </div>
-                      ) : null}
-
-                    {log.trainer_note ? (
-                        <div className="mt-3 rounded-xl border border-yellow-400/15 bg-yellow-400/[0.06] p-3">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-yellow-400">
-                            Optional Note
-                          </p>
-                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
-                            {log.trainer_note}
-                          </p>
-                        </div>
-                      ) : null}
-
-                      {!log.session_topic && !log.session_content && !log.trainer_note ? (
-                        <p className="mt-3 text-xs text-zinc-600">
-                          This older session does not have a saved lesson plan.
-                        </p>
-                      ) : null}
-                    </article>
-                  ))}
-                </div>
-              ) : null}
-            </section>
-
-            <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5 shadow-2xl backdrop-blur">
-              <h2 className="text-2xl font-black text-white">Profile</h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Keep your staff profile clean for clients and admin records.
-              </p>
-
-              <form onSubmit={saveProfile} className="mt-5 space-y-3">
-                <input
-                  value={editName}
-                  onChange={(event) => setEditName(event.target.value)}
-                  placeholder="Full name"
-                  className="w-full rounded-2xl border border-yellow-500/20 bg-black/60 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
-                <input
-                  value={editEmail}
-                  onChange={(event) => setEditEmail(event.target.value)}
-                  type="email"
-                  placeholder="Email"
-                  className="w-full rounded-2xl border border-yellow-500/20 bg-black/60 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
-                <input
-                  value={editPhone}
-                  onChange={(event) => setEditPhone(event.target.value)}
-                  placeholder="Phone number"
-                  className="w-full rounded-2xl border border-yellow-500/20 bg-black/60 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
-                <input
-                  value={editPassword}
-                  onChange={(event) => setEditPassword(event.target.value)}
-                  type="password"
-                  minLength={6}
-                  placeholder="New password optional"
-                  className="w-full rounded-2xl border border-yellow-500/20 bg-black/60 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-yellow-400"
-                />
-
-                <button
-                  disabled={savingProfile}
-                  className="w-full rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {savingProfile ? "Saving..." : "Save Profile"}
-                </button>
-              </form>
-
-              {profileMessage ? (
-                <p className="mt-4 rounded-2xl border border-yellow-500/30 bg-yellow-400/10 p-3 text-sm text-yellow-300">
-                  {profileMessage}
+          <div id="demos" className="rounded-3xl border border-cyan-400/15 bg-[#0d0f0f] p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.12em] text-cyan-300">
+                  Upcoming Demos
                 </p>
-              ) : null}
-            </section>
+                <h2 className="mt-2 text-xl font-black">Assigned Potential Clients</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => trainerId && fetchUpcomingDemos(trainerId)}
+                disabled={loadingDemos}
+                className="rounded-xl border border-cyan-300/30 px-3 py-2 text-[10px] font-black uppercase text-cyan-300 disabled:opacity-50"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {upcomingDemos.length === 0 ? (
+              <p className="mt-5 rounded-2xl border border-white/10 bg-black/40 p-4 text-xs text-zinc-500">
+                No demos assigned in the next seven days.
+              </p>
+            ) : (
+              <div className="mt-5 space-y-3">
+                {upcomingDemos.map((demo) => (
+                  <article
+                    key={demo.id}
+                    className="rounded-2xl border border-white/10 bg-black/45 p-4"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-sm font-black text-white">{demo.full_name}</p>
+                        <p className="mt-1 text-xs font-semibold text-cyan-300">
+                          {formatDemoDateTime(demo.demo_at)}
+                        </p>
+                        <p className="mt-1 text-[11px] text-zinc-500">
+                          {demo.phone || demo.email || "No contact details"}
+                        </p>
+                        <p className="mt-1 text-[11px] text-yellow-400">
+                          {getLeadSourceLabel(demo.source_type, demo.source_detail)}
+                        </p>
+                      </div>
+                      <span className="w-fit rounded-full border border-white/10 px-2 py-1 text-[9px] font-black uppercase text-zinc-400">
+                        {demo.status.replaceAll("_", " ")}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => updateDemoStatus(demo, "demo_completed")}
+                        disabled={updatingDemoId === demo.id}
+                        className="rounded-xl bg-emerald-400 px-2 py-2.5 text-[10px] font-black uppercase text-black disabled:opacity-50"
+                      >
+                        Completed
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateDemoStatus(demo, "no_show")}
+                        disabled={updatingDemoId === demo.id}
+                        className="rounded-xl bg-orange-500 px-2 py-2.5 text-[10px] font-black uppercase text-black disabled:opacity-50"
+                      >
+                        No-show
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateDemoStatus(demo, "follow_up")}
+                        disabled={updatingDemoId === demo.id}
+                        className="rounded-xl border border-yellow-400/40 px-2 py-2.5 text-[10px] font-black uppercase text-yellow-400 disabled:opacity-50"
+                      >
+                        Follow-up
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
-        <section className="fade-up rounded-[2rem] border border-yellow-500/20 bg-white/[0.04] p-5 shadow-2xl backdrop-blur md:p-6">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <section id="history" className="mt-8 rounded-3xl border border-white/10 bg-[#0d0d0d] p-5">
+          <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.25em] text-yellow-400">
-                Recent Wins
+              <p className="text-[11px] font-black uppercase tracking-[0.12em] text-yellow-400">
+                Session History
               </p>
-              <h2 className="mt-2 text-2xl font-black text-white">
-                Recent Session History
-              </h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Use this as your coaching memory. Every note makes the next
-                session better.
-              </p>
+              <h2 className="mt-2 text-xl font-black">Recent Sessions</h2>
             </div>
-
             <Link
-              href="/trainer/clients"
+              href="/history"
               onClick={(event) => blockPendingSessionNavigation(event)}
-              className="rounded-2xl border border-yellow-400/60 px-4 py-3 text-center text-xs font-black uppercase tracking-wide text-yellow-300 transition hover:bg-yellow-400 hover:text-black"
+              className="rounded-xl border border-yellow-400/40 px-3 py-2 text-[10px] font-black uppercase text-yellow-400"
             >
-              Open Clients
+              View all
             </Link>
           </div>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <div className="mt-5 space-y-3">
             {historyLogs.length === 0 ? (
-              <div className="rounded-3xl border border-dashed border-white/15 bg-black/35 p-8 text-center lg:col-span-2">
-                <p className="text-3xl">🏁</p>
-                <p className="mt-3 text-sm font-semibold text-white">
-                  No session history yet.
-                </p>
-                <p className="mt-1 text-xs text-zinc-500">
-                  Scan your first client to start today&apos;s momentum.
-                </p>
-              </div>
+              <p className="rounded-2xl border border-dashed border-white/15 p-5 text-center text-xs text-zinc-500">
+                No session history yet.
+              </p>
             ) : (
-              historyLogs.map((log) => {
+              historyLogs.slice(0, 8).map((log) => {
                 const client = clientMap.get(log.client_id);
-
                 return (
-                  <div
+                  <article
                     key={log.id}
-                    className="rounded-3xl border border-yellow-500/20 bg-black/45 p-5 transition hover:border-yellow-400/45"
+                    className="rounded-2xl border border-white/10 bg-black/45 p-4"
                   >
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div>
+                    <div className="flex items-center gap-3">
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-sm font-black ${getSessionStatusClass(log.status)}`}>
+                        {log.status === "success" ? "✓" : "!"}
+                      </div>
+                      <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-lg font-black text-white">
-                            {client?.full_name || "Unknown Client"}
+                          <p className="truncate text-sm font-black text-white">
+                            {getSessionStatusLabel(log.status)}
                           </p>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${
-                              log.session_type === "nutrition_follow_up"
-                                ? "bg-emerald-400/15 text-emerald-300"
-                                : "bg-yellow-400/15 text-yellow-300"
-                            }`}
-                          >
-                            {log.session_type === "nutrition_follow_up"
-                              ? "Nutrition Follow-up"
-                              : "Training"}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-xs text-zinc-500">
-                          {client?.email || "No client email"}
-                        </p>
-                      </div>
-
-                      <div className="text-left md:text-right">
-                        <p className="text-sm font-semibold text-yellow-400">
-                          {formatDateTime(log.created_at)}
-                        </p>
-                        <span
-                          className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${getSessionStatusClass(
-                            log.status,
-                          )}`}
-                        >
-                          {getSessionStatusLabel(log.status)}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid gap-3 md:grid-cols-3">
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                          {log.session_type === "nutrition_follow_up"
-                            ? "Training Balance"
-                            : "Remaining"}
-                        </p>
-                        <p className="mt-1 text-xl font-black text-cyan-300">
-                          {log.remaining_after === null
-                            ? "N/A"
-                            : log.remaining_after}
-                        </p>
-                        {log.session_type === "nutrition_follow_up" ? (
-                          <p className="mt-1 text-[10px] text-zinc-500">
-                            unchanged
-                          </p>
-                        ) : null}
-                      </div>
-
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 md:col-span-2">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                          Result
-                        </p>
-                        <p className="mt-1 text-sm leading-6 text-zinc-300">
-                          {log.message || "Session scanned"}
-                        </p>
-                      </div>
-                    </div>
-
-                    {log.photo_path ? (
-                      <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.06] p-4">
-                        <div className="mb-3 flex items-center justify-between gap-3">
-                          <p className="text-xs font-bold uppercase tracking-widest text-cyan-300">
-                            Session Photo
-                          </p>
-
-                          {historyPhotoUrls.get(log.id) ? (
-                            <a
-                              href={historyPhotoUrls.get(log.id)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="rounded-xl border border-cyan-400/30 px-3 py-1.5 text-xs font-bold text-cyan-200 transition hover:bg-cyan-300 hover:text-black"
-                            >
-                              Open Full Size
-                            </a>
+                          {log.session_type === "nutrition_follow_up" ? (
+                            <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-[8px] font-black uppercase text-emerald-300">
+                              Nutrition
+                            </span>
                           ) : null}
                         </div>
-
-                        {historyPhotoUrls.get(log.id) ? (
-                          <a
-                            href={historyPhotoUrls.get(log.id)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block overflow-hidden rounded-2xl border border-white/10 bg-black/40"
-                          >
-                            <img
-                              src={historyPhotoUrls.get(log.id)}
-                              alt={`Session for ${client?.full_name || "client"}`}
-                              loading="lazy"
-                              className="max-h-[420px] w-full object-contain"
-                            />
-                          </a>
-                        ) : (
-                          <div className="rounded-xl border border-dashed border-cyan-400/25 bg-black/30 p-4 text-sm text-zinc-500">
-                            Photo is attached, but it could not be loaded. Check
-                            the session-photos Storage read policy.
-                          </div>
-                        )}
-                      </div>
-                    ) : null}
-
-                    {log.session_topic || log.session_content ? (
-                      <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        {log.session_topic ? (
-                          <div>
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-yellow-400">
-                              Topic
-                            </p>
-                            <p className="mt-1 text-sm font-semibold text-white">
-                              {log.session_topic}
-                            </p>
-                          </div>
-                        ) : null}
-
-                        {log.session_content ? (
-                          <div className={log.session_topic ? "mt-3" : ""}>
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                              Session Content
-                            </p>
-                            <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
-                              {log.session_content}
-                            </p>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {log.trainer_note ? (
-                      <div className="mt-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4">
-                        <p className="text-xs font-bold uppercase tracking-widest text-yellow-400">
-                          Additional Note
+                        <p className="mt-1 truncate text-xs text-zinc-400">
+                          {client?.full_name || "Unknown Client"}
                         </p>
-                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
-                          {log.trainer_note}
+                        <p className="mt-1 text-[10px] text-zinc-600">
+                          {log.session_type === "nutrition_follow_up"
+                            ? "No training session deducted"
+                            : "1 session deducted"}
                         </p>
                       </div>
+                      <div className="text-right">
+                        <p className="text-xs text-zinc-400">
+                          {formatTime(log.created_at)}
+                        </p>
+                        <p className="mt-1 text-lg text-zinc-500">›</p>
+                      </div>
+                    </div>
+
+                    {log.session_topic ? (
+                      <p className="mt-3 border-t border-white/10 pt-3 text-xs font-semibold text-yellow-100">
+                        {log.session_topic}
+                      </p>
                     ) : null}
-                  </div>
+
+                    {log.photo_path && historyPhotoUrls.get(log.id) ? (
+                      <a
+                        href={historyPhotoUrls.get(log.id)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-3 block overflow-hidden rounded-xl border border-white/10"
+                      >
+                        <img
+                          src={historyPhotoUrls.get(log.id)}
+                          alt={`Session for ${client?.full_name || "client"}`}
+                          loading="lazy"
+                          className="max-h-52 w-full object-cover"
+                        />
+                      </a>
+                    ) : null}
+                  </article>
                 );
               })
             )}
           </div>
         </section>
+
+        <section id="profile" className="mt-8 rounded-3xl border border-white/10 bg-[#0d0d0d] p-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-yellow-400 text-lg font-black text-black">
+              {getInitials(trainerName || trainerEmail || "FX")}
+            </div>
+            <div>
+              <h2 className="text-lg font-black">{trainerName || "Staff"}</h2>
+              <p className="mt-1 text-xs text-zinc-500">{trainerEmail}</p>
+              <p className="mt-1 text-[10px] font-black uppercase tracking-[0.12em] text-yellow-400">
+                {getRoleLabel(trainerRole)}
+              </p>
+            </div>
+          </div>
+
+          <form onSubmit={saveProfile} className="mt-5 grid gap-3 md:grid-cols-2">
+            <input
+              value={editName}
+              onChange={(event) => setEditName(event.target.value)}
+              placeholder="Full name"
+              className="rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+            />
+            <input
+              value={editEmail}
+              onChange={(event) => setEditEmail(event.target.value)}
+              type="email"
+              placeholder="Email"
+              className="rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+            />
+            <input
+              value={editPhone}
+              onChange={(event) => setEditPhone(event.target.value)}
+              placeholder="Phone number"
+              className="rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+            />
+            <input
+              value={editPassword}
+              onChange={(event) => setEditPassword(event.target.value)}
+              type="password"
+              minLength={6}
+              placeholder="New password optional"
+              className="rounded-xl border border-white/15 bg-black px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
+            />
+            <button
+              disabled={savingProfile}
+              className="rounded-xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase text-black disabled:opacity-50 md:col-span-2"
+            >
+              {savingProfile ? "Saving..." : "Save Profile"}
+            </button>
+          </form>
+
+          {profileMessage ? (
+            <p className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-400/[0.06] p-3 text-xs text-yellow-300">
+              {profileMessage}
+            </p>
+          ) : null}
+        </section>
       </div>
+
+      <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-black/95 px-2 pb-[max(8px,env(safe-area-inset-bottom))] pt-2 backdrop-blur md:hidden">
+        <div className="mx-auto grid max-w-md grid-cols-5">
+          <a href="#home" className="px-1 py-1.5 text-center text-yellow-400">
+            <div className="text-lg">⌂</div>
+            <div className="mt-1 text-[9px] font-bold">Home</div>
+          </a>
+          <a href="#scan" className="px-1 py-1.5 text-center text-zinc-300">
+            <div className="text-lg">⌗</div>
+            <div className="mt-1 text-[9px] font-bold">Scan</div>
+          </a>
+          <Link
+            href="/trainer/clients"
+            onClick={(event) => blockPendingSessionNavigation(event)}
+            className="px-1 py-1.5 text-center text-zinc-300"
+          >
+            <div className="text-lg">♙</div>
+            <div className="mt-1 text-[9px] font-bold">Clients</div>
+          </Link>
+          <Link
+            href="/trainer/calendar"
+            onClick={(event) => blockPendingSessionNavigation(event)}
+            className="px-1 py-1.5 text-center text-zinc-300"
+          >
+            <div className="text-lg">□</div>
+            <div className="mt-1 text-[9px] font-bold">Calendar</div>
+          </Link>
+          <a href="#profile" className="px-1 py-1.5 text-center text-zinc-300">
+            <div className="text-lg">☰</div>
+            <div className="mt-1 text-[9px] font-bold">Menu</div>
+          </a>
+        </div>
+      </nav>
     </main>
   );
 }
