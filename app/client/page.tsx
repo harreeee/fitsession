@@ -209,6 +209,68 @@ function StatusPill({ status }: { status: string | null }) {
   );
 }
 
+
+function HomeIcon({ className = "h-6 w-6" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 10.5 12 3.75l8.25 6.75v8.25a1.5 1.5 0 0 1-1.5 1.5h-13.5a1.5 1.5 0 0 1-1.5-1.5V10.5Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 20.25v-6h6v6" />
+    </svg>
+  );
+}
+
+function QrIcon({ className = "h-6 w-6" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14 14h2v2h-2v-2Zm4 0h2v2h-2v-2Zm-4 4h2v2h-2v-2Zm4 0h2v2h-2v-2Z" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ className = "h-6 w-6" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3.75v3M17.25 3.75v3M4.5 8.25h15M5.25 5.25h13.5A1.5 1.5 0 0 1 20.25 6.75v12a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5v-12a1.5 1.5 0 0 1 1.5-1.5Z" />
+    </svg>
+  );
+}
+
+function UserIcon({ className = "h-6 w-6" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+      <circle cx="12" cy="8.25" r="3.25" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 20c.7-4.1 3.1-6.15 7-6.15S18.3 15.9 19 20" />
+    </svg>
+  );
+}
+
+function HistoryIcon({ className = "h-6 w-6" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 4.5V9H9M12 7.5V12l3 2" />
+    </svg>
+  );
+}
+
+function CardIcon({ className = "h-6 w-6" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+      <rect x="3.5" y="5.5" width="17" height="13" rx="2" />
+      <path strokeLinecap="round" d="M3.5 10h17" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="m9 5 7 7-7 7" />
+    </svg>
+  );
+}
+
 export default function ClientPortalPage() {
   const router = useRouter();
 
@@ -220,6 +282,7 @@ export default function ClientPortalPage() {
   const [showQrFullscreen, setShowQrFullscreen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
+  const [activeTab, setActiveTab] = useState<"home" | "qr" | "schedule" | "account">("home");
 
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -233,6 +296,11 @@ export default function ClientPortalPage() {
   async function handleLogout() {
     await supabase.auth.signOut();
     router.push("/client/login");
+  }
+
+  function selectTab(tab: "home" | "qr" | "schedule" | "account") {
+    setActiveTab(tab);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function changePassword(event: FormEvent<HTMLFormElement>) {
@@ -466,38 +534,38 @@ export default function ClientPortalPage() {
 
   const packageCompliment = getPackageCompliment(usedPct);
   const quote = getDailyQuote();
+  const nextBooking = upcomingBookings[0] ?? null;
 
   return (
-    <main className="min-h-screen overflow-y-auto bg-[#080808] text-white">
+    <main className="min-h-screen bg-[#050505] text-white">
       <style jsx global>{`
         html,
         body {
-          background: #080808;
+          background: #050505;
+          overscroll-behavior-y: none;
         }
 
-        ::-webkit-scrollbar {
-          width: 6px;
+        * {
+          -webkit-tap-highlight-color: transparent;
         }
 
-        ::-webkit-scrollbar-track {
-          background: transparent;
+        .fxa-safe-top {
+          padding-top: max(10px, env(safe-area-inset-top));
         }
 
-        ::-webkit-scrollbar-thumb {
-          background: #facc15;
-          border-radius: 999px;
+        .fxa-bottom-space {
+          padding-bottom: calc(104px + env(safe-area-inset-bottom));
         }
 
-        ::-webkit-scrollbar-thumb:hover {
-          background: #fde047;
+        .fxa-bottom-safe {
+          padding-bottom: max(10px, env(safe-area-inset-bottom));
         }
 
         @keyframes fade-up {
           from {
             opacity: 0;
-            transform: translateY(12px);
+            transform: translateY(10px);
           }
-
           to {
             opacity: 1;
             transform: translateY(0);
@@ -505,17 +573,16 @@ export default function ClientPortalPage() {
         }
 
         .fade-up {
-          animation: fade-up 0.45s ease both;
+          animation: fade-up 0.32s ease both;
         }
 
         @keyframes glow-pulse {
           0%,
           100% {
-            box-shadow: 0 0 24px rgba(250, 204, 21, 0.15);
+            box-shadow: 0 0 24px rgba(250, 204, 21, 0.12);
           }
-
           50% {
-            box-shadow: 0 0 42px rgba(250, 204, 21, 0.3);
+            box-shadow: 0 0 44px rgba(250, 204, 21, 0.24);
           }
         }
 
@@ -524,237 +591,394 @@ export default function ClientPortalPage() {
         }
       `}</style>
 
-      <div className="mx-auto max-w-2xl px-4 pb-16 pt-6 md:px-6 md:pt-8">
-        <nav className="fade-up mb-5 flex items-center justify-between rounded-3xl border border-white/10 bg-white/[0.04] px-4 py-3 backdrop-blur">
-          <span className="text-[11px] font-bold uppercase tracking-[0.35em] text-yellow-400">
-            FXA FITNESS
-          </span>
+      <header className="fxa-safe-top sticky top-0 z-30 border-b border-white/[0.06] bg-black/90 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-xl items-center justify-between px-4 pb-3 pt-2">
+          <button
+            type="button"
+            onClick={() => selectTab("home")}
+            className="flex items-center gap-2 rounded-xl py-2 text-left"
+            aria-label="Go to home"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-yellow-400/20 bg-yellow-400/[0.08] text-sm font-black text-yellow-400">
+              FXA
+            </div>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-yellow-400">
+                FXA Fitness
+              </p>
+              <p className="mt-0.5 text-xs text-zinc-500">Client Portal</p>
+            </div>
+          </button>
 
           <button
             type="button"
-            onClick={handleLogout}
-            className="rounded-xl border border-white/10 bg-black/40 px-4 py-2 text-xs font-semibold text-gray-300 transition hover:border-yellow-400/50 hover:text-yellow-400"
+            onClick={() => selectTab("account")}
+            className={`flex h-10 w-10 items-center justify-center rounded-full border text-xs font-black transition active:scale-95 ${
+              activeTab === "account"
+                ? "border-yellow-400 bg-yellow-400 text-black"
+                : "border-white/10 bg-white/[0.05] text-white"
+            }`}
+            aria-label="Open account"
           >
-            Log out
+            {getInitials(client.full_name) || "FX"}
           </button>
-        </nav>
+        </div>
+      </header>
 
-        <section className="fade-up mb-5 overflow-hidden rounded-[2rem] border border-yellow-400/20 bg-[radial-gradient(circle_at_top_left,_rgba(250,204,21,0.22),_transparent_35%),linear-gradient(135deg,_#17120a,_#0b0b0b_55%,_#050505)] p-6 shadow-2xl">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-yellow-400">
-                Welcome back
-              </p>
-
-              <h1 className="mt-3 text-3xl font-bold tracking-tight text-white md:text-4xl">
-                {getFirstName(client.full_name)}
-              </h1>
-
-              <p className="mt-3 max-w-md text-sm leading-6 text-gray-300">
-                {quote}
-              </p>
-            </div>
-
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-3xl bg-gradient-to-br from-yellow-300 to-amber-500 text-xl font-black text-black shadow-lg shadow-yellow-400/10">
-              {getInitials(client.full_name)}
-            </div>
-          </div>
-
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <StatusPill status={client.status} />
-
-            {client.email ? (
-              <span className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-gray-300">
-                {client.email}
-              </span>
-            ) : null}
-
-            {client.phone ? (
-              <span className="rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-gray-300">
-                {client.phone}
-              </span>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="fade-up mb-5">
-          <div className="overflow-hidden rounded-[2rem] border border-yellow-400/20 bg-gradient-to-br from-[#111008] to-[#0d0d0d] p-6 shadow-2xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400/80">
-                  Active Package
-                </p>
-
-                <div className="mt-3 flex items-end gap-2">
-                  <span
-                    className={`text-5xl font-black tabular-nums leading-none tracking-tight ${getSessionTextClass(
-                      activePackage?.remaining_sessions
-                    )}`}
-                  >
-                    {activePackage?.remaining_sessions ?? 0}
-                  </span>
-
-                  <span className="mb-1 text-sm text-gray-500">
-                    / {activePackage?.total_sessions ?? 0} sessions left
-                  </span>
+      <div className="fxa-bottom-space mx-auto max-w-xl px-4 pt-5 sm:px-5">
+        {activeTab === "home" ? (
+          <div className="fade-up space-y-4">
+            <section className="overflow-hidden rounded-[28px] border border-yellow-400/20 bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.17),_transparent_40%),linear-gradient(145deg,_#151208,_#0a0a0a_55%,_#050505)] p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-zinc-400">Welcome back,</p>
+                  <h1 className="mt-1 truncate text-3xl font-semibold tracking-tight text-white">
+                    {getFirstName(client.full_name)} <span aria-hidden="true">👋</span>
+                  </h1>
+                  <p className="mt-3 max-w-sm text-sm leading-6 text-zinc-400">
+                    {quote}
+                  </p>
                 </div>
+
+                <StatusPill status={client.status} />
               </div>
 
-              <div className="relative h-16 w-16 shrink-0">
-                <svg className="h-full w-full -rotate-90" viewBox="0 0 56 56">
-                  <circle
-                    cx="28"
-                    cy="28"
-                    r="22"
-                    fill="none"
-                    stroke="rgba(255,255,255,0.06)"
-                    strokeWidth="6"
-                  />
-
-                  <circle
-                    cx="28"
-                    cy="28"
-                    r="22"
-                    fill="none"
-                    stroke="#facc15"
-                    strokeWidth="6"
-                    strokeLinecap="round"
-                    strokeDasharray={`${(usedPct / 100) * 138.2} 138.2`}
-                    className="transition-all duration-700"
-                  />
-                </svg>
-
-                <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-yellow-400">
-                  {usedPct}%
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-5">
-              <div className="mb-2 flex justify-between text-[11px] text-gray-500">
-                <span>{activePackage?.used_sessions ?? 0} used</span>
-                <span>{activePackage?.remaining_sessions ?? 0} remaining</span>
-              </div>
-
-              <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-yellow-400 to-amber-500 transition-all duration-700"
-                  style={{ width: `${usedPct}%` }}
-                />
-              </div>
-
-              <div className="mt-5 rounded-3xl border border-yellow-400/20 bg-yellow-400/[0.08] p-4">
-                <div className="flex items-start gap-3">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-yellow-400 text-xl text-black">
-                    {packageCompliment.emoji}
-                  </div>
-
+              <div className="mt-5 rounded-3xl border border-white/[0.08] bg-black/35 p-4">
+                <div className="flex items-end justify-between gap-4">
                   <div>
-                    <p className="text-sm font-bold text-yellow-300">
-                      {packageCompliment.title}
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-zinc-500">
+                      Sessions remaining
                     </p>
+                    <div className="mt-2 flex items-baseline gap-2">
+                      <span
+                        className={`text-5xl font-semibold tabular-nums leading-none ${getSessionTextClass(
+                          activePackage?.remaining_sessions,
+                        )}`}
+                      >
+                        {activePackage?.remaining_sessions ?? 0}
+                      </span>
+                      <span className="text-sm text-zinc-500">
+                        of {activePackage?.total_sessions ?? 0}
+                      </span>
+                    </div>
+                  </div>
 
-                    <p className="mt-1 text-xs leading-5 text-yellow-100/75">
-                      {packageCompliment.message}
+                  <div className="relative h-16 w-16 shrink-0">
+                    <svg className="h-full w-full -rotate-90" viewBox="0 0 56 56" aria-hidden="true">
+                      <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="5" />
+                      <circle
+                        cx="28"
+                        cy="28"
+                        r="22"
+                        fill="none"
+                        stroke="#facc15"
+                        strokeWidth="5"
+                        strokeLinecap="round"
+                        strokeDasharray={`${(usedPct / 100) * 138.2} 138.2`}
+                      />
+                    </svg>
+                    <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-yellow-400">
+                      {usedPct}%
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/[0.07]">
+                  <div
+                    className="h-full rounded-full bg-yellow-400 transition-all duration-700"
+                    style={{ width: `${usedPct}%` }}
+                  />
+                </div>
+
+                <div className="mt-3 flex items-center justify-between text-xs text-zinc-500">
+                  <span>{activePackage?.used_sessions ?? 0} completed</span>
+                  <span>{activePackage?.remaining_sessions ?? 0} left</span>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => selectTab("qr")}
+                  className="flex min-h-14 items-center justify-center gap-2 rounded-2xl bg-yellow-400 px-4 text-sm font-bold text-black transition active:scale-[0.98]"
+                >
+                  <QrIcon className="h-5 w-5" />
+                  Show QR
+                </button>
+
+                <Link
+                  href="/client/book"
+                  className="flex min-h-14 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-white transition active:scale-[0.98]"
+                >
+                  <CalendarIcon className="h-5 w-5" />
+                  Book Session
+                </Link>
+              </div>
+            </section>
+
+            <section className="grid grid-cols-2 gap-3">
+              <Link
+                href="/client/history"
+                className="flex min-h-[104px] flex-col justify-between rounded-3xl border border-white/[0.08] bg-[#101010] p-4 transition active:scale-[0.98]"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-cyan-400/10 text-cyan-300">
+                  <HistoryIcon className="h-5 w-5" />
+                </div>
+                <div className="mt-4 flex items-end justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-white">History</p>
+                    <p className="mt-1 text-[11px] text-zinc-500">Training records</p>
+                  </div>
+                  <ChevronRightIcon className="h-4 w-4 text-zinc-600" />
+                </div>
+              </Link>
+
+              <Link
+                href="/client/membership"
+                className="flex min-h-[104px] flex-col justify-between rounded-3xl border border-white/[0.08] bg-[#101010] p-4 transition active:scale-[0.98]"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-purple-400/10 text-purple-300">
+                  <CardIcon className="h-5 w-5" />
+                </div>
+                <div className="mt-4 flex items-end justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Membership</p>
+                    <p className="mt-1 text-[11px] text-zinc-500">Packages & purchases</p>
+                  </div>
+                  <ChevronRightIcon className="h-4 w-4 text-zinc-600" />
+                </div>
+              </Link>
+            </section>
+
+            <section className="rounded-[28px] border border-white/[0.08] bg-[#0d0d0d] p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-yellow-400">
+                    Next session
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold text-white">
+                    {nextBooking ? "You are booked" : "No session booked"}
+                  </h2>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => selectTab("schedule")}
+                  className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-300"
+                >
+                  View schedule
+                </button>
+              </div>
+
+              {nextBooking ? (
+                <div className="mt-4 flex items-center gap-4 rounded-3xl border border-yellow-400/15 bg-yellow-400/[0.05] p-4">
+                  <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-2xl bg-yellow-400 text-black">
+                    <span className="text-[10px] font-bold uppercase">
+                      {new Date(nextBooking.starts_at).toLocaleString("en-CA", { month: "short" })}
+                    </span>
+                    <span className="text-xl font-black leading-none">
+                      {new Date(nextBooking.starts_at).getDate()}
+                    </span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-white">
+                      {formatTimeOnly(nextBooking.starts_at)} - {formatTimeOnly(nextBooking.ends_at)}
+                    </p>
+                    <p className="mt-1 truncate text-xs text-zinc-400">
+                      With {nextBooking.trainer_name}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-600">
+                      {formatDateOnly(nextBooking.starts_at)}
                     </p>
                   </div>
                 </div>
+              ) : (
+                <Link
+                  href="/client/book"
+                  className="mt-4 flex min-h-14 items-center justify-center rounded-2xl border border-dashed border-yellow-400/30 bg-yellow-400/[0.04] px-4 text-sm font-semibold text-yellow-300"
+                >
+                  Book your next session
+                </Link>
+              )}
+            </section>
+
+            <section className="flex items-start gap-3 rounded-3xl border border-yellow-400/15 bg-yellow-400/[0.05] p-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-yellow-400 text-lg text-black">
+                {packageCompliment.emoji}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-yellow-300">{packageCompliment.title}</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">{packageCompliment.message}</p>
+              </div>
+            </section>
+          </div>
+        ) : null}
+
+        {activeTab === "qr" ? (
+          <div className="fade-up">
+            <section className="text-center">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400">
+                Trainer Scan Code
+              </p>
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">Your QR Code</h1>
+              <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-zinc-500">
+                Show this code to your PT when they record your session.
+              </p>
+            </section>
+
+            <section className="mt-5 rounded-[32px] border border-yellow-400/20 bg-[radial-gradient(circle_at_top,_rgba(250,204,21,0.13),_transparent_40%),#0c0c0c] p-5 shadow-2xl">
+              <div className="flex items-center justify-center">
+                <div className="glow-pulse rounded-[28px] border border-yellow-400/30 bg-white p-4">
+                  {qrCode ? (
+                    <img
+                      src={qrCode}
+                      alt="Client QR Code"
+                      className="h-[min(72vw,320px)] w-[min(72vw,320px)] rounded-2xl object-contain"
+                    />
+                  ) : (
+                    <div className="flex h-[min(72vw,320px)] w-[min(72vw,320px)] items-center justify-center rounded-2xl bg-zinc-100 text-sm text-zinc-400">
+                      QR code not available
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-                  <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                    Total
-                  </p>
-                  <p className="mt-1 text-lg font-bold text-white">
-                    {activePackage?.total_sessions ?? 0}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-                  <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                    Used
-                  </p>
-                  <p className="mt-1 text-lg font-bold text-yellow-300">
-                    {activePackage?.used_sessions ?? 0}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-                  <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                    Left
-                  </p>
-                  <p
-                    className={`mt-1 text-lg font-bold ${getSessionTextClass(
-                      activePackage?.remaining_sessions
-                    )}`}
-                  >
-                    {activePackage?.remaining_sessions ?? 0}
-                  </p>
+              <div className="mt-5 text-center">
+                <h2 className="text-xl font-semibold text-white">{client.full_name}</h2>
+                <div className="mt-2 flex justify-center">
+                  <StatusPill status={client.status} />
                 </div>
               </div>
+
+              {qrCode ? (
+                <button
+                  type="button"
+                  onClick={() => setShowQrFullscreen(true)}
+                  className="mt-5 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-yellow-400 px-5 text-sm font-bold text-black transition active:scale-[0.98]"
+                >
+                  <QrIcon className="h-5 w-5" />
+                  Open Full Screen
+                </button>
+              ) : null}
+            </section>
+
+            <div className="mt-4 rounded-3xl border border-white/[0.08] bg-white/[0.03] p-4 text-center text-xs leading-5 text-zinc-500">
+              Keep your screen brightness up while your trainer scans the code.
             </div>
           </div>
-        </section>
+        ) : null}
 
-        <section className="fade-up mb-5 grid grid-cols-2 gap-3 md:grid-cols-3">
-          <Link
-            href="/client/book"
-            className="group flex flex-col gap-2 rounded-3xl border border-yellow-400 bg-yellow-400 p-5 text-black transition hover:bg-yellow-300 active:scale-[0.97]"
-          >
-            <span className="text-2xl">📅</span>
-            <span className="text-sm font-bold uppercase tracking-wide">
-              Book Session
-            </span>
-            <span className="text-xs leading-5 text-black/60">
-              Reserve your next slot
-            </span>
-          </Link>
-
-          <Link
-            href="/client/history"
-            className="group flex flex-col gap-2 rounded-3xl border border-yellow-400/30 bg-yellow-400/[0.08] p-5 transition hover:border-yellow-400/60 hover:bg-yellow-400/[0.12] active:scale-[0.97]"
-          >
-            <span className="text-2xl">📋</span>
-            <span className="text-sm font-bold uppercase tracking-wide text-white">
-              History
-            </span>
-            <span className="text-xs leading-5 text-gray-500">
-              View training records
-            </span>
-          </Link>
-
-          <Link
-            href="/client/membership"
-            className="group col-span-2 flex flex-col gap-2 rounded-3xl border border-white/10 bg-white/[0.04] p-5 transition hover:border-yellow-400/30 hover:bg-white/[0.07] active:scale-[0.97] md:col-span-1"
-          >
-            <span className="text-2xl">💳</span>
-            <span className="text-sm font-bold uppercase tracking-wide text-white">
-              Membership
-            </span>
-            <span className="text-xs leading-5 text-gray-500">
-              Packages & purchases
-            </span>
-          </Link>
-        </section>
-
-        <section className="fade-up mb-5">
-          <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.04] shadow-2xl">
-            <div className="flex items-center justify-between gap-4 p-6">
+        {activeTab === "schedule" ? (
+          <div className="fade-up">
+            <div className="flex items-end justify-between gap-4">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400">
-                  Account Security
-                </p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400">Schedule</p>
+                <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">Upcoming Sessions</h1>
+                <p className="mt-2 text-sm text-zinc-500">Your next booked training appointments.</p>
+              </div>
+            </div>
 
-                <h2 className="mt-2 text-xl font-semibold text-white">
-                  Change Password
-                </h2>
+            <Link
+              href="/client/book"
+              className="mt-5 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-yellow-400 px-5 text-sm font-bold text-black transition active:scale-[0.98]"
+            >
+              <CalendarIcon className="h-5 w-5" />
+              Book New Session
+            </Link>
 
-                <p className="mt-1.5 max-w-md text-xs leading-5 text-gray-500">
-                  Update your login password anytime. Use at least 6 characters.
+            {upcomingBookings.length === 0 ? (
+              <div className="mt-5 rounded-[28px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-center">
+                <CalendarIcon className="mx-auto h-10 w-10 text-zinc-600" />
+                <p className="mt-4 text-base font-semibold text-white">No upcoming sessions</p>
+                <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-zinc-500">
+                  Book your next training slot and keep your momentum going.
                 </p>
               </div>
+            ) : (
+              <div className="mt-5 space-y-3">
+                {upcomingBookings.map((booking) => (
+                  <article key={booking.id} className="rounded-[26px] border border-white/[0.08] bg-[#0e0e0e] p-4">
+                    <div className="flex gap-4">
+                      <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-2xl bg-yellow-400 text-black">
+                        <span className="text-[10px] font-bold uppercase">
+                          {new Date(booking.starts_at).toLocaleString("en-CA", { month: "short" })}
+                        </span>
+                        <span className="text-xl font-black leading-none">{new Date(booking.starts_at).getDate()}</span>
+                      </div>
 
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="font-semibold text-white">
+                              {formatTimeOnly(booking.starts_at)} - {formatTimeOnly(booking.ends_at)}
+                            </p>
+                            <p className="mt-1 text-xs text-zinc-500">{formatDateOnly(booking.starts_at)}</p>
+                          </div>
+                          <StatusPill status={booking.status} />
+                        </div>
+
+                        <p className="mt-3 text-sm text-zinc-400">
+                          Trainer: <span className="text-white">{booking.trainer_name}</span>
+                        </p>
+
+                        {booking.notes ? (
+                          <p className="mt-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3 text-xs leading-5 text-zinc-400">
+                            {booking.notes}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === "account" ? (
+          <div className="fade-up space-y-4">
+            <section>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400">Account</p>
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">My Profile</h1>
+            </section>
+
+            <section className="rounded-[28px] border border-white/[0.08] bg-[#0e0e0e] p-5">
+              <div className="flex items-center gap-4">
+                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-yellow-400 text-xl font-black text-black">
+                  {getInitials(client.full_name) || "FX"}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate text-xl font-semibold text-white">{client.full_name}</h2>
+                  <div className="mt-2"><StatusPill status={client.status} /></div>
+                </div>
+              </div>
+
+              <div className="mt-5 divide-y divide-white/[0.07] border-t border-white/[0.07]">
+                <div className="flex items-center justify-between gap-4 py-4">
+                  <span className="text-sm text-zinc-500">Email</span>
+                  <span className="truncate text-right text-sm text-white">{client.email || "Not added"}</span>
+                </div>
+                <div className="flex items-center justify-between gap-4 py-4">
+                  <span className="text-sm text-zinc-500">Phone</span>
+                  <span className="text-right text-sm text-white">{client.phone || "Not added"}</span>
+                </div>
+              </div>
+            </section>
+
+            <section className="grid grid-cols-2 gap-3">
+              <Link href="/client/history" className="rounded-3xl border border-white/[0.08] bg-[#0e0e0e] p-4 transition active:scale-[0.98]">
+                <HistoryIcon className="h-6 w-6 text-cyan-300" />
+                <p className="mt-4 text-sm font-semibold text-white">Training History</p>
+                <p className="mt-1 text-[11px] leading-5 text-zinc-500">Review your completed sessions.</p>
+              </Link>
+              <Link href="/client/membership" className="rounded-3xl border border-white/[0.08] bg-[#0e0e0e] p-4 transition active:scale-[0.98]">
+                <CardIcon className="h-6 w-6 text-purple-300" />
+                <p className="mt-4 text-sm font-semibold text-white">Membership</p>
+                <p className="mt-1 text-[11px] leading-5 text-zinc-500">View packages and purchases.</p>
+              </Link>
+            </section>
+
+            <section className="overflow-hidden rounded-[28px] border border-white/[0.08] bg-[#0e0e0e]">
               <button
                 type="button"
                 onClick={() => {
@@ -764,232 +988,147 @@ export default function ClientPortalPage() {
                   setNewPassword("");
                   setConfirmPassword("");
                 }}
-                className="shrink-0 rounded-xl border border-yellow-400/40 bg-yellow-400/10 px-4 py-2 text-xs font-bold uppercase text-yellow-300 transition hover:bg-yellow-400 hover:text-black active:scale-[0.97]"
+                className="flex min-h-16 w-full items-center justify-between gap-4 p-5 text-left"
               >
-                {showPasswordForm ? "Close" : "Change"}
+                <div>
+                  <p className="text-sm font-semibold text-white">Change Password</p>
+                  <p className="mt-1 text-xs text-zinc-500">Update your login password.</p>
+                </div>
+                <ChevronRightIcon className={`h-5 w-5 text-zinc-500 transition ${showPasswordForm ? "rotate-90" : ""}`} />
               </button>
-            </div>
 
-            {showPasswordForm ? (
-              <form
-                onSubmit={changePassword}
-                className="border-t border-white/10 p-6"
-              >
-                <div className="grid gap-3">
-                  <input
-                    value={newPassword}
-                    onChange={(event) => setNewPassword(event.target.value)}
-                    type="password"
-                    minLength={6}
-                    placeholder="New password"
-                    className="w-full rounded-2xl border border-yellow-500/20 bg-black/50 px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-yellow-400"
-                  />
+              {showPasswordForm ? (
+                <form onSubmit={changePassword} className="border-t border-white/[0.08] p-5">
+                  <div className="space-y-3">
+                    <input
+                      value={newPassword}
+                      onChange={(event) => setNewPassword(event.target.value)}
+                      type="password"
+                      minLength={6}
+                      autoComplete="new-password"
+                      placeholder="New password"
+                      className="min-h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-4 text-base text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
+                    />
+                    <input
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                      type="password"
+                      minLength={6}
+                      autoComplete="new-password"
+                      placeholder="Confirm new password"
+                      className="min-h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-4 text-base text-white outline-none placeholder:text-zinc-600 focus:border-yellow-400"
+                    />
+                  </div>
 
-                  <input
-                    value={confirmPassword}
-                    onChange={(event) =>
-                      setConfirmPassword(event.target.value)
-                    }
-                    type="password"
-                    minLength={6}
-                    placeholder="Confirm new password"
-                    className="w-full rounded-2xl border border-yellow-500/20 bg-black/50 px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-yellow-400"
-                  />
-                </div>
+                  {passwordMessage ? (
+                    <p
+                      className={`mt-4 rounded-2xl border p-4 text-sm ${
+                        passwordMessageType === "success"
+                          ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                          : "border-rose-400/30 bg-rose-400/10 text-rose-300"
+                      }`}
+                    >
+                      {passwordMessage}
+                    </p>
+                  ) : null}
 
-                {passwordMessage ? (
-                  <p
-                    className={`mt-4 rounded-2xl border p-4 text-sm font-semibold ${
-                      passwordMessageType === "success"
-                        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-                        : "border-rose-400/30 bg-rose-400/10 text-rose-300"
-                    }`}
-                  >
-                    {passwordMessage}
-                  </p>
-                ) : null}
-
-                <button
-                  type="submit"
-                  disabled={savingPassword}
-                  className="mt-4 w-full rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-bold uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {savingPassword ? "Updating..." : "Update Password"}
-                </button>
-              </form>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="fade-up mb-5">
-          <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.04] shadow-2xl">
-            <div className="flex items-start justify-between gap-4 p-6">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-yellow-400">
-                  Trainer Scan Code
-                </p>
-
-                <h2 className="mt-2 text-xl font-semibold text-white">
-                  Your QR Code
-                </h2>
-
-                <p className="mt-1.5 max-w-[210px] text-xs leading-5 text-gray-500">
-                  Show this QR code to your trainer to mark your session.
-                </p>
-
-                {qrCode ? (
                   <button
-                    type="button"
-                    onClick={() => setShowQrFullscreen(true)}
-                    className="mt-4 rounded-xl bg-yellow-400 px-4 py-2 text-xs font-bold uppercase text-black transition hover:bg-yellow-300 active:scale-[0.97]"
+                    type="submit"
+                    disabled={savingPassword}
+                    className="mt-4 min-h-14 w-full rounded-2xl bg-yellow-400 px-5 text-sm font-bold text-black disabled:opacity-60"
                   >
-                    Full Screen
+                    {savingPassword ? "Updating..." : "Update Password"}
                   </button>
-                ) : null}
-              </div>
+                </form>
+              ) : null}
+            </section>
 
-              <div className="glow-pulse shrink-0 rounded-2xl border border-yellow-400/30 bg-white p-2.5 shadow-xl">
-                {qrCode ? (
-                  <img
-                    src={qrCode}
-                    alt="Client QR Code"
-                    className="h-32 w-32 rounded-xl object-contain sm:h-36 sm:w-36"
-                  />
-                ) : (
-                  <div className="flex h-32 w-32 items-center justify-center rounded-xl bg-gray-100 text-center text-[11px] text-gray-400 sm:h-36 sm:w-36">
-                    Not available
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="border-t border-white/10 px-6 py-3">
-              <p className="text-[11px] text-gray-600">
-                Tip: rotate your phone to landscape for easier scanning.
-              </p>
-            </div>
-          </div>
-        </section>
-
-        <section className="fade-up">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-white">
-              Upcoming Sessions
-            </h2>
-
-            <Link
-              href="/client/book"
-              className="text-[11px] font-semibold text-yellow-400 transition hover:text-yellow-300"
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="min-h-14 w-full rounded-2xl border border-rose-400/25 bg-rose-400/[0.07] px-5 text-sm font-semibold text-rose-300 transition active:scale-[0.98]"
             >
-              + Book new
-            </Link>
+              Log Out
+            </button>
           </div>
-
-          {upcomingBookings.length === 0 ? (
-            <div className="rounded-[2rem] border border-dashed border-white/10 bg-white/[0.03] p-8 text-center">
-              <p className="text-3xl">🗓️</p>
-
-              <p className="mt-3 text-sm font-medium text-white">
-                No upcoming sessions
-              </p>
-
-              <p className="mt-1 text-xs text-gray-500">
-                Book your next training slot and keep the momentum going.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {upcomingBookings.map((booking) => (
-                <div
-                  key={booking.id}
-                  className="overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] transition hover:border-yellow-400/20"
-                >
-                  <div className="flex items-start gap-4 p-5">
-                    <div className="flex w-12 shrink-0 flex-col items-center rounded-2xl border border-white/10 bg-black/30 py-2.5 text-center">
-                      <span className="text-[10px] font-semibold uppercase text-gray-500">
-                        {new Date(booking.starts_at).toLocaleString("en-CA", {
-                          month: "short",
-                        })}
-                      </span>
-
-                      <span className="text-xl font-bold leading-none text-yellow-400">
-                        {new Date(booking.starts_at).getDate()}
-                      </span>
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="font-semibold text-white">
-                            {formatTimeOnly(booking.starts_at)} -{" "}
-                            {formatTimeOnly(booking.ends_at)}
-                          </p>
-
-                          <p className="mt-1 text-xs text-gray-400">
-                            {formatDateOnly(booking.starts_at)}
-                          </p>
-                        </div>
-
-                        <StatusPill status={booking.status} />
-                      </div>
-
-                      <p className="mt-2 text-xs text-gray-500">
-                        Trainer:{" "}
-                        <span className="text-gray-300">
-                          {booking.trainer_name}
-                        </span>
-                      </p>
-
-                      {booking.notes ? (
-                        <p className="mt-3 rounded-xl border border-yellow-400/10 bg-yellow-400/[0.05] p-3 text-xs leading-5 text-yellow-200/80">
-                          {booking.notes}
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        ) : null}
       </div>
 
+      <nav className="fxa-bottom-safe fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.07] bg-black/95 backdrop-blur-xl">
+        <div className="mx-auto grid max-w-xl grid-cols-4 gap-1 px-2 pt-2">
+          <button
+            type="button"
+            onClick={() => selectTab("home")}
+            className={`flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-2xl text-[11px] font-medium transition ${
+              activeTab === "home" ? "bg-yellow-400/[0.10] text-yellow-400" : "text-zinc-500"
+            }`}
+          >
+            <HomeIcon className="h-6 w-6" />
+            Home
+          </button>
+
+          <button
+            type="button"
+            onClick={() => selectTab("qr")}
+            className={`flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-2xl text-[11px] font-medium transition ${
+              activeTab === "qr" ? "bg-yellow-400/[0.10] text-yellow-400" : "text-zinc-500"
+            }`}
+          >
+            <QrIcon className="h-6 w-6" />
+            QR
+          </button>
+
+          <button
+            type="button"
+            onClick={() => selectTab("schedule")}
+            className={`flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-2xl text-[11px] font-medium transition ${
+              activeTab === "schedule" ? "bg-yellow-400/[0.10] text-yellow-400" : "text-zinc-500"
+            }`}
+          >
+            <CalendarIcon className="h-6 w-6" />
+            Schedule
+          </button>
+
+          <button
+            type="button"
+            onClick={() => selectTab("account")}
+            className={`flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-2xl text-[11px] font-medium transition ${
+              activeTab === "account" ? "bg-yellow-400/[0.10] text-yellow-400" : "text-zinc-500"
+            }`}
+          >
+            <UserIcon className="h-6 w-6" />
+            Account
+          </button>
+        </div>
+      </nav>
+
       {showQrFullscreen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-4 backdrop-blur-sm">
-          <div className="relative flex w-full max-w-sm flex-col items-center rounded-[2.5rem] border border-white/10 bg-[#0a0a0a] p-8 shadow-[0_40px_120px_rgba(0,0,0,0.7)]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black p-4">
+          <div className="fxa-safe-top relative flex h-full w-full max-w-sm flex-col items-center justify-center">
             <button
               type="button"
               onClick={() => setShowQrFullscreen(false)}
-              className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.06] text-gray-400 transition hover:border-white/20 hover:text-white"
+              className="absolute right-0 top-4 flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-xl text-white"
+              aria-label="Close full screen QR code"
             >
-              X
+              ×
             </button>
 
-            <p className="text-[11px] font-bold uppercase tracking-[0.35em] text-yellow-400">
-              FXA FITNESS
-            </p>
+            <p className="text-[11px] font-bold uppercase tracking-[0.32em] text-yellow-400">FXA FITNESS</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">Scan this code</h2>
+            <p className="mt-2 text-center text-sm text-zinc-500">Show your trainer to record your session.</p>
 
-            <h2 className="mt-2 text-xl font-semibold text-white">
-              Scan this code
-            </h2>
-
-            <p className="mt-1 text-center text-xs leading-5 text-gray-500">
-              Show your trainer to mark a completed session.
-            </p>
-
-            <div className="glow-pulse mt-6 rounded-3xl border border-yellow-400/30 bg-white p-4 shadow-2xl">
+            <div className="glow-pulse mt-7 rounded-[30px] bg-white p-4">
               {qrCode ? (
                 <img
                   src={qrCode}
                   alt="QR Code"
-                  className="h-[min(68vw,300px)] w-[min(68vw,300px)] rounded-2xl object-contain"
+                  className="h-[min(78vw,340px)] w-[min(78vw,340px)] rounded-2xl object-contain"
                 />
-              ) : (
-                <div className="flex h-[min(68vw,300px)] w-[min(68vw,300px)] items-center justify-center rounded-2xl bg-gray-100 text-sm text-gray-400">
-                  Not available
-                </div>
-              )}
+              ) : null}
             </div>
+
+            <p className="mt-5 text-center text-sm font-medium text-white">{client.full_name}</p>
           </div>
         </div>
       ) : null}
