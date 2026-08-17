@@ -225,6 +225,7 @@ function formatTime(value: string | null) {
 }
 
 function getErrorMessage(error: unknown) {
+  if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
 
   if (
@@ -236,7 +237,48 @@ function getErrorMessage(error: unknown) {
     return (error as { message: string }).message;
   }
 
-  return "Unknown error";
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error || "Unknown error");
+  }
+}
+
+async function waitForDomElement(
+  elementId: string,
+  timeoutMs = 2000,
+): Promise<HTMLElement> {
+  if (typeof document === "undefined") {
+    throw new Error("Camera scanner can only start in the browser.");
+  }
+
+  const existing = document.getElementById(elementId);
+  if (existing) return existing;
+
+  return new Promise<HTMLElement>((resolve, reject) => {
+    const startedAt = Date.now();
+
+    const check = () => {
+      const element = document.getElementById(elementId);
+      if (element) {
+        resolve(element);
+        return;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        reject(
+          new Error(
+            `Scanner container #${elementId} was not mounted in time. Please try again.`,
+          ),
+        );
+        return;
+      }
+
+      window.requestAnimationFrame(check);
+    };
+
+    window.requestAnimationFrame(check);
+  });
 }
 
 function getResultClass(type: ScanResult["type"]) {
@@ -285,6 +327,7 @@ export default function TrainerScanPage() {
 
   const [result, setResult] = useState<ScanResult>({ type: "", message: "" });
   const [scannerStarted, setScannerStarted] = useState(false);
+  const [cameraOpening, setCameraOpening] = useState(false);
   const [activeMobileTab, setActiveMobileTab] = useState<MobileTab>("home");
 
   const [trainerId, setTrainerId] = useState<string | null>(null);
@@ -465,6 +508,20 @@ export default function TrainerScanPage() {
       cleanMessage.includes("facingmode")
     ) {
       return "The preferred rear camera could not be selected. The app also tried the available camera list, but none could start.";
+    }
+
+    if (
+      cleanMessage.includes("html element with id=qr-reader not found") ||
+      cleanMessage.includes("scanner container #qr-reader")
+    ) {
+      return "The scanner screen was not ready yet. Tap Start Scan again. If this repeats, refresh the page once.";
+    }
+
+    if (
+      cleanMessage.includes("aborterror") ||
+      cleanMessage.includes("aborted")
+    ) {
+      return "The camera start was interrupted. Tap Start Scan again.";
     }
 
     return `Camera could not start: ${rawMessage}. Check camera permission and try again.`;
@@ -665,6 +722,7 @@ export default function TrainerScanPage() {
       scannerRef.current = null;
       // Keep the scan lock active until the current scan has fully finished.
       // startScanner() resets it before a new camera session begins.
+      setCameraOpening(false);
       setScannerStarted(false);
     }
   }
@@ -1199,9 +1257,8 @@ export default function TrainerScanPage() {
     );
 
     const config = {
-      fps: 12,
+      fps: 10,
       qrbox: { width: qrSize, height: qrSize },
-      aspectRatio: 1,
     };
 
     const onScanSuccess = async (decodedText: string) => {
@@ -1223,9 +1280,17 @@ export default function TrainerScanPage() {
     };
 
     try {
+      // The camera UI is rendered only after scannerStarted becomes true.
+      // html5-qrcode checks for #qr-reader inside its constructor and throws
+      // a STRING (not an Error) when the element is missing. Waiting for the
+      // next React paint prevents the mobile-only mount race that previously
+      // surfaced as "Unknown error" immediately after tapping Start Scan.
+      setCameraOpening(true);
+      setScannerStarted(true);
+      await waitForDomElement("qr-reader");
+
       const scanner = new Html5Qrcode("qr-reader");
       scannerRef.current = scanner;
-      setScannerStarted(true);
 
       try {
         await scanner.start(
@@ -1234,6 +1299,7 @@ export default function TrainerScanPage() {
           onScanSuccess,
           () => {},
         );
+        setCameraOpening(false);
       } catch (firstError) {
         const firstMessage = getCameraStartErrorMessage(firstError).toLowerCase();
         const shouldNotRetry =
@@ -1257,6 +1323,7 @@ export default function TrainerScanPage() {
           onScanSuccess,
           () => {},
         );
+        setCameraOpening(false);
       }
     } catch (error) {
       console.error("Camera start error:", error);
@@ -1271,6 +1338,7 @@ export default function TrainerScanPage() {
 
       scannerRef.current = null;
       scanningLockRef.current = false;
+      setCameraOpening(false);
       setScannerStarted(false);
       setResult({
         type: "error",
@@ -2035,6 +2103,16 @@ export default function TrainerScanPage() {
                     id="qr-reader"
                     className="min-h-[360px] w-full overflow-hidden rounded-[22px] bg-[#080808] text-white md:min-h-[500px]"
                   />
+
+                  {cameraOpening ? (
+                    <div className="pointer-events-none absolute inset-2 z-10 flex min-h-[360px] items-center justify-center rounded-[22px] bg-black/85 md:min-h-[500px]">
+                      <div className="text-center">
+                        <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-yellow-400/20 border-t-yellow-400" />
+                        <p className="mt-4 text-sm font-bold text-white">Opening camera...</p>
+                        <p className="mt-1 text-xs text-zinc-500">Allow camera access if your phone asks.</p>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <button
