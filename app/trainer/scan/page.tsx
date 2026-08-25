@@ -130,9 +130,13 @@ function getRoleLabel(role: string) {
 }
 
 function getSessionStatusLabel(status: SessionStatus | string) {
+  if (status === "success") return "Success";
   if (status === "no_show") return "No-show";
   if (status === "late_cancel") return "Late cancel";
-  return "Success";
+
+  const cleanStatus = String(status || "").trim();
+  if (!cleanStatus) return "Unknown";
+  return cleanStatus.replaceAll("_", " ");
 }
 
 function getSessionStatusClass(status: SessionStatus | string) {
@@ -904,7 +908,6 @@ export default function TrainerScanPage() {
       .from("session_history")
       .select("id, client_id, created_at, status, session_type")
       .eq("trainer_id", userId)
-      .eq("status", "success")
       .gte("created_at", today.toISOString())
       .order("created_at", { ascending: false });
 
@@ -925,15 +928,22 @@ export default function TrainerScanPage() {
       session_type: SessionType | null;
     }>;
     const uniqueClients = new Set(logsToday.map((log) => log.client_id));
-    const trainingCount = logsToday.filter(
+    const trainingLogs = logsToday.filter(
       (log) => (log.session_type || "training") === "training",
+    );
+    const completedTrainingCount = trainingLogs.filter(
+      (log) => log.status === "success",
+    ).length;
+    const chargedTrainingCount = trainingLogs.filter((log) =>
+      ["success", "no_show", "late_cancel"].includes(log.status),
     ).length;
     const nutritionCount = logsToday.filter(
-      (log) => log.session_type === "nutrition_follow_up",
+      (log) =>
+        log.session_type === "nutrition_follow_up" && log.status === "success",
     ).length;
 
-    setSessionsToday(logsToday.length);
-    setTrainingSessionsToday(trainingCount);
+    setSessionsToday(chargedTrainingCount);
+    setTrainingSessionsToday(completedTrainingCount);
     setNutritionFollowsToday(nutritionCount);
     setClientsToday(uniqueClients.size);
     setLastScan(logsToday[0]?.created_at || null);
@@ -1158,10 +1168,16 @@ export default function TrainerScanPage() {
         updatePayload.photo_path = uploadedPhotoPath;
       }
 
-      const { error } = await supabase
+      // IMPORTANT: ask PostgREST to return the updated row so the app can
+      // verify that Session Topic + Session Content were actually persisted.
+      // An UPDATE blocked by RLS can otherwise affect zero rows without giving
+      // the trainer a useful confirmation that the note was not saved.
+      const { data: updatedRow, error } = await supabase
         .from("session_history")
         .update(updatePayload)
-        .eq("id", lastScannedHistoryId);
+        .eq("id", lastScannedHistoryId)
+        .select("id, session_topic, session_content, trainer_note, photo_path")
+        .maybeSingle();
 
       if (error) {
         if (uploadedPhotoPath) {
@@ -1173,11 +1189,30 @@ export default function TrainerScanPage() {
         throw error;
       }
 
+      if (!updatedRow?.id) {
+        throw new Error(
+          "The session was recorded, but the workout note could not be verified. The form has been kept open. Please tap Save & Finish again. If this repeats, check the session_history UPDATE policy.",
+        );
+      }
+
+      const savedTopic = String(updatedRow.session_topic || "").trim();
+      const savedContent = String(updatedRow.session_content || "").trim();
+
+      if (savedTopic !== cleanTopic || savedContent !== cleanContent) {
+        throw new Error(
+          "The workout note did not match what was entered. The form has been kept open so you do not lose the Session Topic or Session Content.",
+        );
+      }
+
       setNoteMessage(
         sessionPhoto
           ? "Session record and photo saved. This session is complete."
           : "Session record saved. This session is complete.",
       );
+      setResult({
+        type: "success",
+        message: `SESSION COMPLETE — ${lastScannedClientName || "Client"}. Session Topic and Session Content were saved and verified successfully.`,
+      });
       setShowNoteBox(false);
       setSessionTopic("");
       setSessionContent("");
@@ -1413,6 +1448,8 @@ export default function TrainerScanPage() {
       return;
     }
 
+    let rpcRecorded = false;
+
     try {
       const { data, error } = await supabase.rpc("record_staff_session", {
         p_qr_token: cleanQrToken,
@@ -1438,6 +1475,10 @@ export default function TrainerScanPage() {
 
         throw error;
       }
+
+      // At this point the RPC completed successfully. Any later client-side
+      // validation error must not claim that no session was deducted.
+      rpcRecorded = true;
 
       const rawRow = Array.isArray(data) ? data[0] : data;
       const row = rawRow as RecordSessionRpcRow | null;
@@ -1494,9 +1535,12 @@ export default function TrainerScanPage() {
         await fetchTrainerStats(authenticatedUserId);
       }
     } catch (error) {
+      const baseMessage = getErrorMessage(error) || "Unable to process this scan.";
       setResult({
         type: "error",
-        message: `${getErrorMessage(error) || "Unable to process this scan."} No session was deducted.`,
+        message: rpcRecorded
+          ? `${baseMessage} The database may already have recorded this scan. Check Session History before scanning the client again.`
+          : `${baseMessage} No session was deducted.`,
       });
     }
   }
@@ -1787,7 +1831,7 @@ export default function TrainerScanPage() {
                   {sessionsToday}
                 </p>
                 <p className="mt-1 text-[10px] font-semibold text-zinc-300">
-                  Paid Sessions
+                  Charged Sessions
                 </p>
               </div>
 
@@ -1823,7 +1867,7 @@ export default function TrainerScanPage() {
                   {clientsToday}
                 </p>
                 <p className="mt-1 text-[10px] font-semibold text-zinc-300">
-                  Active Clients
+                  Clients Today
                 </p>
               </div>
             </div>
@@ -2476,19 +2520,38 @@ export default function TrainerScanPage() {
                     </div>
 
                     {log.session_topic ? (
-                      <p className="mt-3 text-sm font-bold text-white">
-                        {log.session_topic}
-                      </p>
+                      <div className="mt-3">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-yellow-500/80">
+                          Session Topic
+                        </p>
+                        <p className="mt-1 text-sm font-bold text-white">
+                          {log.session_topic}
+                        </p>
+                      </div>
                     ) : null}
                     {log.session_content ? (
-                      <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-zinc-400">
-                        {log.session_content}
+                      <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-zinc-500">
+                          Session Content
+                        </p>
+                        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-5 text-zinc-300">
+                          {log.session_content}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="mt-3 rounded-xl border border-dashed border-white/10 px-3 py-2 text-[10px] text-zinc-600">
+                        No session content was saved for this record.
                       </p>
-                    ) : null}
+                    )}
                     {log.trainer_note ? (
-                      <p className="mt-2 rounded-xl bg-yellow-400/[0.05] p-3 text-xs leading-5 text-yellow-100">
-                        {log.trainer_note}
-                      </p>
+                      <div className="mt-3 rounded-xl border border-yellow-400/15 bg-yellow-400/[0.05] p-3">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-yellow-500/80">
+                          Trainer Note
+                        </p>
+                        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-5 text-yellow-100">
+                          {log.trainer_note}
+                        </p>
+                      </div>
                     ) : null}
                   </article>
                 ))}
@@ -2561,9 +2624,40 @@ export default function TrainerScanPage() {
                     </div>
 
                     {log.session_topic ? (
-                      <p className="mt-3 border-t border-white/10 pt-3 text-xs font-semibold text-yellow-100">
-                        {log.session_topic}
+                      <div className="mt-3 border-t border-white/10 pt-3">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-yellow-500/80">
+                          Session Topic
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-yellow-100">
+                          {log.session_topic}
+                        </p>
+                      </div>
+                    ) : null}
+
+                    {log.session_content ? (
+                      <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-zinc-500">
+                          Session Content
+                        </p>
+                        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-5 text-zinc-300">
+                          {log.session_content}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="mt-3 rounded-xl border border-dashed border-white/10 px-3 py-2 text-[10px] text-zinc-600">
+                        No session content was saved for this record.
                       </p>
+                    )}
+
+                    {log.trainer_note ? (
+                      <div className="mt-3 rounded-xl border border-yellow-400/15 bg-yellow-400/[0.05] p-3">
+                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-yellow-500/80">
+                          Trainer Note
+                        </p>
+                        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-5 text-yellow-100">
+                          {log.trainer_note}
+                        </p>
+                      </div>
                     ) : null}
 
                     {log.photo_path && historyPhotoUrls.get(log.id) ? (
