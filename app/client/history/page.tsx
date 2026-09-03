@@ -9,9 +9,14 @@ import { getCurrentUserRole } from "../../../lib/checkUserRole";
 type TrainingRecord = {
   id: string;
   trainer_id: string | null;
+  session_type: string | null;
   status: string;
   message: string | null;
+  session_topic: string | null;
+  session_content: string | null;
   trainer_note: string | null;
+  photo_path: string | null;
+  photo_url: string | null;
   remaining_after: number | null;
   created_at: string;
   trainer_name: string;
@@ -20,9 +25,7 @@ type TrainingRecord = {
 
 function formatDateTime(value: string | null) {
   if (!value) return "-";
-
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) return "-";
 
   return date.toLocaleString("en-CA", {
@@ -39,7 +42,11 @@ function getStatusClass(status: string) {
     return "border-green-400/30 bg-green-400/10 text-green-300";
   }
 
-  if (status === "manual_subtract" || status === "no_show") {
+  if (
+    status === "manual_subtract" ||
+    status === "no_show" ||
+    status === "late_cancel"
+  ) {
     return "border-yellow-400/30 bg-yellow-400/10 text-yellow-300";
   }
 
@@ -54,22 +61,26 @@ function getStatusLabel(status: string) {
   if (status === "success") return "Completed";
   if (status === "manual_subtract") return "Manual Subtract";
   if (status === "no_show") return "No-Show";
+  if (status === "late_cancel") return "Late Cancel";
   if (status === "failed") return "Failed";
   return status || "Recorded";
 }
 
 function getRemainingClass(value: number | null | undefined) {
   const cleanValue = Number(value ?? 0);
-
   if (cleanValue <= 0) return "text-red-300";
   if (cleanValue <= 3) return "text-yellow-300";
-
   return "text-green-300";
+}
+
+function getSessionTypeLabel(sessionType: string | null) {
+  return sessionType === "nutrition_follow_up"
+    ? "Nutrition Follow-Up"
+    : "Training";
 }
 
 export default function ClientHistoryPage() {
   const router = useRouter();
-
   const [records, setRecords] = useState<TrainingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
@@ -79,37 +90,42 @@ export default function ClientHistoryPage() {
     setLoading(true);
     setErrorMessage("");
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-    if (!session?.access_token) {
-      setErrorMessage("No active session found. Please log in again.");
+      if (!session?.access_token) {
+        setErrorMessage("No active session found. Please log in again.");
+        setRecords([]);
+        return;
+      }
+
+      const response = await fetch("/api/client/training-records", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        cache: "no-store",
+      });
+
+      const result = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        setErrorMessage(result?.error || "Could not load training records.");
+        setRecords([]);
+        return;
+      }
+
+      setRecords((result?.logs || []) as TrainingRecord[]);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Could not load training records.",
+      );
       setRecords([]);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const response = await fetch("/api/client/training-records", {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-      },
-    });
-
-    const result = await response.json().catch(() => null);
-
-    console.log("Client history page result:", result);
-
-    if (!response.ok) {
-      setErrorMessage(result?.error || "Could not load training records.");
-      setRecords([]);
-      setLoading(false);
-      return;
-    }
-
-    setRecords((result?.logs || []) as TrainingRecord[]);
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -141,15 +157,13 @@ export default function ClientHistoryPage() {
       await fetchTrainingRecords();
     }
 
-    protectPage();
+    void protectPage();
   }, [router]);
 
   if (checkingRole) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-black text-white">
-        <p className="text-sm font-semibold text-yellow-400">
-          Checking access...
-        </p>
+        <p className="text-sm font-semibold text-yellow-400">Checking access...</p>
       </main>
     );
   }
@@ -163,13 +177,11 @@ export default function ClientHistoryPage() {
               <p className="mb-2 text-xs font-semibold uppercase tracking-[0.35em] text-yellow-400">
                 FXA FITNESS
               </p>
-
               <h1 className="text-4xl font-semibold tracking-tight md:text-5xl">
                 Training History
               </h1>
-
               <p className="mt-2 text-sm text-gray-400">
-                Your completed sessions and training records.
+                Your sessions, workout content, coach notes and progress records.
               </p>
             </div>
 
@@ -184,15 +196,9 @@ export default function ClientHistoryPage() {
           <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-5 shadow-2xl backdrop-blur md:p-6">
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-2xl font-semibold text-white">
-                  Session Records
-                </h2>
-
+                <h2 className="text-2xl font-semibold text-white">Session Records</h2>
                 <p className="mt-1 text-sm text-gray-400">
-                  Total records:{" "}
-                  <span className="font-semibold text-yellow-400">
-                    {records.length}
-                  </span>
+                  Total records: <span className="font-semibold text-yellow-400">{records.length}</span>
                 </p>
               </div>
 
@@ -212,79 +218,107 @@ export default function ClientHistoryPage() {
               </p>
             ) : errorMessage ? (
               <div className="rounded-2xl border border-red-400/30 bg-red-400/10 p-5">
-                <p className="text-sm font-semibold text-red-300">
-                  {errorMessage}
-                </p>
+                <p className="text-sm font-semibold text-red-300">{errorMessage}</p>
               </div>
             ) : records.length === 0 ? (
               <div className="rounded-2xl border border-white/10 bg-black/40 p-8 text-center">
                 <p className="text-3xl">📋</p>
-
-                <h2 className="mt-3 text-xl font-semibold text-white">
-                  No training records found
-                </h2>
-
+                <h2 className="mt-3 text-xl font-semibold text-white">No training records found</h2>
                 <p className="mt-2 text-sm text-gray-400">
-                  When your trainer scans your QR code, your session history
-                  will show here.
+                  When your coach records a session, it will show here.
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {records.map((record) => (
-                  <div
+                  <article
                     key={`${record.source}-${record.id}`}
                     className="rounded-2xl border border-white/10 bg-black/40 p-5"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${getStatusClass(
-                            record.status
-                          )}`}
-                        >
-                          {getStatusLabel(record.status)}
-                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          <span
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${getStatusClass(record.status)}`}
+                          >
+                            {getStatusLabel(record.status)}
+                          </span>
+                          <span className="rounded-full border border-yellow-400/25 bg-yellow-400/10 px-3 py-1 text-xs font-semibold uppercase text-yellow-300">
+                            {getSessionTypeLabel(record.session_type)}
+                          </span>
+                        </div>
 
                         <p className="mt-3 text-sm font-semibold text-white">
                           {formatDateTime(record.created_at)}
                         </p>
-
                         <p className="mt-1 text-sm text-gray-400">
-                          Trainer:{" "}
-                          <span className="text-yellow-300">
-                            {record.trainer_name}
-                          </span>
+                          Coach: <span className="text-yellow-300">{record.trainer_name}</span>
                         </p>
                       </div>
 
                       <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 text-right">
-                        <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                          Left
-                        </p>
-
-                        <p
-                          className={`text-2xl font-bold ${getRemainingClass(
-                            record.remaining_after
-                          )}`}
-                        >
+                        <p className="text-[10px] uppercase tracking-widest text-gray-500">Left</p>
+                        <p className={`text-2xl font-bold ${getRemainingClass(record.remaining_after)}`}>
                           {record.remaining_after ?? "-"}
                         </p>
                       </div>
                     </div>
 
-                    {record.message ? (
-                      <p className="mt-4 rounded-xl border border-white/10 bg-white/[0.04] p-3 text-sm text-gray-300">
-                        {record.message}
-                      </p>
+                    {record.session_topic ? (
+                      <div className="mt-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-yellow-400">
+                          Session Topic
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-white">{record.session_topic}</p>
+                      </div>
                     ) : null}
 
+                    {record.session_content ? (
+                      <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                          Session Content
+                        </p>
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-200">
+                          {record.session_content}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-2xl border border-dashed border-white/10 p-3 text-xs text-gray-600">
+                        No workout content was saved for this older/incomplete session record.
+                      </div>
+                    )}
+
                     {record.trainer_note ? (
-                      <p className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-sm text-yellow-100">
-                        {record.trainer_note}
-                      </p>
+                      <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-yellow-400">
+                          Coach Note
+                        </p>
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
+                          {record.trainer_note}
+                        </p>
+                      </div>
                     ) : null}
-                  </div>
+
+                    {record.photo_url ? (
+                      <a
+                        href={record.photo_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-3 block overflow-hidden rounded-2xl border border-white/10"
+                      >
+                        <img
+                          src={record.photo_url}
+                          alt="Session"
+                          loading="lazy"
+                          className="max-h-80 w-full object-cover"
+                        />
+                      </a>
+                    ) : null}
+
+                    {record.message ? (
+                      <p className="mt-3 text-xs leading-5 text-gray-500">{record.message}</p>
+                    ) : null}
+                  </article>
                 ))}
               </div>
             )}
