@@ -79,6 +79,13 @@ function getSessionTypeLabel(sessionType: string | null) {
     : "Training";
 }
 
+function hasDistinctCoachNote(record: TrainingRecord) {
+  const note = record.trainer_note?.trim() || "";
+  const content = record.session_content?.trim() || "";
+
+  return Boolean(note && note !== content);
+}
+
 export default function ClientHistoryPage() {
   const router = useRouter();
   const [records, setRecords] = useState<TrainingRecord[]>([]);
@@ -288,7 +295,7 @@ export default function ClientHistoryPage() {
                       </div>
                     )}
 
-                    {record.trainer_note ? (
+                    {hasDistinctCoachNote(record) ? (
                       <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4">
                         <p className="text-[10px] font-semibold uppercase tracking-widest text-yellow-400">
                           Coach Note
