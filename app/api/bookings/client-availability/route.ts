@@ -5,12 +5,17 @@ import {
   getUserRole,
 } from "../../../../lib/supabaseServer";
 import { getBusyTimes } from "../../../../lib/googleCalendar";
+import {
+  BOOKING_HORIZON_DAYS,
+  MIN_BOOKING_NOTICE_HOURS,
+  buildCandidateSlots,
+  overlapsAny,
+  type AvailabilityRule,
+  type BusyPeriod,
+} from "../../../../lib/bookingAvailability";
 
 export const runtime = "nodejs";
 
-const DAYS_TO_SHOW = 14;
-
-type BusyPeriod = { start?: string; end?: string };
 type PackageRow = {
   id: string;
   package_name: string | null;
@@ -22,10 +27,6 @@ type PackageRow = {
   status: string | null;
   created_at: string | null;
 };
-
-function overlaps(startA: string, endA: string, startB: string, endB: string) {
-  return new Date(startA) < new Date(endB) && new Date(endA) > new Date(startB);
-}
 
 function packageRemaining(row: PackageRow) {
   if (row.remaining_sessions !== null && row.remaining_sessions !== undefined) {
@@ -39,24 +40,16 @@ function isPackageUsable(row: PackageRow) {
   if (["inactive", "cancelled", "expired", "completed"].includes(String(row.status || "").toLowerCase())) {
     return false;
   }
-
   const now = new Date();
   if (row.starts_at && new Date(row.starts_at) > now) return false;
-  if (row.expires_at) {
-    const expiry = new Date(row.expires_at);
-    expiry.setHours(23, 59, 59, 999);
-    if (expiry < now) return false;
-  }
-
+  if (row.expires_at && new Date(`${row.expires_at.slice(0, 10)}T23:59:59`) < now) return false;
   return true;
 }
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await getUserFromRequest(request);
-    if (!auth.user) {
-      return NextResponse.json({ error: auth.error }, { status: 401 });
-    }
+    if (!auth.user) return NextResponse.json({ error: auth.error }, { status: 401 });
 
     const role = await getUserRole(auth.user.id);
     if (role !== "client") {
@@ -69,7 +62,6 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = createServiceSupabaseClient();
-
     let { data: client, error: clientError } = await supabase
       .from("clients")
       .select("id, full_name, email, phone, profile_id, assigned_trainer_id")
@@ -77,7 +69,6 @@ export async function GET(request: NextRequest) {
       .maybeSingle();
 
     if (clientError) throw clientError;
-
     if (!client && auth.user.email) {
       const fallback = await supabase
         .from("clients")
@@ -88,88 +79,82 @@ export async function GET(request: NextRequest) {
       if (fallback.error) throw fallback.error;
       client = fallback.data;
     }
-
     if (!client) {
       return NextResponse.json({ error: "Your client profile is not linked correctly." }, { status: 404 });
     }
 
-    const [{ data: trainer, error: trainerError }, { data: packages, error: packageError }] =
-      await Promise.all([
-        supabase
-          .from("profiles")
-          .select("id, full_name, email, role")
-          .eq("id", trainerId)
-          .eq("role", "trainer")
-          .maybeSingle(),
-        supabase
-          .from("session_packages")
-          .select("id, package_name, total_sessions, used_sessions, remaining_sessions, starts_at, expires_at, status, created_at")
-          .eq("client_id", client.id)
-          .order("created_at", { ascending: false }),
-      ]);
+    const [trainerResult, packageResult, ruleResult, connectionResult] = await Promise.all([
+      supabase.from("profiles").select("id, full_name, email, role").eq("id", trainerId).eq("role", "trainer").maybeSingle(),
+      supabase
+        .from("session_packages")
+        .select("id, package_name, total_sessions, used_sessions, remaining_sessions, starts_at, expires_at, status, created_at")
+        .eq("client_id", client.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("trainer_availability_rules")
+        .select("id, weekday, start_time, end_time, is_active")
+        .eq("trainer_id", trainerId)
+        .eq("is_active", true)
+        .order("weekday")
+        .order("start_time"),
+      supabase
+        .from("trainer_google_calendar_connections")
+        .select("trainer_id")
+        .eq("trainer_id", trainerId)
+        .maybeSingle(),
+    ]);
 
-    if (trainerError) throw trainerError;
-    if (packageError) throw packageError;
-    if (!trainer) {
-      return NextResponse.json({ error: "Selected trainer was not found." }, { status: 404 });
+    if (trainerResult.error) throw trainerResult.error;
+    if (packageResult.error) throw packageResult.error;
+    if (ruleResult.error) throw ruleResult.error;
+    if (connectionResult.error) throw connectionResult.error;
+
+    const trainer = trainerResult.data;
+    if (!trainer) return NextResponse.json({ error: "Selected trainer was not found." }, { status: 404 });
+
+    const activePackage = ((packageResult.data || []) as PackageRow[]).find(isPackageUsable) || null;
+    if (!activePackage) {
+      return NextResponse.json({ trainer, package: null, slots: [], message: "You do not have an active package with remaining sessions." });
     }
 
-    const activePackage = ((packages || []) as PackageRow[]).find(isPackageUsable) || null;
-    if (!activePackage) {
+    const rules = (ruleResult.data || []) as AvailabilityRule[];
+    if (rules.length === 0) {
       return NextResponse.json({
         trainer,
-        package: null,
+        is_primary_trainer: trainer.id === client.assigned_trainer_id,
+        package: { ...activePackage, remaining_sessions: packageRemaining(activePackage) },
         slots: [],
-        message: "You do not have an active package with remaining sessions.",
+        message: "This trainer has not set weekly availability yet.",
       });
     }
 
-    const now = new Date();
-    const rangeEnd = new Date(now.getTime() + DAYS_TO_SHOW * 24 * 60 * 60 * 1000);
-
-    const { data: connection, error: connectionError } = await supabase
-      .from("trainer_google_calendar_connections")
-      .select("trainer_id")
-      .eq("trainer_id", trainerId)
-      .maybeSingle();
-
-    if (connectionError) throw connectionError;
-    if (!connection) {
+    if (!connectionResult.data) {
       return NextResponse.json({
         trainer,
+        is_primary_trainer: trainer.id === client.assigned_trainer_id,
         package: { ...activePackage, remaining_sessions: packageRemaining(activePackage) },
         slots: [],
         message: "This trainer has not connected Google Calendar yet.",
       });
     }
 
-    const { data: slotRows, error: slotsError } = await supabase
-      .from("trainer_booking_slots")
-      .select("id, staff_id, starts_at, ends_at, service_code, status")
-      .eq("staff_id", trainerId)
-      .eq("status", "open")
-      .gt("starts_at", now.toISOString())
-      .lt("starts_at", rangeEnd.toISOString())
-      .order("starts_at");
+    const candidates = buildCandidateSlots(rules, {
+      days: BOOKING_HORIZON_DAYS,
+      minimumNoticeHours: MIN_BOOKING_NOTICE_HOURS,
+    });
 
-    if (slotsError) throw slotsError;
-
-    const openSlots = slotRows || [];
-    if (openSlots.length === 0) {
+    if (candidates.length === 0) {
       return NextResponse.json({
         trainer,
+        is_primary_trainer: trainer.id === client.assigned_trainer_id,
         package: { ...activePackage, remaining_sessions: packageRemaining(activePackage) },
         slots: [],
-        message: "This trainer has not opened any booking times yet.",
+        message: "No available times are currently open for this trainer.",
       });
     }
 
-    const timeMin = openSlots[0].starts_at;
-    const timeMax = openSlots.reduce(
-      (latest, slot) => (new Date(slot.ends_at) > new Date(latest) ? slot.ends_at : latest),
-      openSlots[0].ends_at,
-    );
-
+    const timeMin = candidates[0].starts_at;
+    const timeMax = candidates[candidates.length - 1].ends_at;
     const [busy, bookingResult] = await Promise.all([
       getBusyTimes(trainerId, timeMin, timeMax) as Promise<BusyPeriod[]>,
       supabase
@@ -183,25 +168,24 @@ export async function GET(request: NextRequest) {
 
     if (bookingResult.error) throw bookingResult.error;
 
-    const slots = openSlots.filter((slot) => {
-      const googleBusy = busy.some(
-        (period) =>
-          period.start &&
-          period.end &&
-          overlaps(slot.starts_at, slot.ends_at, period.start, period.end),
-      );
-      if (googleBusy) return false;
-
-      return !(bookingResult.data || []).some((booking) =>
-        overlaps(slot.starts_at, slot.ends_at, booking.starts_at, booking.ends_at),
-      );
-    });
+    const slots = candidates
+      .filter((slot) => !overlapsAny(slot.starts_at, slot.ends_at, busy))
+      .filter((slot) => !overlapsAny(slot.starts_at, slot.ends_at, bookingResult.data || []))
+      .map((slot) => ({
+        id: slot.starts_at,
+        staff_id: trainerId,
+        starts_at: slot.starts_at,
+        ends_at: slot.ends_at,
+        service_code: "pt_1on1",
+        status: "open",
+      }));
 
     return NextResponse.json({
       trainer,
       is_primary_trainer: trainer.id === client.assigned_trainer_id,
       package: { ...activePackage, remaining_sessions: packageRemaining(activePackage) },
       slots,
+      minimum_booking_notice_hours: MIN_BOOKING_NOTICE_HOURS,
       message: slots.length === 0 ? "No available times are currently open for this trainer." : null,
     });
   } catch (error) {
