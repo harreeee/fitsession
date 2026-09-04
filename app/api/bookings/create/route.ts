@@ -24,6 +24,17 @@ type PackageRow = {
   created_at: string | null;
 };
 
+type BookingBody = {
+  slotId?: string;
+  notes?: string | null;
+  trainerId?: string;
+  clientName?: string;
+  clientEmail?: string;
+  clientPhone?: string;
+  startsAt?: string;
+  endsAt?: string;
+};
+
 function hasOverlap(
   start: Date,
   end: Date,
@@ -71,26 +82,196 @@ function packageIsUsable(row: PackageRow) {
   return true;
 }
 
-export async function POST(request: NextRequest) {
+async function createAdminManualBooking(
+  userId: string,
+  body: BookingBody,
+) {
+  const supabase = createServiceSupabaseClient();
+  const trainerId = body.trainerId || "";
+  const clientName = (body.clientName || "").trim();
+  const clientEmail = (body.clientEmail || "").trim();
+  const clientPhone = (body.clientPhone || "").trim();
+  const notes = (body.notes || "").trim();
+  const startsAt = new Date(body.startsAt || "");
+  const endsAt = new Date(body.endsAt || "");
+
+  if (!trainerId || !clientName) {
+    return NextResponse.json(
+      { error: "Trainer and client name are required." },
+      { status: 400 },
+    );
+  }
+
+  if (
+    Number.isNaN(startsAt.getTime()) ||
+    Number.isNaN(endsAt.getTime()) ||
+    startsAt <= new Date() ||
+    endsAt <= startsAt ||
+    endsAt.getTime() - startsAt.getTime() !== 60 * 60_000
+  ) {
+    return NextResponse.json(
+      { error: "Choose a valid future 60-minute booking time." },
+      { status: 400 },
+    );
+  }
+
+  const { data: trainer, error: trainerError } = await supabase
+    .from("profiles")
+    .select("id, role, full_name")
+    .eq("id", trainerId)
+    .maybeSingle();
+
+  if (trainerError) throw trainerError;
+  if (!trainer || !["trainer", "nutrition_coach", "admin"].includes(String(trainer.role))) {
+    return NextResponse.json({ error: "Selected trainer was not found." }, { status: 404 });
+  }
+
+  const googleBusy = (await getBusyTimes(
+    trainerId,
+    startsAt.toISOString(),
+    endsAt.toISOString(),
+  )) as Array<{ start?: string; end?: string }>;
+
+  if (hasOverlap(startsAt, endsAt, googleBusy)) {
+    return NextResponse.json(
+      { error: "Google Calendar is busy during this time." },
+      { status: 409 },
+    );
+  }
+
+  const { data: trainerConflict, error: trainerConflictError } = await supabase
+    .from("bookings")
+    .select("id")
+    .eq("trainer_id", trainerId)
+    .neq("status", "cancelled")
+    .lt("starts_at", endsAt.toISOString())
+    .gt("ends_at", startsAt.toISOString())
+    .limit(1)
+    .maybeSingle();
+
+  if (trainerConflictError) throw trainerConflictError;
+  if (trainerConflict) {
+    return NextResponse.json(
+      { error: "This trainer already has an FXA booking during this time." },
+      { status: 409 },
+    );
+  }
+
+  let existingClient: { id: string } | null = null;
+  if (clientEmail) {
+    const clientLookup = await supabase
+      .from("clients")
+      .select("id")
+      .ilike("email", clientEmail)
+      .limit(1)
+      .maybeSingle();
+    if (clientLookup.error) throw clientLookup.error;
+    existingClient = clientLookup.data;
+  }
+
+  if (existingClient) {
+    const { data: clientConflict, error: clientConflictError } = await supabase
+      .from("bookings")
+      .select("id")
+      .eq("client_id", existingClient.id)
+      .neq("status", "cancelled")
+      .lt("starts_at", endsAt.toISOString())
+      .gt("ends_at", startsAt.toISOString())
+      .limit(1)
+      .maybeSingle();
+
+    if (clientConflictError) throw clientConflictError;
+    if (clientConflict) {
+      return NextResponse.json(
+        { error: "This client already has another booking during this time." },
+        { status: 409 },
+      );
+    }
+  }
+
+  const { data: booking, error: bookingError } = await supabase
+    .from("bookings")
+    .insert({
+      client_id: existingClient?.id || null,
+      trainer_id: trainerId,
+      client_name: clientName,
+      client_email: clientEmail || null,
+      client_phone: clientPhone || null,
+      starts_at: startsAt.toISOString(),
+      ends_at: endsAt.toISOString(),
+      status: "booked",
+      google_event_id: null,
+      notes: notes || null,
+      created_by: userId,
+      availability_slot_id: null,
+      package_id: null,
+      service_code: "pt_1on1",
+      sync_status: "pending",
+    })
+    .select("id")
+    .single();
+
+  if (bookingError) throw bookingError;
+
+  let googleEventId = "";
+  try {
+    const googleEvent = await createGoogleCalendarEvent({
+      trainerId,
+      clientName,
+      clientEmail,
+      clientPhone,
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      notes,
+    });
+
+    googleEventId = googleEvent.eventId || "";
+    if (!googleEventId) {
+      throw new Error("Google Calendar did not return an event ID.");
+    }
+
+    const { error: updateError } = await supabase
+      .from("bookings")
+      .update({
+        google_event_id: googleEventId,
+        sync_status: "synced",
+      })
+      .eq("id", booking.id);
+
+    if (updateError) throw updateError;
+  } catch (error) {
+    if (googleEventId) {
+      try {
+        await deleteGoogleCalendarEvent(trainerId, googleEventId);
+      } catch (cleanupError) {
+        console.error("Admin booking Google cleanup failed:", cleanupError);
+      }
+    }
+
+    await supabase.from("bookings").delete().eq("id", booking.id);
+    throw error;
+  }
+
+  return NextResponse.json({
+    ok: true,
+    bookingId: booking.id,
+    trainerId,
+    startsAt: startsAt.toISOString(),
+    endsAt: endsAt.toISOString(),
+    googleEventId,
+  });
+}
+
+async function createClientPublishedSlotBooking(
+  user: { id: string; email?: string | null },
+  body: BookingBody,
+) {
   const supabase = createServiceSupabaseClient();
   let claimedBookingId: string | null = null;
   let googleEventId: string | null = null;
   let trainerId: string | null = null;
 
   try {
-    const { user, error } = await getUserFromRequest(request);
-    if (!user) return NextResponse.json({ error }, { status: 401 });
-
-    const role = await getUserRole(user.id);
-    if (role !== "client") {
-      return NextResponse.json({ error: "Client access required." }, { status: 403 });
-    }
-
-    const body = (await request.json()) as {
-      slotId?: string;
-      notes?: string;
-    };
-
     const slotId = body.slotId || "";
     const notes = (body.notes || "").trim();
 
@@ -276,6 +457,31 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    throw error;
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { user, error } = await getUserFromRequest(request);
+    if (!user) return NextResponse.json({ error }, { status: 401 });
+
+    const role = await getUserRole(user.id);
+    const body = (await request.json()) as BookingBody;
+
+    if (role === "admin") {
+      return await createAdminManualBooking(user.id, body);
+    }
+
+    if (role === "client") {
+      return await createClientPublishedSlotBooking(user, body);
+    }
+
+    return NextResponse.json(
+      { error: "Only Admin or Client can create bookings from this endpoint." },
+      { status: 403 },
+    );
+  } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to create booking.";
 
