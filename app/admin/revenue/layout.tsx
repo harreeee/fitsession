@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
 
+// Redeploy marker for the Admin Revenue number editor.
 export default function RevenueLayout({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
 
