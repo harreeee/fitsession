@@ -9,6 +9,7 @@ import { getBusyTimes } from "../../../../lib/googleCalendar";
 export const runtime = "nodejs";
 
 const DAYS_TO_SHOW = 14;
+const TIME_ZONE = "America/Toronto";
 
 type BusyPeriod = { start?: string; end?: string };
 type BookingSlot = {
@@ -44,7 +45,7 @@ function packageRemaining(row: PackageRow) {
 
 function isPackageUsable(row: PackageRow) {
   if (packageRemaining(row) <= 0) return false;
-  if (["inactive", "cancelled", "expired"].includes(String(row.status || "").toLowerCase())) {
+  if (["inactive", "cancelled", "expired", "completed"].includes(String(row.status || "").toLowerCase())) {
     return false;
   }
 
@@ -56,6 +57,60 @@ function isPackageUsable(row: PackageRow) {
   }
 
   return true;
+}
+
+function partsInZone(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+  };
+}
+
+function zonedLocalToUtc(dateKey: string, hour: number, minute: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const desired = Date.UTC(year, month - 1, day, hour, minute, 0);
+  let guess = new Date(desired);
+
+  for (let index = 0; index < 3; index += 1) {
+    const p = partsInZone(guess);
+    const represented = Date.UTC(
+      p.year,
+      p.month - 1,
+      p.day,
+      p.hour,
+      p.minute,
+      p.second,
+    );
+    const delta = desired - represented;
+    if (delta === 0) break;
+    guess = new Date(guess.getTime() + delta);
+  }
+
+  return guess;
+}
+
+function slotLabel(value: Date) {
+  return value.toLocaleTimeString("en-CA", {
+    timeZone: TIME_ZONE,
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -247,12 +302,118 @@ export async function GET(request: NextRequest) {
         ...activePackage,
         remaining_sessions: packageRemaining(activePackage),
       },
-      time_zone: "America/Toronto",
+      time_zone: TIME_ZONE,
       message: visibleSlots.length === 0 ? "No available times are currently open." : null,
     });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not load booking availability." },
+      { status: 500 },
+    );
+  }
+}
+
+// Compatibility path for the existing Admin manual-booking page. Clients cannot
+// call this endpoint to browse arbitrary trainers.
+export async function POST(request: NextRequest) {
+  try {
+    const auth = await getUserFromRequest(request);
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: 401 });
+    }
+
+    const role = await getUserRole(auth.user.id);
+    if (role !== "admin") {
+      return NextResponse.json(
+        { error: "Admin access is required for manual trainer availability." },
+        { status: 403 },
+      );
+    }
+
+    const body = (await request.json()) as {
+      trainerId?: string;
+      date?: string;
+      durationMinutes?: number;
+    };
+
+    const trainerId = body.trainerId || "";
+    const dateKey = body.date || "";
+    const durationMinutes = Number(body.durationMinutes || 60);
+
+    if (!trainerId || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      return NextResponse.json(
+        { error: "Trainer and date are required." },
+        { status: 400 },
+      );
+    }
+
+    if (durationMinutes !== 60) {
+      return NextResponse.json(
+        { error: "Booking V2 currently supports 60-minute sessions." },
+        { status: 400 },
+      );
+    }
+
+    const supabase = createServiceSupabaseClient();
+    const { data: trainer, error: trainerError } = await supabase
+      .from("profiles")
+      .select("id, role")
+      .eq("id", trainerId)
+      .maybeSingle();
+
+    if (trainerError) throw trainerError;
+    if (!trainer || !["trainer", "nutrition_coach", "admin"].includes(String(trainer.role))) {
+      return NextResponse.json({ error: "Selected trainer was not found." }, { status: 404 });
+    }
+
+    const rangeStart = zonedLocalToUtc(dateKey, 7, 0);
+    const rangeEnd = zonedLocalToUtc(dateKey, 22, 0);
+
+    const [busy, bookingResult] = await Promise.all([
+      getBusyTimes(trainerId, rangeStart.toISOString(), rangeEnd.toISOString()) as Promise<BusyPeriod[]>,
+      supabase
+        .from("bookings")
+        .select("id, starts_at, ends_at, status")
+        .eq("trainer_id", trainerId)
+        .neq("status", "cancelled")
+        .gt("ends_at", rangeStart.toISOString())
+        .lt("starts_at", rangeEnd.toISOString()),
+    ]);
+
+    if (bookingResult.error) throw bookingResult.error;
+
+    const now = new Date();
+    const slots: Array<{ label: string; startsAt: string; endsAt: string }> = [];
+
+    for (let hour = 7; hour <= 20; hour += 1) {
+      const start = zonedLocalToUtc(dateKey, hour, 0);
+      const end = new Date(start.getTime() + durationMinutes * 60_000);
+      if (start <= now) continue;
+
+      const googleBusy = busy.some(
+        (period) =>
+          period.start &&
+          period.end &&
+          overlaps(start.toISOString(), end.toISOString(), period.start, period.end),
+      );
+      if (googleBusy) continue;
+
+      const fxaBusy = (bookingResult.data || []).some((booking) =>
+        overlaps(start.toISOString(), end.toISOString(), booking.starts_at, booking.ends_at),
+      );
+      if (fxaBusy) continue;
+
+      slots.push({
+        label: slotLabel(start),
+        startsAt: start.toISOString(),
+        endsAt: end.toISOString(),
+      });
+    }
+
+    return NextResponse.json({ slots, time_zone: TIME_ZONE });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Could not load manual booking availability." },
       { status: 500 },
     );
   }
