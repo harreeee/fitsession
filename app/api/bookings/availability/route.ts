@@ -1,250 +1,259 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import {
+  createServiceSupabaseClient,
+  getUserFromRequest,
+  getUserRole,
+} from "../../../../lib/supabaseServer";
+import { getBusyTimes } from "../../../../lib/googleCalendar";
 
-type BookingRow = {
-  id: string;
-  starts_at: string;
-  ends_at: string;
-  status: string | null;
-};
+export const runtime = "nodejs";
 
-type AvailabilitySlot = {
-  starts_at: string;
-  ends_at: string;
-};
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const SLOT_LENGTH_MINUTES = 60;
 const DAYS_TO_SHOW = 14;
 
-const DAILY_TIMES = [
-  "07:00",
-  "08:00",
-  "09:00",
-  "10:00",
-  "11:00",
-  "12:00",
-  "13:00",
-  "14:00",
-  "15:00",
-  "16:00",
-  "17:00",
-  "18:00",
-  "19:00",
-  "20:00",
-];
+type BusyPeriod = { start?: string; end?: string };
+type BookingSlot = {
+  id: string;
+  staff_id: string;
+  starts_at: string;
+  ends_at: string;
+  service_code: string | null;
+  status: string;
+};
+type PackageRow = {
+  id: string;
+  package_name: string | null;
+  total_sessions: number | null;
+  used_sessions: number | null;
+  remaining_sessions: number | null;
+  starts_at: string | null;
+  expires_at: string | null;
+  status: string | null;
+  created_at: string | null;
+};
 
-function addMinutes(date: Date, minutes: number) {
-  return new Date(date.getTime() + minutes * 60 * 1000);
+function overlaps(startA: string, endA: string, startB: string, endB: string) {
+  return new Date(startA) < new Date(endB) && new Date(endA) > new Date(startB);
 }
 
-function buildDateTime(date: Date, timeValue: string) {
-  const [hours, minutes] = timeValue.split(":").map(Number);
-
-  const slotDate = new Date(date);
-  slotDate.setHours(hours, minutes, 0, 0);
-
-  return slotDate;
+function packageRemaining(row: PackageRow) {
+  if (row.remaining_sessions !== null && row.remaining_sessions !== undefined) {
+    return Number(row.remaining_sessions);
+  }
+  return Math.max(Number(row.total_sessions || 0) - Number(row.used_sessions || 0), 0);
 }
 
-function isSunday(date: Date) {
-  return date.getDay() === 0;
-}
-
-function slotsOverlap(slotStart: Date, slotEnd: Date, booking: BookingRow) {
-  const bookingStart = new Date(booking.starts_at);
-  const bookingEnd = new Date(booking.ends_at);
-
-  if (
-    Number.isNaN(bookingStart.getTime()) ||
-    Number.isNaN(bookingEnd.getTime())
-  ) {
+function isPackageUsable(row: PackageRow) {
+  if (packageRemaining(row) <= 0) return false;
+  if (["inactive", "cancelled", "expired"].includes(String(row.status || "").toLowerCase())) {
     return false;
   }
 
-  return slotStart < bookingEnd && slotEnd > bookingStart;
-}
-
-function generateAvailabilityFromBookings(bookings: BookingRow[]) {
-  const slots: AvailabilitySlot[] = [];
-  const now = new Date();
-
-  for (let dayOffset = 0; dayOffset < DAYS_TO_SHOW; dayOffset += 1) {
-    const currentDate = new Date();
-    currentDate.setDate(currentDate.getDate() + dayOffset);
-    currentDate.setHours(0, 0, 0, 0);
-
-    if (isSunday(currentDate)) {
-      continue;
-    }
-
-    for (const timeValue of DAILY_TIMES) {
-      const slotStart = buildDateTime(currentDate, timeValue);
-      const slotEnd = addMinutes(slotStart, SLOT_LENGTH_MINUTES);
-
-      if (slotStart <= now) {
-        continue;
-      }
-
-      const alreadyBooked = bookings.some((booking) => {
-        if (booking.status === "cancelled") return false;
-
-        return slotsOverlap(slotStart, slotEnd, booking);
-      });
-
-      if (!alreadyBooked) {
-        slots.push({
-          starts_at: slotStart.toISOString(),
-          ends_at: slotEnd.toISOString(),
-        });
-      }
-    }
+  if (row.starts_at && new Date(row.starts_at) > new Date()) return false;
+  if (row.expires_at) {
+    const expiry = new Date(row.expires_at);
+    expiry.setHours(23, 59, 59, 999);
+    if (expiry < new Date()) return false;
   }
 
-  return slots;
+  return true;
 }
 
 export async function GET(request: NextRequest) {
   try {
-    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
+    const auth = await getUserFromRequest(request);
+    if (!auth.user) {
+      return NextResponse.json({ error: auth.error }, { status: 401 });
+    }
+
+    const role = await getUserRole(auth.user.id);
+    if (role !== "client") {
       return NextResponse.json(
-        { error: "Missing Supabase environment variables." },
-        { status: 500 }
+        { error: "Client access is required to load booking availability." },
+        { status: 403 },
       );
     }
 
-    const trainerId = request.nextUrl.searchParams.get("trainerId");
+    const supabase = createServiceSupabaseClient();
 
-    if (!trainerId) {
+    let { data: client, error: clientError } = await supabase
+      .from("clients")
+      .select(
+        "id, full_name, email, phone, profile_id, assigned_trainer_id, assigned_nutrition_coach_id",
+      )
+      .eq("profile_id", auth.user.id)
+      .maybeSingle();
+
+    if (clientError) throw clientError;
+
+    if (!client && auth.user.email) {
+      const fallback = await supabase
+        .from("clients")
+        .select(
+          "id, full_name, email, phone, profile_id, assigned_trainer_id, assigned_nutrition_coach_id",
+        )
+        .ilike("email", auth.user.email)
+        .limit(1)
+        .maybeSingle();
+      if (fallback.error) throw fallback.error;
+      client = fallback.data;
+    }
+
+    if (!client) {
       return NextResponse.json(
-        { error: "trainerId is required." },
-        { status: 400 }
+        { error: "Your client profile is not linked correctly. Please contact FXA." },
+        { status: 404 },
       );
     }
 
-    const authorizationHeader = request.headers.get("authorization");
-    const accessToken = authorizationHeader?.replace("Bearer ", "");
-
-    if (!accessToken) {
-      return NextResponse.json(
-        { error: "Missing authorization token." },
-        { status: 401 }
-      );
+    if (!client.assigned_trainer_id) {
+      return NextResponse.json({
+        availability: [],
+        slots: [],
+        client,
+        trainer: null,
+        package: null,
+        message: "No trainer is assigned to your profile yet.",
+      });
     }
 
-    const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
+    const [{ data: trainer, error: trainerError }, { data: packageRows, error: packageError }] =
+      await Promise.all([
+        supabase
+          .from("profiles")
+          .select("id, full_name, email, role")
+          .eq("id", client.assigned_trainer_id)
+          .maybeSingle(),
+        supabase
+          .from("session_packages")
+          .select(
+            "id, package_name, total_sessions, used_sessions, remaining_sessions, starts_at, expires_at, status, created_at",
+          )
+          .eq("client_id", client.id)
+          .order("created_at", { ascending: false }),
+      ]);
+
+    if (trainerError) throw trainerError;
+    if (packageError) throw packageError;
+
+    const activePackage = ((packageRows || []) as PackageRow[]).find(isPackageUsable) || null;
+
+    if (!activePackage) {
+      return NextResponse.json({
+        availability: [],
+        slots: [],
+        client,
+        trainer,
+        package: null,
+        message: "You do not have an active package with remaining sessions.",
+      });
+    }
+
+    const now = new Date();
+    const rangeEnd = new Date(now.getTime() + DAYS_TO_SHOW * 24 * 60 * 60 * 1000);
+
+    const { data: connection, error: connectionError } = await supabase
+      .from("trainer_google_calendar_connections")
+      .select("trainer_id, google_email, calendar_id")
+      .eq("trainer_id", client.assigned_trainer_id)
+      .maybeSingle();
+
+    if (connectionError) throw connectionError;
+
+    if (!connection) {
+      return NextResponse.json({
+        availability: [],
+        slots: [],
+        client,
+        trainer,
+        package: {
+          ...activePackage,
+          remaining_sessions: packageRemaining(activePackage),
         },
-      },
-    });
-
-    const adminSupabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
-
-    const {
-      data: { user },
-      error: userError,
-    } = await userSupabase.auth.getUser();
-
-    if (userError || !user) {
-      return NextResponse.json(
-        { error: "You must be logged in." },
-        { status: 401 }
-      );
+        message: "Your trainer has not connected Google Calendar yet.",
+      });
     }
 
-    const { data: profile, error: profileError } = await adminSupabase
-      .from("profiles")
-      .select("id, role")
-      .eq("id", user.id)
-      .maybeSingle();
+    const { data: slotRows, error: slotsError } = await supabase
+      .from("trainer_booking_slots")
+      .select("id, staff_id, starts_at, ends_at, service_code, status")
+      .eq("staff_id", client.assigned_trainer_id)
+      .eq("status", "open")
+      .gt("starts_at", now.toISOString())
+      .lt("starts_at", rangeEnd.toISOString())
+      .order("starts_at");
 
-    if (profileError) {
-      return NextResponse.json(
-        { error: profileError.message },
-        { status: 500 }
-      );
+    if (slotsError) throw slotsError;
+
+    const openSlots = (slotRows || []) as BookingSlot[];
+    if (openSlots.length === 0) {
+      return NextResponse.json({
+        availability: [],
+        slots: [],
+        client,
+        trainer,
+        package: {
+          ...activePackage,
+          remaining_sessions: packageRemaining(activePackage),
+        },
+        message: "Your trainer has not opened any booking times yet.",
+      });
     }
 
-    if (
-      !profile ||
-      !["client", "admin", "trainer", "nutrition_coach"].includes(
-        String(profile.role)
-      )
-    ) {
-      return NextResponse.json(
-        { error: "You do not have permission to check availability." },
-        { status: 403 }
-      );
-    }
-
-    const { data: staffProfile, error: staffError } = await adminSupabase
-      .from("profiles")
-      .select("id, role, full_name, email")
-      .eq("id", trainerId)
-      .maybeSingle();
-
-    if (staffError) {
-      return NextResponse.json(
-        { error: staffError.message },
-        { status: 500 }
-      );
-    }
-
-    if (
-      !staffProfile ||
-      !["trainer", "nutrition_coach", "admin"].includes(
-        String(staffProfile.role)
-      )
-    ) {
-      return NextResponse.json(
-        { error: "Selected staff member was not found." },
-        { status: 404 }
-      );
-    }
-
-    const rangeStart = new Date();
-    const rangeEnd = new Date();
-    rangeEnd.setDate(rangeEnd.getDate() + DAYS_TO_SHOW + 1);
-
-    const { data: bookings, error: bookingsError } = await adminSupabase
-      .from("bookings")
-      .select("id, starts_at, ends_at, status")
-      .eq("trainer_id", trainerId)
-      .gte("starts_at", rangeStart.toISOString())
-      .lte("starts_at", rangeEnd.toISOString())
-      .neq("status", "cancelled");
-
-    if (bookingsError) {
-      return NextResponse.json(
-        { error: bookingsError.message },
-        { status: 500 }
-      );
-    }
-
-    const availability = generateAvailabilityFromBookings(
-      (bookings || []) as BookingRow[]
+    const timeMin = openSlots[0].starts_at;
+    const timeMax = openSlots.reduce(
+      (latest, slot) => (new Date(slot.ends_at) > new Date(latest) ? slot.ends_at : latest),
+      openSlots[0].ends_at,
     );
 
+    const busy = (await getBusyTimes(
+      client.assigned_trainer_id,
+      timeMin,
+      timeMax,
+    )) as BusyPeriod[];
+
+    const { data: existingBookings, error: bookingError } = await supabase
+      .from("bookings")
+      .select("id, trainer_id, client_id, starts_at, ends_at, status")
+      .or(`trainer_id.eq.${client.assigned_trainer_id},client_id.eq.${client.id}`)
+      .neq("status", "cancelled")
+      .gt("ends_at", timeMin)
+      .lt("starts_at", timeMax);
+
+    if (bookingError) throw bookingError;
+
+    const visibleSlots = openSlots.filter((slot) => {
+      const googleBusy = busy.some(
+        (period) =>
+          period.start &&
+          period.end &&
+          overlaps(slot.starts_at, slot.ends_at, period.start, period.end),
+      );
+      if (googleBusy) return false;
+
+      return !(existingBookings || []).some((booking) =>
+        overlaps(slot.starts_at, slot.ends_at, booking.starts_at, booking.ends_at),
+      );
+    });
+
     return NextResponse.json({
-      availability,
-      slots: availability,
+      availability: visibleSlots,
+      slots: visibleSlots,
+      client: {
+        id: client.id,
+        full_name: client.full_name,
+      },
+      trainer: trainer || null,
+      package: {
+        ...activePackage,
+        remaining_sessions: packageRemaining(activePackage),
+      },
+      time_zone: "America/Toronto",
+      message: visibleSlots.length === 0 ? "No available times are currently open." : null,
     });
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Could not load availability.";
-
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Could not load booking availability." },
+      { status: 500 },
+    );
   }
 }
