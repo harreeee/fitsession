@@ -48,7 +48,7 @@ export function getGoogleOAuthUrl(state: string) {
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/calendar.freebusy",
       "https://www.googleapis.com/auth/userinfo.email",
-    ].join(" ")
+    ].join(" "),
   );
   url.searchParams.set("state", state);
 
@@ -129,7 +129,9 @@ export async function refreshGoogleAccessToken(connection: CalendarConnection) {
     throw new Error(json.error_description || json.error || "Google token refresh failed.");
   }
 
-  const tokenExpiry = new Date(Date.now() + (json.expires_in || 3600) * 1000).toISOString();
+  const tokenExpiry = new Date(
+    Date.now() + (json.expires_in || 3600) * 1000,
+  ).toISOString();
 
   const supabase = createServiceSupabaseClient();
 
@@ -150,7 +152,9 @@ export async function getTrainerCalendarConnection(trainerId: string) {
 
   const { data, error } = await supabase
     .from("trainer_google_calendar_connections")
-    .select("id, trainer_id, google_email, access_token, refresh_token, token_expiry, calendar_id")
+    .select(
+      "id, trainer_id, google_email, access_token, refresh_token, token_expiry, calendar_id",
+    )
     .eq("trainer_id", trainerId)
     .maybeSingle();
 
@@ -161,7 +165,11 @@ export async function getTrainerCalendarConnection(trainerId: string) {
   return data as CalendarConnection | null;
 }
 
-export async function getBusyTimes(trainerId: string, timeMin: string, timeMax: string) {
+export async function getBusyTimes(
+  trainerId: string,
+  timeMin: string,
+  timeMax: string,
+) {
   const connection = await getTrainerCalendarConnection(trainerId);
 
   if (!connection) {
@@ -193,7 +201,7 @@ export async function getBusyTimes(trainerId: string, timeMin: string, timeMax: 
     throw new Error(
       typeof json?.error?.message === "string"
         ? json.error.message
-        : "Google Calendar free/busy check failed."
+        : "Google Calendar free/busy check failed.",
     );
   }
 
@@ -229,7 +237,7 @@ export async function createGoogleCalendarEvent(input: {
 
   const response = await fetch(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
-      connection.calendar_id || "primary"
+      connection.calendar_id || "primary",
     )}/events?sendUpdates=all`,
     {
       method: "POST",
@@ -255,7 +263,7 @@ export async function createGoogleCalendarEvent(input: {
         },
         attendees,
       }),
-    }
+    },
   );
 
   const json = await response.json();
@@ -264,11 +272,45 @@ export async function createGoogleCalendarEvent(input: {
     throw new Error(
       typeof json?.error?.message === "string"
         ? json.error.message
-        : "Google Calendar event creation failed."
+        : "Google Calendar event creation failed.",
     );
   }
 
   return {
     eventId: String(json.id || ""),
   };
+}
+
+export async function deleteGoogleCalendarEvent(
+  trainerId: string,
+  eventId: string,
+) {
+  if (!eventId) return;
+
+  const connection = await getTrainerCalendarConnection(trainerId);
+  if (!connection) return;
+
+  const accessToken = await refreshGoogleAccessToken(connection);
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      connection.calendar_id || "primary",
+    )}/events/${encodeURIComponent(eventId)}?sendUpdates=all`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  );
+
+  if (!response.ok && response.status !== 404 && response.status !== 410) {
+    let message = "Google Calendar event cleanup failed.";
+    try {
+      const json = await response.json();
+      if (typeof json?.error?.message === "string") message = json.error.message;
+    } catch {
+      // Keep the generic cleanup message.
+    }
+    throw new Error(message);
+  }
 }
