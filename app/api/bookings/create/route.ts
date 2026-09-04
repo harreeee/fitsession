@@ -6,10 +6,23 @@ import {
 } from "../../../../lib/supabaseServer";
 import {
   createGoogleCalendarEvent,
+  deleteGoogleCalendarEvent,
   getBusyTimes,
 } from "../../../../lib/googleCalendar";
 
 export const runtime = "nodejs";
+
+type PackageRow = {
+  id: string;
+  package_name: string | null;
+  total_sessions: number | null;
+  used_sessions: number | null;
+  remaining_sessions: number | null;
+  status: string | null;
+  starts_at: string | null;
+  expires_at: string | null;
+  created_at: string | null;
+};
 
 function hasOverlap(
   start: Date,
@@ -29,9 +42,40 @@ function hasOverlap(
   });
 }
 
+function remainingSessions(row: PackageRow) {
+  if (row.remaining_sessions !== null && row.remaining_sessions !== undefined) {
+    return Number(row.remaining_sessions);
+  }
+  return Math.max(Number(row.total_sessions || 0) - Number(row.used_sessions || 0), 0);
+}
+
+function packageIsUsable(row: PackageRow) {
+  const now = new Date();
+  const status = String(row.status || "").toLowerCase();
+  if (remainingSessions(row) <= 0) return false;
+  if (["inactive", "expired", "completed", "cancelled"].includes(status)) return false;
+
+  if (row.starts_at) {
+    const starts = new Date(row.starts_at);
+    if (!Number.isNaN(starts.getTime()) && starts > now) return false;
+  }
+
+  if (row.expires_at) {
+    const expires = new Date(row.expires_at);
+    if (!Number.isNaN(expires.getTime())) {
+      expires.setHours(23, 59, 59, 999);
+      if (expires < now) return false;
+    }
+  }
+
+  return true;
+}
+
 export async function POST(request: NextRequest) {
   const supabase = createServiceSupabaseClient();
   let claimedBookingId: string | null = null;
+  let googleEventId: string | null = null;
+  let trainerId: string | null = null;
 
   try {
     const { user, error } = await getUserFromRequest(request);
@@ -54,15 +98,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Please select a booking time." }, { status: 400 });
     }
 
-    const { data: client, error: clientError } = await supabase
+    let { data: client, error: clientError } = await supabase
       .from("clients")
       .select(
-        "id, full_name, email, phone, assigned_trainer_id, assigned_nutrition_coach_id, status",
+        "id, full_name, email, phone, assigned_trainer_id, assigned_nutrition_coach_id, status, profile_id",
       )
       .eq("profile_id", user.id)
       .maybeSingle();
 
     if (clientError) throw clientError;
+
+    if (!client && user.email) {
+      const fallback = await supabase
+        .from("clients")
+        .select(
+          "id, full_name, email, phone, assigned_trainer_id, assigned_nutrition_coach_id, status, profile_id",
+        )
+        .ilike("email", user.email)
+        .limit(1)
+        .maybeSingle();
+      if (fallback.error) throw fallback.error;
+      client = fallback.data;
+    }
+
     if (!client) {
       return NextResponse.json(
         { error: "Your client profile is not linked correctly." },
@@ -76,6 +134,8 @@ export async function POST(request: NextRequest) {
         { status: 409 },
       );
     }
+
+    trainerId = client.assigned_trainer_id;
 
     const { data: slot, error: slotError } = await supabase
       .from("trainer_booking_slots")
@@ -91,7 +151,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (slot.staff_id !== client.assigned_trainer_id) {
+    if (slot.staff_id !== trainerId) {
       return NextResponse.json(
         { error: "This slot is not from your assigned trainer." },
         { status: 403 },
@@ -122,20 +182,7 @@ export async function POST(request: NextRequest) {
 
     if (packageError) throw packageError;
 
-    const now = new Date();
-    const activePackage = (packageRows || []).find((row) => {
-      const remaining = Number(row.remaining_sessions ?? 0);
-      const status = String(row.status || "").toLowerCase();
-      const starts = row.starts_at ? new Date(row.starts_at) : null;
-      const expires = row.expires_at ? new Date(row.expires_at) : null;
-
-      return (
-        remaining > 0 &&
-        !["inactive", "expired", "completed", "cancelled"].includes(status) &&
-        (!starts || Number.isNaN(starts.getTime()) || starts <= now) &&
-        (!expires || Number.isNaN(expires.getTime()) || expires >= now)
-      );
-    });
+    const activePackage = ((packageRows || []) as PackageRow[]).find(packageIsUsable);
 
     if (!activePackage) {
       return NextResponse.json(
@@ -145,7 +192,7 @@ export async function POST(request: NextRequest) {
     }
 
     const googleBusy = (await getBusyTimes(
-      client.assigned_trainer_id,
+      trainerId,
       startsAt.toISOString(),
       endsAt.toISOString(),
     )) as Array<{ start?: string; end?: string }>;
@@ -183,7 +230,7 @@ export async function POST(request: NextRequest) {
     }
 
     const googleEvent = await createGoogleCalendarEvent({
-      trainerId: client.assigned_trainer_id,
+      trainerId,
       clientName: client.full_name || "FXA Client",
       clientEmail: client.email || user.email || "",
       clientPhone: client.phone || "",
@@ -192,9 +239,15 @@ export async function POST(request: NextRequest) {
       notes,
     });
 
+    googleEventId = googleEvent.eventId || null;
+
+    if (!googleEventId) {
+      throw new Error("Google Calendar did not return an event ID.");
+    }
+
     const { error: syncError } = await supabase.rpc("fxa_mark_booking_synced_v2", {
       p_booking_id: claimedBookingId,
-      p_google_event_id: googleEvent.eventId || "",
+      p_google_event_id: googleEventId,
     });
 
     if (syncError) throw syncError;
@@ -204,10 +257,19 @@ export async function POST(request: NextRequest) {
       bookingId: claimedBookingId,
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
-      trainerId: client.assigned_trainer_id,
-      googleEventId: googleEvent.eventId,
+      trainerId,
+      googleEventId,
+      remainingSessions: remainingSessions(activePackage),
     });
   } catch (error) {
+    if (googleEventId && trainerId) {
+      try {
+        await deleteGoogleCalendarEvent(trainerId, googleEventId);
+      } catch (cleanupError) {
+        console.error("Booking Google event cleanup failed:", cleanupError);
+      }
+    }
+
     if (claimedBookingId) {
       await supabase.rpc("fxa_release_booking_slot_v2", {
         p_booking_id: claimedBookingId,
