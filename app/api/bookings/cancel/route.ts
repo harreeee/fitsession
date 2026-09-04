@@ -87,6 +87,10 @@ export async function POST(request: NextRequest) {
     if (booking.google_event_id && booking.trainer_id) {
       try {
         await deleteGoogleCalendarEvent(booking.trainer_id, booking.google_event_id);
+        await supabase
+          .from("bookings")
+          .update({ sync_status: "cancelled" })
+          .eq("id", booking.id);
       } catch (googleError) {
         console.error("Booking cancelled in FXA but Google cleanup failed:", googleError);
         await supabase
