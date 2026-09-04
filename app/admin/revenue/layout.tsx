@@ -1,10 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
+import RevenueInlineEditControls from "./RevenueInlineEditControls";
 
-// Redeploy marker for the Admin Revenue number editor.
 export default function RevenueLayout({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -25,15 +24,8 @@ export default function RevenueLayout({ children }: { children: ReactNode }) {
 
   return (
     <>
+      {isAdmin ? <RevenueInlineEditControls /> : null}
       {children}
-      {isAdmin ? (
-        <Link
-          href="/admin/revenue/edit"
-          className="fixed bottom-5 right-5 z-40 rounded-2xl border border-yellow-300/40 bg-yellow-400 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-black shadow-2xl transition hover:bg-yellow-300"
-        >
-          Edit Revenue Numbers
-        </Link>
-      ) : null}
     </>
   );
 }
