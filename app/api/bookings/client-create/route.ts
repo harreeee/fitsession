@@ -4,11 +4,15 @@ import {
   getUserFromRequest,
   getUserRole,
 } from "../../../../lib/supabaseServer";
+import { createGoogleCalendarEvent, getBusyTimes } from "../../../../lib/googleCalendar";
 import {
-  createGoogleCalendarEvent,
-  deleteGoogleCalendarEvent,
-  getBusyTimes,
-} from "../../../../lib/googleCalendar";
+  MIN_BOOKING_NOTICE_HOURS,
+  SLOT_MINUTES,
+  isSlotInsideWeeklyRules,
+  overlaps,
+  type AvailabilityRule,
+  type BusyPeriod,
+} from "../../../../lib/bookingAvailability";
 
 export const runtime = "nodejs";
 
@@ -33,40 +37,18 @@ function remainingSessions(row: PackageRow) {
 function packageIsUsable(row: PackageRow) {
   const now = new Date();
   if (remainingSessions(row) <= 0) return false;
-  if (["inactive", "expired", "completed", "cancelled"].includes(String(row.status || "").toLowerCase())) {
-    return false;
-  }
+  if (["inactive", "expired", "completed", "cancelled"].includes(String(row.status || "").toLowerCase())) return false;
   if (row.starts_at && new Date(row.starts_at) > now) return false;
-  if (row.expires_at) {
-    const expires = new Date(row.expires_at);
-    expires.setHours(23, 59, 59, 999);
-    if (expires < now) return false;
-  }
+  if (row.expires_at && new Date(`${row.expires_at.slice(0, 10)}T23:59:59`) < now) return false;
   return true;
-}
-
-function overlaps(
-  start: Date,
-  end: Date,
-  busy: Array<{ start?: string; end?: string }>,
-) {
-  return busy.some((item) => {
-    if (!item.start || !item.end) return false;
-    return start < new Date(item.end) && end > new Date(item.start);
-  });
 }
 
 export async function POST(request: NextRequest) {
   const supabase = createServiceSupabaseClient();
-  let claimedBookingId: string | null = null;
-  let googleEventId: string | null = null;
-  let trainerId: string | null = null;
 
   try {
     const auth = await getUserFromRequest(request);
-    if (!auth.user) {
-      return NextResponse.json({ error: auth.error }, { status: 401 });
-    }
+    if (!auth.user) return NextResponse.json({ error: auth.error }, { status: 401 });
 
     const role = await getUserRole(auth.user.id);
     if (role !== "client") {
@@ -74,17 +56,31 @@ export async function POST(request: NextRequest) {
     }
 
     const body = (await request.json()) as {
-      slotId?: string;
       trainerId?: string;
+      startsAt?: string;
+      endsAt?: string;
       notes?: string | null;
     };
 
-    const slotId = body.slotId || "";
-    trainerId = body.trainerId || null;
+    const trainerId = body.trainerId || "";
+    const startsAt = new Date(body.startsAt || "");
+    const endsAt = new Date(body.endsAt || "");
     const notes = (body.notes || "").trim();
 
-    if (!slotId || !trainerId) {
-      return NextResponse.json({ error: "Please select a trainer and booking time." }, { status: 400 });
+    if (
+      !trainerId ||
+      Number.isNaN(startsAt.getTime()) ||
+      Number.isNaN(endsAt.getTime()) ||
+      endsAt.getTime() - startsAt.getTime() !== SLOT_MINUTES * 60 * 1000
+    ) {
+      return NextResponse.json({ error: "Please select a valid trainer and time." }, { status: 400 });
+    }
+
+    if (startsAt.getTime() - Date.now() < MIN_BOOKING_NOTICE_HOURS * 60 * 60 * 1000) {
+      return NextResponse.json(
+        { error: `Sessions must be booked at least ${MIN_BOOKING_NOTICE_HOURS} hours in advance.` },
+        { status: 409 },
+      );
     }
 
     let { data: client, error: clientError } = await supabase
@@ -94,7 +90,6 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (clientError) throw clientError;
-
     if (!client && auth.user.email) {
       const fallback = await supabase
         .from("clients")
@@ -105,141 +100,146 @@ export async function POST(request: NextRequest) {
       if (fallback.error) throw fallback.error;
       client = fallback.data;
     }
-
     if (!client) {
       return NextResponse.json({ error: "Your client profile is not linked correctly." }, { status: 404 });
     }
 
-    const { data: trainer, error: trainerError } = await supabase
-      .from("profiles")
-      .select("id, role, full_name")
-      .eq("id", trainerId)
-      .eq("role", "trainer")
-      .maybeSingle();
+    const [trainerResult, packageResult, ruleResult, connectionResult] = await Promise.all([
+      supabase.from("profiles").select("id, role, full_name").eq("id", trainerId).eq("role", "trainer").maybeSingle(),
+      supabase
+        .from("session_packages")
+        .select("id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, created_at")
+        .eq("client_id", client.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("trainer_availability_rules")
+        .select("id, weekday, start_time, end_time, is_active")
+        .eq("trainer_id", trainerId)
+        .eq("is_active", true),
+      supabase
+        .from("trainer_google_calendar_connections")
+        .select("trainer_id")
+        .eq("trainer_id", trainerId)
+        .maybeSingle(),
+    ]);
 
-    if (trainerError) throw trainerError;
-    if (!trainer) {
-      return NextResponse.json({ error: "Selected trainer was not found." }, { status: 404 });
+    if (trainerResult.error) throw trainerResult.error;
+    if (packageResult.error) throw packageResult.error;
+    if (ruleResult.error) throw ruleResult.error;
+    if (connectionResult.error) throw connectionResult.error;
+
+    const trainer = trainerResult.data;
+    if (!trainer) return NextResponse.json({ error: "Selected trainer was not found." }, { status: 404 });
+    if (!connectionResult.data) {
+      return NextResponse.json({ error: "This trainer has not connected Google Calendar yet." }, { status: 409 });
     }
 
-    const { data: slot, error: slotError } = await supabase
-      .from("trainer_booking_slots")
-      .select("id, staff_id, service_code, starts_at, ends_at, status")
-      .eq("id", slotId)
-      .maybeSingle();
-
-    if (slotError) throw slotError;
-    if (!slot || slot.status !== "open" || slot.staff_id !== trainerId) {
-      return NextResponse.json(
-        { error: "This time is no longer available for the selected trainer." },
-        { status: 409 },
-      );
+    const rules = (ruleResult.data || []) as AvailabilityRule[];
+    if (!isSlotInsideWeeklyRules(startsAt.toISOString(), endsAt.toISOString(), rules)) {
+      return NextResponse.json({ error: "This time is outside the trainer's availability." }, { status: 409 });
     }
 
-    const startsAt = new Date(slot.starts_at);
-    const endsAt = new Date(slot.ends_at);
-    if (
-      Number.isNaN(startsAt.getTime()) ||
-      Number.isNaN(endsAt.getTime()) ||
-      startsAt <= new Date() ||
-      endsAt <= startsAt
-    ) {
-      return NextResponse.json({ error: "This booking time is invalid." }, { status: 409 });
-    }
-
-    const { data: packageRows, error: packageError } = await supabase
-      .from("session_packages")
-      .select("id, total_sessions, used_sessions, remaining_sessions, status, starts_at, expires_at, created_at")
-      .eq("client_id", client.id)
-      .order("created_at", { ascending: false });
-
-    if (packageError) throw packageError;
-    const activePackage = ((packageRows || []) as PackageRow[]).find(packageIsUsable);
+    const activePackage = ((packageResult.data || []) as PackageRow[]).find(packageIsUsable);
     if (!activePackage) {
-      return NextResponse.json(
-        { error: "You do not have an active package with remaining sessions." },
-        { status: 409 },
-      );
+      return NextResponse.json({ error: "You do not have an active package with remaining sessions." }, { status: 409 });
     }
 
     const googleBusy = (await getBusyTimes(
       trainerId,
       startsAt.toISOString(),
       endsAt.toISOString(),
-    )) as Array<{ start?: string; end?: string }>;
+    )) as BusyPeriod[];
 
-    if (overlaps(startsAt, endsAt, googleBusy)) {
-      return NextResponse.json(
-        { error: "This trainer is no longer available at that time." },
-        { status: 409 },
-      );
+    if (
+      googleBusy.some(
+        (item) => item.start && item.end && overlaps(startsAt, endsAt, item.start, item.end),
+      )
+    ) {
+      return NextResponse.json({ error: "This trainer is no longer available at that time." }, { status: 409 });
     }
 
-    const { data: claimedRows, error: claimError } = await supabase.rpc(
-      "fxa_claim_booking_slot_v2",
-      {
-        p_slot_id: slot.id,
-        p_client_id: client.id,
-        p_package_id: activePackage.id,
-        p_created_by: auth.user.id,
-        p_client_name: client.full_name || "FXA Client",
-        p_client_email: client.email || auth.user.email || "",
-        p_client_phone: client.phone || "",
-        p_notes: notes || null,
-      },
-    );
+    const [trainerConflict, clientConflict] = await Promise.all([
+      supabase
+        .from("bookings")
+        .select("id")
+        .eq("trainer_id", trainerId)
+        .neq("status", "cancelled")
+        .lt("starts_at", endsAt.toISOString())
+        .gt("ends_at", startsAt.toISOString())
+        .limit(1),
+      supabase
+        .from("bookings")
+        .select("id")
+        .eq("client_id", client.id)
+        .neq("status", "cancelled")
+        .lt("starts_at", endsAt.toISOString())
+        .gt("ends_at", startsAt.toISOString())
+        .limit(1),
+    ]);
 
-    if (claimError) {
-      return NextResponse.json({ error: claimError.message }, { status: 409 });
+    if (trainerConflict.error) throw trainerConflict.error;
+    if (clientConflict.error) throw clientConflict.error;
+    if ((trainerConflict.data || []).length > 0) {
+      return NextResponse.json({ error: "This trainer already has a booking during that time." }, { status: 409 });
+    }
+    if ((clientConflict.data || []).length > 0) {
+      return NextResponse.json({ error: "You already have another booking during that time." }, { status: 409 });
     }
 
-    const claimed = Array.isArray(claimedRows) ? claimedRows[0] : claimedRows;
-    claimedBookingId = claimed?.booking_id || null;
-    if (!claimedBookingId) throw new Error("Booking could not be reserved.");
-
-    const googleEvent = await createGoogleCalendarEvent({
-      trainerId,
-      clientName: client.full_name || "FXA Client",
-      clientEmail: client.email || auth.user.email || "",
-      clientPhone: client.phone || "",
-      startsAt: startsAt.toISOString(),
-      endsAt: endsAt.toISOString(),
-      notes,
+    const { data: bookingId, error: bookingError } = await supabase.rpc("fxa_create_booking_v2", {
+      p_client_id: client.id,
+      p_trainer_id: trainerId,
+      p_package_id: activePackage.id,
+      p_created_by: auth.user.id,
+      p_client_name: client.full_name || "FXA Client",
+      p_client_email: client.email || auth.user.email || "",
+      p_client_phone: client.phone || "",
+      p_starts_at: startsAt.toISOString(),
+      p_ends_at: endsAt.toISOString(),
+      p_notes: notes || null,
     });
 
-    googleEventId = googleEvent.eventId || null;
-    if (!googleEventId) throw new Error("Google Calendar did not return an event ID.");
+    if (bookingError) {
+      return NextResponse.json({ error: bookingError.message }, { status: 409 });
+    }
 
-    const { error: syncError } = await supabase.rpc("fxa_mark_booking_synced_v2", {
-      p_booking_id: claimedBookingId,
-      p_google_event_id: googleEventId,
-    });
-    if (syncError) throw syncError;
+    let googleSynced = false;
+    try {
+      const googleEvent = await createGoogleCalendarEvent({
+        trainerId,
+        clientName: client.full_name || "FXA Client",
+        clientEmail: client.email || auth.user.email || "",
+        clientPhone: client.phone || "",
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        notes,
+      });
+
+      if (googleEvent.eventId) {
+        const { error: syncError } = await supabase.rpc("fxa_mark_booking_synced_v2", {
+          p_booking_id: bookingId,
+          p_google_event_id: googleEvent.eventId,
+        });
+        if (syncError) throw syncError;
+        googleSynced = true;
+      }
+    } catch (googleError) {
+      console.error("FXA booking saved but Google Calendar sync failed:", googleError);
+      await supabase.rpc("fxa_mark_booking_google_pending_v2", { p_booking_id: bookingId });
+    }
 
     return NextResponse.json({
       ok: true,
-      bookingId: claimedBookingId,
+      bookingId,
       trainerId,
       trainerName: trainer.full_name || "Trainer",
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
       remainingSessions: remainingSessions(activePackage),
+      googleSynced,
+      warning: googleSynced ? null : "Booking confirmed. Google Calendar sync is pending.",
     });
   } catch (error) {
-    if (googleEventId && trainerId) {
-      try {
-        await deleteGoogleCalendarEvent(trainerId, googleEventId);
-      } catch (cleanupError) {
-        console.error("Booking Google cleanup failed:", cleanupError);
-      }
-    }
-
-    if (claimedBookingId) {
-      await supabase.rpc("fxa_release_booking_slot_v2", {
-        p_booking_id: claimedBookingId,
-      });
-    }
-
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not create booking." },
       { status: 500 },
