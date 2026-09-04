@@ -28,10 +28,7 @@ create policy "trainer can read own availability"
   to authenticated
   using (
     trainer_id = auth.uid()
-    or exists (
-      select 1 from public.profiles p
-      where p.id = auth.uid() and p.role = 'admin'
-    )
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin')
   );
 
 drop policy if exists "trainer can insert own availability" on public.trainer_availability_rules;
@@ -41,10 +38,7 @@ create policy "trainer can insert own availability"
   to authenticated
   with check (
     trainer_id = auth.uid()
-    or exists (
-      select 1 from public.profiles p
-      where p.id = auth.uid() and p.role = 'admin'
-    )
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin')
   );
 
 drop policy if exists "trainer can update own availability" on public.trainer_availability_rules;
@@ -54,17 +48,11 @@ create policy "trainer can update own availability"
   to authenticated
   using (
     trainer_id = auth.uid()
-    or exists (
-      select 1 from public.profiles p
-      where p.id = auth.uid() and p.role = 'admin'
-    )
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin')
   )
   with check (
     trainer_id = auth.uid()
-    or exists (
-      select 1 from public.profiles p
-      where p.id = auth.uid() and p.role = 'admin'
-    )
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin')
   );
 
 drop policy if exists "trainer can delete own availability" on public.trainer_availability_rules;
@@ -74,10 +62,7 @@ create policy "trainer can delete own availability"
   to authenticated
   using (
     trainer_id = auth.uid()
-    or exists (
-      select 1 from public.profiles p
-      where p.id = auth.uid() and p.role = 'admin'
-    )
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'admin')
   );
 
 alter table public.bookings
@@ -94,6 +79,13 @@ create index if not exists bookings_trainer_time_idx
 
 create index if not exists bookings_client_time_idx
   on public.bookings(client_id, starts_at, ends_at);
+
+-- OAuth state must expire; older deployments did not always include this column.
+alter table public.google_calendar_oauth_states
+  add column if not exists created_at timestamptz not null default now();
+
+create index if not exists google_calendar_oauth_states_created_at_idx
+  on public.google_calendar_oauth_states(created_at);
 
 create or replace function public.fxa_create_booking_v2(
   p_client_id uuid,
@@ -115,7 +107,7 @@ as $$
 declare
   v_booking_id uuid;
 begin
-  if p_starts_at <= now() + interval '2 hours' then
+  if p_starts_at < now() + interval '2 hours' then
     raise exception 'Sessions must be booked at least 2 hours in advance.';
   end if;
 
@@ -123,11 +115,11 @@ begin
     raise exception 'Invalid booking time.';
   end if;
 
+  -- Serialize attempts for the same trainer/start to prevent double booking races.
   perform pg_advisory_xact_lock(hashtext(p_trainer_id::text || '|' || p_starts_at::text));
 
   if exists (
-    select 1
-    from public.bookings b
+    select 1 from public.bookings b
     where coalesce(b.status, 'booked') <> 'cancelled'
       and b.trainer_id = p_trainer_id
       and b.starts_at < p_ends_at
@@ -137,8 +129,7 @@ begin
   end if;
 
   if exists (
-    select 1
-    from public.bookings b
+    select 1 from public.bookings b
     where coalesce(b.status, 'booked') <> 'cancelled'
       and b.client_id = p_client_id
       and b.starts_at < p_ends_at
@@ -199,9 +190,7 @@ begin
       sync_status = 'synced'
   where id = p_booking_id;
 
-  if not found then
-    raise exception 'Booking not found.';
-  end if;
+  if not found then raise exception 'Booking not found.'; end if;
 end;
 $$;
 
