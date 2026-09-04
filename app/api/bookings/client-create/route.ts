@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = (await request.json()) as {
+      slotId?: string;
       trainerId?: string;
       startsAt?: string;
       endsAt?: string;
@@ -63,8 +64,11 @@ export async function POST(request: NextRequest) {
     };
 
     const trainerId = body.trainerId || "";
-    const startsAt = new Date(body.startsAt || "");
-    const endsAt = new Date(body.endsAt || "");
+    const rawStart = body.startsAt || body.slotId || "";
+    const startsAt = new Date(rawStart);
+    const endsAt = body.endsAt
+      ? new Date(body.endsAt)
+      : new Date(startsAt.getTime() + SLOT_MINUTES * 60 * 1000);
     const notes = (body.notes || "").trim();
 
     if (
