@@ -22,7 +22,7 @@ jobs:
           /tmp/fxa-browser-tools/node_modules/.bin/agent-browser install
           curl -fsSL https://supabase.com/changelog.md -o /tmp/fxa-browser-tools/supabase-changelog.md
           tar -czf fxa-browser-tools.tar.gz -C /tmp/fxa-browser-tools node_modules supabase-changelog.md
-          tar -czf fxa-browser-cache.tar.gz -C "$HOME/.cache" ms-playwright
+          tar -czf fxa-browser-cache.tar.gz -C "$HOME/.agent-browser" browsers
       - uses: actions/upload-artifact@v4
         with:
           name: fxa-browser-tools
