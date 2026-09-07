@@ -1,0 +1,53 @@
+name: FXA isolated QA - no deploy
+on:
+  push:
+    branches: [repair/core-booking-20260907]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: fxa-isolated-qa-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  baseline:
+    if: github.event_name == 'push' || github.head_ref == 'repair/core-booking-20260907'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: local-test-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: local-test-service-role-key
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Export source only, no credentials or signing material
+        run: |
+          mkdir -p qa-export
+          python3 - <<'PY'
+          import subprocess, zipfile, pathlib
+          names = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          allowed = {'.ts', '.tsx', '.js', '.mjs', '.cjs', '.json', '.css', '.sql', '.md', '.yml', '.yaml', '.svg', '.png'}
+          with zipfile.ZipFile('qa-export/fxa-source.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for name in names:
+                  p = pathlib.Path(name)
+                  if p.is_file() and p.suffix in allowed and not any(x.startswith('.env') or x in ('.git', '.idea', 'android', 'ios') for x in p.parts):
+                      z.write(p, name)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fxa-source-${{ github.sha }}
+          path: qa-export/fxa-source.zip
+          retention-days: 3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Build only - never deploy
+        run: npm run build
