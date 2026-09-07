@@ -9,7 +9,9 @@
     "lint": "eslint",
     "cap:sync": "npm run build && npx cap sync",
     "android": "npm run cap:sync && npx cap open android",
-    "ios": "npm run cap:sync && npx cap open ios"
+    "ios": "npm run cap:sync && npx cap open ios",
+    "test:repair": "node --test tests/*.test.cjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

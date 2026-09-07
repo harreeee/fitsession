@@ -1,4 +1,6 @@
 "use client";
+import { sessionText } from "@/lib/dataIntegrity";
+import { businessDate, currentPackage as selectCurrentPackage } from "@/lib/businessTime";
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
@@ -47,6 +49,8 @@ type SessionHistoryRaw = {
   status: string;
   message: string | null;
   trainer_note: string | null;
+  session_topic?: string | null;
+  session_content?: string | null;
   remaining_after: number | null;
   created_at: string | null;
 };
@@ -214,7 +218,7 @@ export default function TrainerClientDetailPage() {
     return map;
   }, [staffProfiles]);
 
-  const activePackage = packages[0] || null;
+  const activePackage = selectCurrentPackage(packages);
   const packageNumbers = getPackageNumbers(activePackage);
 
   const assignedTrainer = client?.assigned_trainer_id
@@ -250,7 +254,7 @@ export default function TrainerClientDetailPage() {
         supabase
           .from("session_history")
           .select(
-            "id, trainer_id, status, message, trainer_note, remaining_after, created_at",
+            "id, trainer_id, status, message, session_topic, session_content, trainer_note, remaining_after, created_at",
           )
           .eq("client_id", targetClientId)
           .order("created_at", { ascending: false })
@@ -755,13 +759,13 @@ export default function TrainerClientDetailPage() {
                       </p>
                     ) : null}
 
-                    {log.trainer_note ? (
+                    {sessionText(log) ? (
                       <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
                         <p className="text-xs font-semibold uppercase tracking-widest text-yellow-300">
                           Session Note
                         </p>
                         <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100/90">
-                          {log.trainer_note}
+                          {sessionText(log)}
                         </p>
                       </div>
                     ) : null}
