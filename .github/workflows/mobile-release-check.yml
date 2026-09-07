@@ -1,0 +1,88 @@
+name: Mobile release verification
+
+on:
+  push:
+    branches: [mobile-release-20260907]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android release build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+      - name: Build Android bundle and test APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew clean bundleRelease assembleDebug --stacktrace
+      - name: Inspect Android outputs
+        run: |
+          find android/app/build/outputs -maxdepth 5 -type f -print
+          test -f android/app/build/outputs/bundle/release/app-release.aab
+          test -f android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fxa-android-release-candidate
+          path: |
+            android/app/build/outputs/bundle/release/app-release.aab
+            android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+  ios:
+    name: iOS Xcode 26 release build
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Verify Xcode and plist
+        run: |
+          xcodebuild -version
+          plutil -lint ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' ios/App/App/Info.plist
+      - name: Sync Capacitor iOS
+        run: npx cap sync ios
+      - name: Build iOS Release without signing
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/fxa-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build | tee "$RUNNER_TEMP/xcodebuild.log"
+      - name: Verify iOS app output
+        run: |
+          test -d "$RUNNER_TEMP/fxa-derived/Build/Products/Release-iphoneos/App.app"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$RUNNER_TEMP/fxa-derived/Build/Products/Release-iphoneos/App.app/Info.plist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fxa-ios-unsigned-release-candidate
+          path: |
+            ${{ runner.temp }}/fxa-derived/Build/Products/Release-iphoneos/App.app
+            ${{ runner.temp }}/xcodebuild.log
+          retention-days: 7
