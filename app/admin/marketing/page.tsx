@@ -1,9 +1,11 @@
 "use client";
+import { businessDate, businessMonthRange } from "@/lib/businessTime";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   useCallback,
+  useRef,
   useEffect,
   useMemo,
   useState,
@@ -180,26 +182,8 @@ const TABS: Array<{ id: MarketingTab; label: string; description: string }> = [
   { id: "actions", label: "Marketing Tasks", description: "Owner, deadline và KPI" },
 ];
 
-function currentMonthValue() {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
-}
-
-function monthRange(monthValue: string) {
-  const [yearText, monthText] = monthValue.split("-");
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const end = new Date(Date.UTC(year, month, 1));
-
-  return {
-    reportDate: `${yearText}-${monthText}-01`,
-    startIso: start.toISOString(),
-    endIso: end.toISOString(),
-  };
-}
+function currentMonthValue(){return businessDate().slice(0,7);}
+function monthRange(monthValue:string){return businessMonthRange(monthValue);}
 
 function numberValue(value: number | string | null | undefined) {
   const parsed = Number(value ?? 0);
@@ -405,6 +389,7 @@ function ModalShell({
 
 export default function MarketingDashboardPage() {
   const router = useRouter();
+  const loadVersion=useRef(0);
   const [role, setRole] = useState<MarketingRole | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -432,10 +417,11 @@ export default function MarketingDashboardPage() {
   const [editingAction, setEditingAction] = useState<MarketingAction | null>(null);
 
   const canEdit =
-    role === "admin" || role === "manager" || role === "marketing_manager";
+    role === "admin" || role === "marketing_manager";
   const canDelete = role === "admin";
 
   const loadMonth = useCallback(async (monthValue: string) => {
+    const version=++loadVersion.current;
     setLoading(true);
     const range = monthRange(monthValue);
 
@@ -455,6 +441,7 @@ export default function MarketingDashboardPage() {
         .order("created_at", { ascending: false }),
     ]);
 
+    if(version!==loadVersion.current)return;
     if (reportResult.error || leadsResult.error) {
       alert(reportResult.error?.message || leadsResult.error?.message || "Unable to load marketing data.");
       setLoading(false);
@@ -498,6 +485,7 @@ export default function MarketingDashboardPage() {
           .order("due_date", { ascending: true }),
       ]);
 
+    if(version!==loadVersion.current)return;
     const firstError = [
       campaignResult.error,
       contentResult.error,
@@ -740,7 +728,7 @@ export default function MarketingDashboardPage() {
   );
 
   const upcomingContent = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = businessDate();
     return [...contentRows]
       .filter((row) => row.publish_date >= today)
       .sort((a, b) => a.publish_date.localeCompare(b.publish_date))
@@ -773,7 +761,7 @@ export default function MarketingDashboardPage() {
     };
 
     const query = report
-      ? supabase.from("marketing_monthly_reports").update(payload).eq("id", report.id)
+      ? supabase.from("marketing_monthly_reports").update(payload).eq("id", report.id).select("id").single()
       : supabase.from("marketing_monthly_reports").insert(payload);
 
     const { error } = await query;
@@ -813,7 +801,7 @@ export default function MarketingDashboardPage() {
     };
 
     const query = editingCampaign
-      ? supabase.from("marketing_campaigns").update(payload).eq("id", editingCampaign.id)
+      ? supabase.from("marketing_campaigns").update(payload).eq("id", editingCampaign.id).select("id").single()
       : supabase.from("marketing_campaigns").insert(payload);
     const { error } = await query;
     setSaving(false);
@@ -858,7 +846,7 @@ export default function MarketingDashboardPage() {
     };
 
     const query = editingContent
-      ? supabase.from("marketing_content").update(payload).eq("id", editingContent.id)
+      ? supabase.from("marketing_content").update(payload).eq("id", editingContent.id).select("id").single()
       : supabase.from("marketing_content").insert(payload);
     const { error } = await query;
     setSaving(false);
@@ -909,7 +897,7 @@ export default function MarketingDashboardPage() {
       ? supabase
           .from("marketing_audience_snapshots")
           .update(payload)
-          .eq("id", editingAudience.id)
+          .eq("id", editingAudience.id).select("id").single()
       : supabase.from("marketing_audience_snapshots").insert(payload);
     const { error } = await query;
     setSaving(false);
@@ -944,7 +932,7 @@ export default function MarketingDashboardPage() {
     };
 
     const query = editingAction
-      ? supabase.from("marketing_actions").update(payload).eq("id", editingAction.id)
+      ? supabase.from("marketing_actions").update(payload).eq("id", editingAction.id).select("id").single()
       : supabase.from("marketing_actions").insert(payload);
     const { error } = await query;
     setSaving(false);

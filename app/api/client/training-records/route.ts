@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
     const { data: clientsData, error: clientsError } = await supabaseAdmin
       .from("clients")
       .select("id, full_name, email, profile_id")
-      .or(`profile_id.eq.${userId},email.eq.${userEmail}`);
+      .eq("profile_id", userId);
 
     if (clientsError) {
       return NextResponse.json(
@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
 
     const clients = (clientsData || []) as ClientRow[];
 
-    if (clients.length === 0) {
+    if (clients.length !== 1) {
       return NextResponse.json(
         {
           error:
@@ -235,15 +235,7 @@ export async function GET(request: NextRequest) {
           profile_id: client.profile_id,
         })),
       },
-      debug: {
-        user_id: userId,
-        user_email: userEmail,
-        matched_clients_count: clients.length,
-        matched_client_ids: clientIds,
-        lookup_client_ids: lookupClientIds,
-        session_history_count: sessionHistoryRows.length,
-        returned_count: logs.length,
-      },
+
     });
   } catch (error) {
     const message =

@@ -1,104 +1,23 @@
-import { NextRequest, NextResponse } from "next/server";
-import {
-  createServiceSupabaseClient,
-  getUserFromRequest,
-} from "../../../../lib/supabaseServer";
-import { createGoogleCalendarEvent } from "../../../../lib/googleCalendar";
-
-export const runtime = "nodejs";
-
-export async function POST(request: NextRequest) {
-  try {
-    const { user, error } = await getUserFromRequest(request);
-
-    if (!user) {
-      return NextResponse.json({ error }, { status: 401 });
-    }
-
-    const body = (await request.json()) as {
-      trainerId?: string;
-      clientName?: string;
-      clientEmail?: string;
-      clientPhone?: string;
-      startsAt?: string;
-      endsAt?: string;
-      notes?: string;
-    };
-
-    const trainerId = body.trainerId || "";
-    const clientName = (body.clientName || "").trim();
-    const clientEmail = (body.clientEmail || "").trim();
-    const clientPhone = (body.clientPhone || "").trim();
-    const startsAt = body.startsAt || "";
-    const endsAt = body.endsAt || "";
-    const notes = (body.notes || "").trim();
-
-    if (!trainerId || !clientName || !startsAt || !endsAt) {
-      return NextResponse.json(
-        { error: "Missing required booking information." },
-        { status: 400 }
-      );
-    }
-
-    const startsAtDate = new Date(startsAt);
-    const endsAtDate = new Date(endsAt);
-
-    if (
-      Number.isNaN(startsAtDate.getTime()) ||
-      Number.isNaN(endsAtDate.getTime()) ||
-      endsAtDate <= startsAtDate
-    ) {
-      return NextResponse.json(
-        { error: "Invalid booking time." },
-        { status: 400 }
-      );
-    }
-
-    const googleEvent = await createGoogleCalendarEvent({
-      trainerId,
-      clientName,
-      clientEmail,
-      clientPhone,
-      startsAt,
-      endsAt,
-      notes,
-    });
-
-    const supabase = createServiceSupabaseClient();
-
-    const { data: existingClient } = await supabase
-      .from("clients")
-      .select("id")
-      .ilike("email", clientEmail)
-      .limit(1)
-      .maybeSingle();
-
-    const { error: bookingError } = await supabase.from("bookings").insert({
-      client_id: existingClient?.id || null,
-      trainer_id: trainerId,
-      client_name: clientName,
-      client_email: clientEmail || null,
-      client_phone: clientPhone || null,
-      starts_at: startsAt,
-      ends_at: endsAt,
-      status: "booked",
-      google_event_id: googleEvent.eventId || null,
-      notes: notes || null,
-      created_by: user.id,
-    });
-
-    if (bookingError) {
-      throw bookingError;
-    }
-
-    return NextResponse.json({
-      ok: true,
-      googleEventId: googleEvent.eventId,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to create booking.";
-
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-}
+import { after } from 'next/server';
+import { bookingContext, fail, uuid, jsonBody, BookingError } from '@/lib/booking/server';
+import { availability } from '@/lib/booking/availability';
+import { businessDate } from '@/lib/businessTime';
+import { syncBooking } from '@/lib/booking/sync';
+export const runtime='nodejs';
+export async function POST(request:Request){try{
+ const {db,admin,user,profile}=await bookingContext(request,['client','admin']);const body=await jsonBody(request);
+ const trainerId=uuid(body.trainerId),requestId=uuid(body.requestId);
+ if(typeof body.startsAt!=='string'||!/(Z|[+-]\d{2}:\d{2})$/.test(body.startsAt)||!Number.isFinite(Date.parse(body.startsAt)))throw new BookingError('Invalid booking time.');
+ const startsAt=new Date(body.startsAt).toISOString(); const explicitClient=body.clientId?uuid(body.clientId):null;
+ if(explicitClient&&profile.role!=='admin')throw new BookingError('Access denied.',403);
+ const {data:previous,error:previousError}=await admin.from('bookings').select('id,trainer_id,starts_at,status,ends_at,google_sync_status,client_id').eq('created_by',user.id).eq('request_id',requestId).maybeSingle();
+ if(previousError)throw previousError;
+ if(previous){if(previous.trainer_id!==trainerId||Date.parse(previous.starts_at)!==Date.parse(startsAt)||(explicitClient&&previous.client_id!==explicitClient))throw new BookingError('Request key already used.',409);after(()=>syncBooking(previous.id));return Response.json({ok:true,booking:previous});}
+ let clientId=explicitClient;
+ if(!clientId){const {data,error}=await admin.from('clients').select('id').eq('profile_id',user.id).single();if(error||!data)throw new BookingError('Linked client account required.');clientId=data.id;}
+ const slots=await availability(trainerId,businessDate(startsAt),clientId);
+ if(!slots.some(s=>s.starts_at===startsAt))throw new BookingError('Slot is no longer available. Please choose another.',409);
+ const grant=await admin.rpc('fxa_issue_slot_grant',{p_actor:user.id,p_trainer:trainerId,p_start:startsAt});if(grant.error)throw grant.error;
+ const {data,error}=await db.rpc('fxa_reserve_booking',{p_trainer_id:trainerId,p_starts_at:startsAt,p_request_id:requestId,p_grant_id:grant.data,p_client_id:explicitClient});if(error)throw error;
+ after(()=>syncBooking(data.id));return Response.json({ok:true,booking:data},{status:201});
+}catch(e){return fail(e);}}

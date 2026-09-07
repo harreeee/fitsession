@@ -1,13 +1,24 @@
-name: FXA isolated QA - no deploy
+name: FXA Core and Booking - isolated regression (no deploy)
 on:
   push:
     branches: [repair/core-booking-20260907]
+  pull_request:
+    branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: fxa-repair-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  tools:
+  regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: local-test-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: local-test-service-role-key
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -15,18 +26,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Prepare local verification tools (no app secrets)
+          cache: npm
+      - name: Install locked application dependencies
+        run: npm ci
+      - name: Install locked isolated test dependencies
+        run: npm ci --prefix tests --ignore-scripts
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Booking-scoped ESLint
+        run: npx eslint lib/booking app/api/bookings app/api/google-calendar components/BookingPanel.tsx app/client/book/page.tsx app/trainer/calendar/page.tsx
+      - name: Unit, SQL, Google-mock, production build, and HTTP integration
+        run: node tests/run-isolated.cjs
+      - name: Record exact source revision
+        if: always()
         run: |
-          mkdir -p /tmp/fxa-browser-tools
-          npm install --prefix /tmp/fxa-browser-tools --save-exact agent-browser supabase
-          /tmp/fxa-browser-tools/node_modules/.bin/agent-browser install
-          curl -fsSL https://supabase.com/changelog.md -o /tmp/fxa-browser-tools/supabase-changelog.md
-          tar -czf fxa-browser-tools.tar.gz -C /tmp/fxa-browser-tools node_modules supabase-changelog.md
-          tar -czf fxa-browser-cache.tar.gz -C "$HOME/.agent-browser" browsers
+          mkdir -p qa-artifacts
+          git rev-parse HEAD > qa-artifacts/source-commit.txt
+          echo 'Synthetic data only. No production migration or deployment.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: fxa-browser-tools
-          path: |
-            fxa-browser-tools.tar.gz
-            fxa-browser-cache.tar.gz
-          retention-days: 1
+          name: fxa-regression-${{ github.run_id }}
+          path: qa-artifacts/
+          retention-days: 14

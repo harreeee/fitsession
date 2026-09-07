@@ -1,4 +1,6 @@
 "use client";
+import { allRows } from "@/lib/dataIntegrity";
+import { businessDate, currentPackage as selectCurrentPackage } from "@/lib/businessTime";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -209,13 +211,10 @@ const CUSTOM_REPORT_GROUPS: Array<{ value: ReportGroup; label: string }> = [
   { value: "cash_only", label: "Đầu tư / dòng tiền, không vào lãi lỗ" },
 ];
 
-function currentMonthKey() {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
+function currentMonthKey(){return businessDate().slice(0,7);}
 
 function todayValue() {
-  return new Date().toISOString().slice(0, 10);
+  return businessDate();
 }
 
 function monthStart(monthKey: string) {
@@ -445,11 +444,11 @@ export default function RevenuePage() {
         .select("id, name, category_kind, system_key, parent_id, report_group, is_system, is_active, sort_order")
         .order("sort_order")
         .order("name"),
-      supabase
+      allRows(supabase
         .from("business_transactions")
         .select("id, transaction_type, source, title, amount, notes, transaction_date, accounting_month, report_group, counterparty, document_no, payable_id, account_id, category_id, transfer_id, trainer_id, created_at")
         .order("transaction_date", { ascending: false })
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false }).order("id")),
       supabase
         .from("business_payables")
         .select("id, accounting_month, payable_type, counterparty, title, total_amount, paid_amount, due_date, expense_group, notes, status, category_id, trainer_id, created_at, updated_at")
@@ -531,6 +530,8 @@ export default function RevenuePage() {
     setPayableCategoryId((current) => current || firstExpenseCategory);
     setLoading(false);
   }, []);
+
+  useEffect(()=>{const refresh=()=>{void fetchData();};window.addEventListener("fxa:finance-updated",refresh);return()=>window.removeEventListener("fxa:finance-updated",refresh);},[fetchData]);
 
   useEffect(() => {
     async function protect() {

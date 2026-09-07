@@ -145,7 +145,8 @@ export default function AdminLeadsPage() {
   const router = useRouter();
   const [role, setRole] = useState<string | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
-  const canManageLeads = role === "admin" || role === "manager";
+  const canManageLeads = role === "admin" || role === "manager" || role === "marketing_manager";
+  const canConvertLeads = role === "admin" || role === "manager";
   const canDeleteLeads = role === "admin";
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -348,7 +349,7 @@ export default function AdminLeadsPage() {
         notes: editDraft.notes.trim() || null,
         demo_result_note: editDraft.demo_result_note.trim() || null,
       })
-      .eq("id", lead.id);
+      .eq("id", lead.id).select("id").single();
 
     if (error) {
       alert(error.message);
@@ -383,7 +384,7 @@ export default function AdminLeadsPage() {
 
     setDeletingId(lead.id);
 
-    const { error } = await supabase.from("leads").delete().eq("id", lead.id);
+    const { error } = await supabase.from("leads").delete().eq("id", lead.id).select("id").single();
 
     if (error) {
       alert(error.message);
@@ -406,7 +407,7 @@ export default function AdminLeadsPage() {
     if (patch.demo_at !== undefined) {
       payload.demo_at = patch.demo_at ? new Date(patch.demo_at).toISOString() : null;
     }
-    const { error } = await supabase.from("leads").update(payload).eq("id", id);
+    const { error } = await supabase.from("leads").update(payload).eq("id", id).select("id").single();
     if (error) {
       alert(error.message);
       return;
@@ -415,7 +416,7 @@ export default function AdminLeadsPage() {
   }
 
   async function convertLead(lead: LeadRow) {
-    if (!canManageLeads) return;
+    if (!canConvertLeads) return;
     if (lead.converted_client_id) {
       router.push(`/admin/clients/${lead.converted_client_id}`);
       return;
@@ -551,11 +552,11 @@ export default function AdminLeadsPage() {
             <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone" className="rounded-2xl border border-white/15 bg-black/70 px-4 py-3" />
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="rounded-2xl border border-white/15 bg-black/70 px-4 py-3" />
             <select value={sourceType} onChange={(e) => setSourceType(e.target.value as LeadSource)} className="rounded-2xl border border-white/15 bg-white px-4 py-3 text-black">
-              {SOURCE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              {SOURCE_OPTIONS.map((item) => <option key={item.value} value={item.value} disabled={String(item.value) === "converted" && role === "marketing_manager"}>{item.label}</option>)}
             </select>
             <input value={sourceDetail} onChange={(e) => setSourceDetail(e.target.value)} placeholder="Lead by / campaign detail" className="rounded-2xl border border-white/15 bg-black/70 px-4 py-3" />
             <select value={status} onChange={(e) => setStatus(e.target.value as LeadStatus)} className="rounded-2xl border border-white/15 bg-white px-4 py-3 text-black">
-              {STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              {STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value} disabled={String(item.value) === "converted" && role === "marketing_manager"}>{item.label}</option>)}
             </select>
             <input type="datetime-local" value={demoAt} onChange={(e) => setDemoAt(e.target.value)} className="rounded-2xl border border-white/15 bg-black/70 px-4 py-3" />
             <select value={assignedTrainerId} onChange={(e) => setAssignedTrainerId(e.target.value)} className="rounded-2xl border border-white/15 bg-white px-4 py-3 text-black">
@@ -602,8 +603,8 @@ export default function AdminLeadsPage() {
         <section className="rounded-3xl border border-yellow-500/30 bg-white/[0.06] p-6">
           <div className="grid gap-3 md:grid-cols-3">
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search lead..." className="rounded-2xl border border-white/15 bg-black/70 px-4 py-3" />
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-2xl bg-white px-4 py-3 text-black"><option value="all">All statuses</option>{STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
-            <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} className="rounded-2xl bg-white px-4 py-3 text-black"><option value="all">All sources</option>{SOURCE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-2xl bg-white px-4 py-3 text-black"><option value="all">All statuses</option>{STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value} disabled={String(item.value) === "converted" && role === "marketing_manager"}>{item.label}</option>)}</select>
+            <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} className="rounded-2xl bg-white px-4 py-3 text-black"><option value="all">All sources</option>{SOURCE_OPTIONS.map((item) => <option key={item.value} value={item.value} disabled={String(item.value) === "converted" && role === "marketing_manager"}>{item.label}</option>)}</select>
           </div>
 
           {loading ? <p className="py-8 text-center text-yellow-400">Loading leads...</p> : (
@@ -674,7 +675,7 @@ export default function AdminLeadsPage() {
                                 : lead.status,
                             })
                           }
-                          disabled={isEditing || !canManageLeads}
+                          disabled={isEditing || !canManageLeads || (role === "marketing_manager" && Boolean(lead.converted_client_id))}
                           className="mt-2 w-full rounded-xl border border-white/15 bg-black/70 px-3 py-2 disabled:opacity-50"
                         />
 
@@ -688,7 +689,7 @@ export default function AdminLeadsPage() {
                               assigned_trainer_id: event.target.value || null,
                             })
                           }
-                          disabled={isEditing || !canManageLeads}
+                          disabled={isEditing || !canManageLeads || (role === "marketing_manager" && Boolean(lead.converted_client_id))}
                           className="mt-2 w-full rounded-xl bg-white px-3 py-2 text-black disabled:opacity-50"
                         >
                           <option value="">Unassigned</option>
@@ -711,11 +712,11 @@ export default function AdminLeadsPage() {
                               status: event.target.value as LeadStatus,
                             })
                           }
-                          disabled={isEditing || !canManageLeads}
+                          disabled={isEditing || !canManageLeads || (role === "marketing_manager" && Boolean(lead.converted_client_id))}
                           className="mt-2 w-full rounded-xl bg-white px-3 py-2 text-black disabled:opacity-50"
                         >
                           {STATUS_OPTIONS.map((item) => (
-                            <option key={item.value} value={item.value}>
+                            <option key={item.value} value={item.value} disabled={String(item.value) === "converted" && role === "marketing_manager"}>
                               {item.label}
                             </option>
                           ))}
@@ -725,7 +726,7 @@ export default function AdminLeadsPage() {
                           type="button"
                           onClick={() => convertLead(lead)}
                           disabled={
-                            !canManageLeads ||
+                            !canConvertLeads ||
                             convertingId === lead.id ||
                             lead.status === "lost" ||
                             isEditing
@@ -859,7 +860,7 @@ export default function AdminLeadsPage() {
                               className="w-full rounded-xl border border-cyan-400/30 bg-white px-4 py-3 text-black outline-none"
                             >
                               {SOURCE_OPTIONS.map((item) => (
-                                <option key={item.value} value={item.value}>
+                                <option key={item.value} value={item.value} disabled={String(item.value) === "converted" && role === "marketing_manager"}>
                                   {item.label}
                                 </option>
                               ))}
@@ -894,7 +895,7 @@ export default function AdminLeadsPage() {
                               className="w-full rounded-xl border border-cyan-400/30 bg-white px-4 py-3 text-black outline-none"
                             >
                               {STATUS_OPTIONS.map((item) => (
-                                <option key={item.value} value={item.value}>
+                                <option key={item.value} value={item.value} disabled={String(item.value) === "converted" && role === "marketing_manager"}>
                                   {item.label}
                                 </option>
                               ))}

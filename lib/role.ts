@@ -199,7 +199,7 @@ export function canViewLeads(role: AppRoleValue): boolean {
 }
 
 export function canEditLeads(role: AppRoleValue): boolean {
-  return role === "admin" || role === "manager";
+  return role === "admin" || role === "manager" || role === "marketing_manager";
 }
 
 export function canDeleteLeads(role: AppRoleValue): boolean {

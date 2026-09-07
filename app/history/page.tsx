@@ -1,4 +1,5 @@
 "use client";
+import { sessionText } from "@/lib/dataIntegrity";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -14,6 +15,8 @@ type HistoryLog = {
   status: string | null;
   message: string | null;
   trainer_note: string | null;
+  session_topic?: string | null;
+  session_content?: string | null;
   photo_path: string | null;
   remaining_after: number | null;
   created_at: string;
@@ -254,7 +257,7 @@ export default function HistoryPage() {
     let historyQuery = supabase
       .from("session_history")
       .select(
-        "id, client_id, trainer_id, package_id, status, message, trainer_note, photo_path, remaining_after, created_at"
+        "id, client_id, trainer_id, package_id, status, message, session_topic, session_content, trainer_note, photo_path, remaining_after, created_at"
       )
       .order("created_at", { ascending: false })
       .limit(1000);
@@ -786,13 +789,13 @@ export default function HistoryPage() {
                               {log.message || "Session recorded."}
                             </p>
 
-                            {log.trainer_note ? (
+                            {sessionText(log) ? (
                               <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
                                 <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
                                   Trainer Note
                                 </p>
                                 <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
-                                  {log.trainer_note}
+                                  {sessionText(log)}
                                 </p>
                               </div>
                             ) : null}

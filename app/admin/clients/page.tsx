@@ -1,4 +1,5 @@
 "use client";
+import { businessDate, currentPackage as selectCurrentPackage } from "@/lib/businessTime";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -588,7 +589,7 @@ export default function AdminClientsPage() {
         (purchase) => purchase.client_id === client.id
       );
 
-      const latestPackage = getLatestByDate(clientPackages);
+      const latestPackage = selectCurrentPackage(clientPackages);
 
       const purchaseWithDebt = clientPurchases.find(
         (purchase) => Number(purchase.balance_due || 0) > 0
@@ -615,13 +616,9 @@ export default function AdminClientsPage() {
 
       const packageValue = calculatePackageValue(latestPackage, latestPurchase);
 
-      const amountPaid = calculateAmountPaid(latestPurchase);
+      const amountPaid = clientPurchases.filter(p => !["failed","cancelled"].includes(p.status || "")).reduce((sum,p) => sum + Number(p.amount_paid || 0),0);
 
-      const balanceDue = calculateBalanceDue(
-        latestPurchase,
-        packageValue,
-        amountPaid
-      );
+      const balanceDue = clientPurchases.filter(p => !["failed","cancelled"].includes(p.status || "")).reduce((sum,p) => sum + Number(p.balance_due || 0),0);
 
       const status = getStatusLabel(client.status, remainingSessions);
 

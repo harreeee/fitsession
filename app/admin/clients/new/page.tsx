@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "../../../../lib/supabaseClient";
@@ -44,6 +44,8 @@ function createClientCode() {
 
 export default function AdminNewClientPage() {
   const router = useRouter();
+  const createRequest=useRef("");
+  const createLock=useRef(false);
 
   const [userRole, setUserRole] = useState<AppRole | null>(null);
   const [checkingRole, setCheckingRole] = useState(true);
@@ -101,134 +103,17 @@ export default function AdminNewClientPage() {
     protectPage();
   }, [router]);
 
-  async function createClient(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!canAddClients(userRole)) {
-      alert("You do not have permission to add clients.");
-      return;
-    }
-
-    if (!fullName.trim()) {
-      alert("Client name is required.");
-      return;
-    }
-
-    if (clientSource === "other" && !clientSourceOther.trim()) {
-      alert("Please enter the other client source.");
-      return;
-    }
-
-    const cleanTotalSessions = totalSessions.trim()
-      ? Number(totalSessions)
-      : 0;
-
-    const cleanPackageValue = packageValue.trim()
-      ? Number(packageValue)
-      : 0;
-
-    const cleanAmountPaid = amountPaid.trim()
-      ? Number(amountPaid)
-      : cleanPackageValue;
-
-    if (Number.isNaN(cleanTotalSessions) || cleanTotalSessions < 0) {
-      alert("Total sessions must be a valid number.");
-      return;
-    }
-
-    if (Number.isNaN(cleanPackageValue) || cleanPackageValue < 0) {
-      alert("Package value must be a valid number.");
-      return;
-    }
-
-    if (Number.isNaN(cleanAmountPaid) || cleanAmountPaid < 0) {
-      alert("Amount paid must be a valid number.");
-      return;
-    }
-
-    const finalAmountPaid = Math.min(cleanAmountPaid, cleanPackageValue);
-    const balanceDue = Math.max(cleanPackageValue - finalAmountPaid, 0);
-    const qrToken = createQrToken();
-
-    setSaving(true);
-
-    const { data: clientData, error: clientError } = await supabase
-      .from("clients")
-      .insert({
-        client_code: clientCode.trim() || createClientCode(),
-        full_name: fullName.trim(),
-        email: email.trim() || null,
-        phone: phone.trim() || null,
-        gender: gender.trim() || null,
-        date_of_birth: dateOfBirth || null,
-        client_source: clientSource || null,
-        client_source_other:
-          clientSource === "other" ? clientSourceOther.trim() || null : null,
-        qr_token: qrToken,
-        status: "active",
-        created_at: new Date().toISOString(),
-      })
-      .select("id")
-      .single();
-
-    if (clientError) {
-      alert(clientError.message);
-      setSaving(false);
-      return;
-    }
-
-    const clientId = clientData.id as string;
-
-    if (cleanTotalSessions > 0) {
-      const { error: packageError } = await supabase
-        .from("session_packages")
-        .insert({
-          client_id: clientId,
-          package_name: packageName.trim() || "New Package",
-          total_sessions: cleanTotalSessions,
-          used_sessions: 0,
-          remaining_sessions: cleanTotalSessions,
-          package_value: cleanPackageValue,
-          starts_at: startDate
-            ? new Date(`${startDate}T00:00:00`).toISOString()
-            : null,
-          expires_at: expireDate
-            ? new Date(`${expireDate}T23:59:59`).toISOString()
-            : null,
-          status: "active",
-          created_at: new Date().toISOString(),
-        });
-
-      if (packageError) {
-        alert(packageError.message);
-        setSaving(false);
-        return;
-      }
-
-      const { error: purchaseError } = await supabase
-        .from("client_purchases")
-        .insert({
-          client_id: clientId,
-          plan_name: packageName.trim() || "New Package",
-          session_count: cleanTotalSessions,
-          price: cleanPackageValue,
-          amount_paid: finalAmountPaid,
-          balance_due: balanceDue,
-          debt_deadline: balanceDue > 0 ? expireDate || null : null,
-          purchase_type: purchaseType,
-          status: "paid",
-          created_at: new Date().toISOString(),
-        });
-
-      if (purchaseError) {
-        alert(purchaseError.message);
-        setSaving(false);
-        return;
-      }
-    }
-
-    alert("Client added successfully.");
-    router.push(`/admin/clients/${clientId}`);
+  async function createClient(event:FormEvent<HTMLFormElement>){
+    event.preventDefault();if(createLock.current||!canAddClients(userRole))return;
+    const count=Number(totalSessions||0),value=Number(packageValue||0),paid=amountPaid.trim()?Number(amountPaid):value;
+    if(!fullName.trim()||!Number.isInteger(count)||count<0||!Number.isFinite(value)||!Number.isFinite(paid)||paid<0||value<0||paid>value){alert("Check the name, session count and payment amounts.");return;}
+    createLock.current=true;setSaving(true);createRequest.current ||= crypto.randomUUID();
+    try{
+      const {data,error}=await supabase.rpc("fxa_create_client",{p_request_id:createRequest.current,p_client:{client_code:clientCode.trim()||createClientCode(),full_name:fullName.trim(),email:email.trim(),phone:phone.trim(),gender,date_of_birth:dateOfBirth,client_source:clientSource,client_source_other:clientSource==="other"?clientSourceOther:""},p_package:{name:packageName,sessions:count,value,paid,starts_at:startDate,expires_at:expireDate,purchase_type:purchaseType}});
+      if(error)throw error;if(typeof data!=="string")throw new Error("Could not verify the saved client. Retry the same form.");
+      createRequest.current="";alert("Client added successfully.");router.push(`/admin/clients/${data}`);
+    }catch(error){alert(error instanceof Error?error.message:(error as {message?:string}).message||"Client could not be saved.");}
+    finally{createLock.current=false;setSaving(false);}
   }
 
   if (checkingRole) {

@@ -1,209 +1,35 @@
-"use client";
-
-import { Suspense, useEffect, useState } from "react";
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "../../../lib/supabaseClient";
-import { getCurrentUserRole } from "../../../lib/checkUserRole";
-
-type CalendarConnection = {
-  google_email: string | null;
-  calendar_id: string;
-  updated_at: string | null;
-};
-
-function CalendarLoadingFallback() {
-  return (
-    <main className="min-h-screen bg-black p-6 text-white">
-      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-6">
-        <p className="font-black text-yellow-400">Loading calendar...</p>
-      </div>
-    </main>
-  );
-}
-
-function TrainerCalendarContent() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-
-  const [checkingRole, setCheckingRole] = useState(true);
-  const [role, setRole] = useState("");
-  const [connection, setConnection] = useState<CalendarConnection | null>(null);
-  const [loadingConnection, setLoadingConnection] = useState(true);
-  const [connecting, setConnecting] = useState(false);
-
-  const connected = searchParams.get("connected");
-  const error = searchParams.get("error");
-
-  useEffect(() => {
-    async function protectPage() {
-      const { user, role: currentRole } = await getCurrentUserRole();
-
-      if (!user) {
-        router.push("/login");
-        return;
-      }
-
-      if (
-        currentRole !== "admin" &&
-        currentRole !== "trainer" &&
-        currentRole !== "nutrition_coach"
-      ) {
-        router.push("/login");
-        return;
-      }
-
-      setRole(currentRole || "");
-      setCheckingRole(false);
-    }
-
-    protectPage();
-  }, [router]);
-
-  useEffect(() => {
-    async function loadConnection() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        setLoadingConnection(false);
-        return;
-      }
-
-      const { data } = await supabase
-        .from("trainer_google_calendar_connections")
-        .select("google_email, calendar_id, updated_at")
-        .eq("trainer_id", user.id)
-        .maybeSingle();
-
-      setConnection((data || null) as CalendarConnection | null);
-      setLoadingConnection(false);
-    }
-
-    if (!checkingRole) {
-      loadConnection();
-    }
-  }, [checkingRole, connected]);
-
-  async function connectGoogleCalendar() {
-    setConnecting(true);
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session?.access_token) {
-      router.push("/login");
-      return;
-    }
-
-    window.location.href = `/api/google-calendar/connect?token=${encodeURIComponent(
-      session.access_token
-    )}`;
-  }
-
-  if (checkingRole) {
-    return (
-      <main className="min-h-screen bg-black p-6 text-white">
-        <p className="font-black text-yellow-400">Checking access...</p>
-      </main>
-    );
-  }
-
-  return (
-    <main className="min-h-screen bg-black p-4 text-white md:p-6">
-      <div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8">
-        <div className="mx-auto max-w-3xl">
-          <header className="mb-8">
-            <p className="mb-2 text-xs font-black uppercase tracking-[0.45em] text-yellow-400">
-              FXA FITNESS
-            </p>
-
-            <h1 className="text-4xl font-black tracking-tight md:text-6xl">
-              Google Calendar
-            </h1>
-
-            <p className="mt-3 text-sm font-medium text-gray-400 md:text-base">
-              Connect your Google Calendar so clients can book available
-              session times.
-            </p>
-          </header>
-
-          {connected ? (
-            <div className="mb-5 rounded-2xl border border-green-500/30 bg-green-500/10 p-4 font-bold text-green-300">
-              Google Calendar connected successfully.
-            </div>
-          ) : null}
-
-          {error ? (
-            <div className="mb-5 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 font-bold text-red-300">
-              {error}
-            </div>
-          ) : null}
-
-          <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6 shadow-2xl backdrop-blur">
-            {loadingConnection ? (
-              <p className="font-black text-yellow-400">Loading...</p>
-            ) : connection ? (
-              <div>
-                <p className="text-sm font-black uppercase tracking-widest text-gray-400">
-                  Connected Account
-                </p>
-
-                <p className="mt-3 text-2xl font-black text-yellow-400">
-                  {connection.google_email || "Google Calendar connected"}
-                </p>
-
-                <p className="mt-2 text-sm font-bold text-gray-400">
-                  Calendar: {connection.calendar_id || "primary"}
-                </p>
-
-                <button
-                  type="button"
-                  onClick={connectGoogleCalendar}
-                  disabled={connecting}
-                  className="mt-6 w-full rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black disabled:opacity-60"
-                >
-                  {connecting ? "Connecting..." : "Reconnect Google Calendar"}
-                </button>
-              </div>
-            ) : (
-              <div>
-                <p className="text-lg font-bold text-gray-300">
-                  No Google Calendar is connected yet.
-                </p>
-
-                <button
-                  type="button"
-                  onClick={connectGoogleCalendar}
-                  disabled={connecting}
-                  className="mt-6 w-full rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-black uppercase tracking-wide text-black transition hover:bg-yellow-300 disabled:opacity-60"
-                >
-                  {connecting ? "Connecting..." : "Connect Google Calendar"}
-                </button>
-              </div>
-            )}
-          </section>
-
-          <div className="mt-6">
-            <Link
-              href={role === "admin" ? "/admin" : "/trainer/scan"}
-              className="block rounded-2xl border border-yellow-400 px-5 py-3 text-center text-sm font-black uppercase tracking-wide text-yellow-400 transition hover:bg-yellow-400 hover:text-black"
-            >
-              {role === "admin" ? "Back to Admin" : "Back to Scanner"}
-            </Link>
-          </div>
-        </div>
-      </div>
-    </main>
-  );
-}
-
-export default function TrainerCalendarPage() {
-  return (
-    <Suspense fallback={<CalendarLoadingFallback />}>
-      <TrainerCalendarContent />
-    </Suspense>
-  );
+'use client';
+import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { bookingFetch } from '@/lib/booking/client';
+import { BUSINESS_TIME_ZONE, businessDate, torontoInstant } from '@/lib/businessTime';
+import { validWindows, type Window } from '@/lib/booking/time';
+type Block={id:string;starts_at:string;ends_at:string;reason:string};
+type Booking={id:string;client_name:string;starts_at:string;ends_at:string;google_sync_status:string;can_cancel:boolean};
+type Schedule={windows:Window[];blocks:Block[];connection:{connected:boolean;google_email:string|null}|null};
+const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const clock=(m:number)=>`${String(Math.floor(m/60)%24).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+const minutes=(s:string)=>{const [h,m]=s.split(':').map(Number);return h*60+m;};
+const label=(s:string)=>new Date(s).toLocaleString('en-CA',{timeZone:BUSINESS_TIME_ZONE,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+const field='rounded-xl border border-white/20 bg-black p-3 text-sm text-white';
+export default function TrainerCalendarPage(){
+ const [windows,setWindows]=useState<Window[]>([]),[blocks,setBlocks]=useState<Block[]>([]),[bookings,setBookings]=useState<Booking[]>([]),[connection,setConnection]=useState<Schedule['connection']>(null),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[blockDate,setBlockDate]=useState(businessDate()),[start,setStart]=useState('09:00'),[end,setEnd]=useState('17:00'),[reason,setReason]=useState('');const lock=useRef(false);
+ async function load(){const [s,b]=await Promise.all([bookingFetch<Schedule>('/api/bookings/schedule'),bookingFetch<{bookings:Booking[]}>('/api/bookings/upcoming')]);setWindows(s.windows);setBlocks(s.blocks);setConnection(s.connection);setBookings(b.bookings);}
+ useEffect(()=>{let alive=true;void Promise.resolve().then(load).catch(e=>{if(alive)setMessage(e.message);}).finally(()=>{if(alive)setLoading(false);});Promise.resolve().then(()=>{if(!alive)return;const q=new URLSearchParams(window.location.search);if(q.get('error'))setMessage(q.get('error')!);if(q.get('connected'))setMessage('Google Calendar connected.');});return()=>{alive=false;};},[]);
+ async function action(fn:()=>Promise<void>){if(lock.current)return;lock.current=true;setBusy(true);setMessage('');try{await fn();await load();}catch(e){setMessage(e instanceof Error?e.message:'Request failed.');}finally{lock.current=false;setBusy(false);}}
+ async function connect(){await action(async()=>{const r=await bookingFetch<{url:string}>('/api/google-calendar/connect','POST',{});window.location.assign(r.url);});}
+ function edit(i:number,key:'start_minute'|'end_minute',value:string){const m=minutes(value);setWindows(w=>w.map((v,n)=>n===i?{...v,[key]:key==='end_minute'&&m===0?1440:m}:v));}
+ return <main className="min-h-screen bg-black p-4 text-white md:p-6"><div className="min-h-screen rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(250,180,20,0.18),_transparent_35%),linear-gradient(135deg,_#050505,_#111111_45%,_#050505)] p-4 md:p-8"><div className="mx-auto max-w-3xl">
+ <header className="mb-8"><p className="mb-2 text-xs font-black uppercase tracking-[0.45em] text-yellow-400">FXA FITNESS</p><h1 className="text-4xl font-black tracking-tight md:text-6xl">My Schedule</h1><p className="mt-3 text-sm text-gray-400">Weekly availability, client bookings and Google Calendar. Toronto time.</p><Link href="/trainer/scan" className="mt-4 inline-block text-yellow-400">Back to Scanner</Link></header>
+ {message&&<p role="status" className="mb-5 rounded-2xl border border-yellow-400/30 bg-yellow-400/10 p-4 text-sm">{message}</p>}
+ {loading?<p>Loading schedule...</p>:<>
+ <section className="rounded-[2rem] border border-yellow-500/30 bg-white/[0.07] p-6"><h2 className="text-xl font-black">Google Calendar</h2><p className="mt-2 text-sm text-gray-400">{connection?.connected?connection.google_email||'Connected':'Not connected. Clients cannot book until your calendar is connected.'}</p><button type="button" onClick={connect} disabled={busy} className="mt-4 rounded-2xl border border-yellow-400 px-5 py-3 text-sm font-black text-yellow-400 disabled:opacity-50">{connection?.connected?'Reconnect Google Calendar':'Connect Google Calendar'}</button></section>
+ <section className="mt-5 rounded-[2rem] border border-white/15 bg-white/[0.07] p-6"><details><summary className="cursor-pointer text-xl font-black">Edit Availability</summary><p className="mt-3 text-xs text-gray-400">Repeats every week. Empty days are closed. Existing bookings are never removed by schedule edits.</p>
+ {days.map((day,d)=><div key={day} className="mt-5 border-b border-white/10 pb-4"><div className="flex items-center justify-between"><h3 className="font-bold">{day}</h3><button type="button" disabled={busy} onClick={()=>setWindows(w=>[...w,{weekday:d,start_minute:540,end_minute:1020}])} className="text-sm text-yellow-400">+ Add hours</button></div>{windows.map((w,i)=>w.weekday!==d?null:<div key={i} className="mt-2 flex flex-wrap items-center gap-2"><input aria-label={`${day} start ${i}`} type="time" step="60" className={field} value={clock(w.start_minute)} disabled={busy} onChange={e=>edit(i,'start_minute',e.target.value)}/><span>to</span><input aria-label={`${day} end ${i}`} type="time" step="60" className={field} value={clock(w.end_minute)} disabled={busy} onChange={e=>edit(i,'end_minute',e.target.value)}/><button type="button" disabled={busy} onClick={()=>setWindows(v=>v.filter((_,n)=>n!==i))} className="text-xs text-gray-400">Remove</button></div>)}</div>)}
+ <button type="button" disabled={busy} onClick={()=>action(async()=>{if(!validWindows(windows))throw new Error('Hours must be at least 60 minutes and cannot overlap.');await bookingFetch('/api/bookings/schedule','PUT',{windows});setMessage('Weekly availability saved.');})} className="mt-5 w-full rounded-2xl bg-yellow-400 p-3 font-black text-black disabled:opacity-50">Save Availability</button></details></section>
+ <section className="mt-5 rounded-[2rem] border border-white/15 bg-white/[0.07] p-6"><details><summary className="cursor-pointer text-xl font-black">One-Time Block</summary><div className="mt-4 flex flex-wrap gap-2"><input aria-label="Block date" type="date" className={field} value={blockDate} min={businessDate()} onChange={e=>setBlockDate(e.target.value)}/><input aria-label="Block start" type="time" className={field} value={start} onChange={e=>setStart(e.target.value)}/><input aria-label="Block end" type="time" className={field} value={end} onChange={e=>setEnd(e.target.value)}/><input aria-label="Block reason" className={field+' w-full'} value={reason} placeholder="Reason (optional)" onChange={e=>setReason(e.target.value)}/></div><button type="button" disabled={busy} onClick={()=>action(async()=>{const a=torontoInstant(blockDate,minutes(start)),b=torontoInstant(blockDate,minutes(end)||1440);if(!a||!b)throw new Error('Choose an unambiguous Toronto time.');await bookingFetch('/api/bookings/schedule','POST',{startsAt:a,endsAt:b,reason});setMessage('Time blocked.');})} className="mt-4 rounded-xl bg-yellow-400 px-5 py-3 font-bold text-black disabled:opacity-50">Block Time</button></details>
+ {blocks.map(b=><div key={b.id} className="mt-4 border-t border-white/10 pt-3 text-sm"><p>{label(b.starts_at)} - {label(b.ends_at)}</p><p className="text-gray-500">{b.reason}</p><button type="button" disabled={busy} onClick={()=>action(async()=>{await bookingFetch('/api/bookings/schedule','DELETE',{id:b.id});})} className="mt-2 text-yellow-400">Remove block</button></div>)}</section>
+ <section className="mt-5 rounded-[2rem] border border-white/15 bg-white/[0.07] p-6"><h2 className="text-xl font-black">Client Bookings</h2>{!bookings.length&&<p className="mt-4 text-gray-400">No bookings.</p>}{bookings.map(b=><article key={b.id} className="mt-4 rounded-2xl border border-white/10 p-4"><p className="font-bold text-yellow-400">{label(b.starts_at)}</p><p className="mt-1 font-bold">{b.client_name}</p><p className="mt-2 text-xs text-gray-400">{b.google_sync_status==='synced'?'Calendar synced':'Calendar sync pending'}</p><div className="mt-3 flex flex-wrap gap-4"><Link href={`/trainer/scan?bookingId=${b.id}`} className="text-sm text-yellow-400">Record session</Link>{b.google_sync_status!=='synced'&&<button type="button" disabled={busy} onClick={()=>action(async()=>{await bookingFetch('/api/bookings/sync','POST',{bookingId:b.id});})} className="text-sm text-yellow-400">Retry calendar sync</button>}{b.can_cancel&&<button type="button" disabled={busy} onClick={()=>{const note=window.prompt('Reason for cancelling this session:');if(note?.trim())void action(async()=>{await bookingFetch('/api/bookings/cancel','POST',{bookingId:b.id,reason:note});setMessage('Session cancelled.');});}} className="text-sm text-gray-400">Cancel</button>}</div></article>)}</section>
+ </>}
+ </div></div></main>;
 }
