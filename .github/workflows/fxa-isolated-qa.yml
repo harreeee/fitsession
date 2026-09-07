@@ -1,32 +1,84 @@
-name: FXA isolated QA - no deploy
+name: FXA Core and Booking - isolated regression (no deploy)
 on:
   push:
     branches: [repair/core-booking-20260907]
+  pull_request:
+    branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: fxa-repair-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  tools:
+  import-reviewed-repair:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/repair/core-booking-20260907'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      source_sha: ${{ steps.import.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - name: Apply checksum-verified repair only on authorized branch
+        id: import
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/repair/core-booking-20260907'
+          test "$(git ls-remote origin "$GITHUB_REF" | cut -f1)" = "$GITHUB_SHA"
+          python3 .ci/import-repair.py --apply
+          git add --pathspec-from-file="$RUNNER_TEMP/fxa-repair-paths.txt"
+          if ! git diff --cached --quiet; then
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Apply verified FXA core and Booking V2 repair (51 files, no deployment)'
+            git push origin HEAD:refs/heads/repair/core-booking-20260907
+          fi
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Applied source commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+  regression:
+    needs: import-reviewed-repair
+    if: always() && (needs.import-reviewed-repair.result == 'success' || needs.import-reviewed-repair.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: local-test-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: local-test-service-role-key
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.import-reviewed-repair.outputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Prepare local verification tools (no app secrets)
+          cache: npm
+      - name: Install locked application dependencies
+        run: npm ci
+      - name: Install locked isolated test dependencies
+        run: npm ci --prefix tests --ignore-scripts
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Booking-scoped ESLint
+        run: npx eslint lib/booking app/api/bookings app/api/google-calendar components/BookingPanel.tsx app/client/book/page.tsx app/trainer/calendar/page.tsx
+      - name: Unit, SQL, Google-mock, production build, and HTTP integration
+        run: node tests/run-isolated.cjs
+      - name: Record exact source revision
+        if: always()
         run: |
-          mkdir -p /tmp/fxa-browser-tools
-          npm install --prefix /tmp/fxa-browser-tools --save-exact agent-browser supabase
-          /tmp/fxa-browser-tools/node_modules/.bin/agent-browser install
-          curl -fsSL https://supabase.com/changelog.md -o /tmp/fxa-browser-tools/supabase-changelog.md
-          tar -czf fxa-browser-tools.tar.gz -C /tmp/fxa-browser-tools node_modules supabase-changelog.md
-          tar -czf fxa-browser-cache.tar.gz -C "$HOME/.agent-browser" browsers
+          mkdir -p qa-artifacts
+          git rev-parse HEAD > qa-artifacts/source-commit.txt
+          echo 'These checks use synthetic data. No production migration or deployment is performed.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: fxa-browser-tools
-          path: |
-            fxa-browser-tools.tar.gz
-            fxa-browser-cache.tar.gz
-          retention-days: 1
+          name: fxa-regression-${{ github.run_id }}
+          path: qa-artifacts/
+          retention-days: 14
