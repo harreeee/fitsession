@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { businessDate, torontoInstant } from "../../../lib/businessTime";
 import { Html5Qrcode } from "html5-qrcode";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
@@ -328,6 +329,10 @@ export default function TrainerScanPage() {
   const router = useRouter();
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const scanningLockRef = useRef(false);
+  const cameraStartRef = useRef(false);
+  const cameraGenerationRef = useRef(0);
+  const saveLockRef = useRef(false);
+  const pendingScanRef = useRef<{qr:string;requestId:string;photoPath:string|null;bookingId:string|null}|null>(null);
 
   const [result, setResult] = useState<ScanResult>({ type: "", message: "" });
   const [scannerStarted, setScannerStarted] = useState(false);
@@ -710,6 +715,7 @@ export default function TrainerScanPage() {
   }
 
   async function stopScanner() {
+    cameraGenerationRef.current += 1;
     const scanner = scannerRef.current;
 
     try {
@@ -901,8 +907,7 @@ export default function TrainerScanPage() {
       return;
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = new Date(torontoInstant(businessDate())!);
 
     const { data: todayLogs, error: todayLogsError } = await supabase
       .from("session_history")
@@ -1126,109 +1131,32 @@ export default function TrainerScanPage() {
   }
 
   async function saveTrainerNote() {
-    if (!isValidUuid(lastScannedHistoryId)) {
-      setNoteMessage("No valid completed scan was found for this update.");
-      return;
-    }
-
-    const cleanTopic = sessionTopic.trim();
-    const cleanContent = sessionContent.trim();
-    const cleanNote = trainerNote.trim();
-
-    if (!cleanTopic || !cleanContent) {
-      setNoteMessage(
-        "Session Topic and Session Content are required before this session can be completed.",
-      );
-      return;
-    }
-
-    setSavingNote(true);
-    setNoteMessage("");
-
-    let uploadedPhotoPath: string | null = null;
-
+    const pending = pendingScanRef.current;
+    if (saveLockRef.current || !pending || !isValidUuid(lastScannedHistoryId)) return;
+    const cleanTopic=sessionTopic.trim(), cleanContent=sessionContent.trim();
+    if(!cleanTopic || !cleanContent){setNoteMessage("Session Topic and Content are required.");return;}
+    saveLockRef.current=true;setSavingNote(true);setNoteMessage("");
     try {
-      if (sessionPhoto) {
-        setNoteMessage("Uploading photo...");
-        uploadedPhotoPath = await uploadSessionPhoto(lastScannedHistoryId);
+      if(sessionPhoto && !pending.photoPath) {
+        pending.photoPath=await uploadSessionPhoto(pending.requestId);
+        try { const key=`fxa-session-draft:${trainerId}`;const stored=JSON.parse(window.sessionStorage.getItem(key)||"{}");window.sessionStorage.setItem(key,JSON.stringify({...stored,pending})); } catch { /* The current in-memory draft is retained. */ }
       }
-
-      const updatePayload: {
-        session_topic: string;
-        session_content: string;
-        trainer_note: string | null;
-        photo_path?: string | null;
-      } = {
-        session_topic: cleanTopic,
-        session_content: cleanContent,
-        trainer_note: cleanNote || null,
-      };
-
-      if (uploadedPhotoPath) {
-        updatePayload.photo_path = uploadedPhotoPath;
-      }
-
-      // IMPORTANT: ask PostgREST to return the updated row so the app can
-      // verify that Session Topic + Session Content were actually persisted.
-      // An UPDATE blocked by RLS can otherwise affect zero rows without giving
-      // the trainer a useful confirmation that the note was not saved.
-      const { data: updatedRow, error } = await supabase
-        .from("session_history")
-        .update(updatePayload)
-        .eq("id", lastScannedHistoryId)
-        .select("id, session_topic, session_content, trainer_note, photo_path")
-        .maybeSingle();
-
-      if (error) {
-        if (uploadedPhotoPath) {
-          await supabase.storage
-            .from("session-photos")
-            .remove([uploadedPhotoPath]);
-        }
-
-        throw error;
-      }
-
-      if (!updatedRow?.id) {
-        throw new Error(
-          "The session was recorded, but the workout note could not be verified. The form has been kept open. Please tap Save & Finish again. If this repeats, check the session_history UPDATE policy.",
-        );
-      }
-
-      const savedTopic = String(updatedRow.session_topic || "").trim();
-      const savedContent = String(updatedRow.session_content || "").trim();
-
-      if (savedTopic !== cleanTopic || savedContent !== cleanContent) {
-        throw new Error(
-          "The workout note did not match what was entered. The form has been kept open so you do not lose the Session Topic or Session Content.",
-        );
-      }
-
-      setNoteMessage(
-        sessionPhoto
-          ? "Session record and photo saved. This session is complete."
-          : "Session record saved. This session is complete.",
-      );
-      setResult({
-        type: "success",
-        message: `SESSION COMPLETE — ${lastScannedClientName || "Client"}. Session Topic and Session Content were saved and verified successfully.`,
+      const {data,error}=await supabase.rpc("fxa_finalize_session",{
+        p_request_id:pending.requestId,p_qr_token:pending.qr,p_session_type:lastScannedType,
+        p_session_status:lastScannedStatus,p_topic:cleanTopic,p_content:cleanContent,
+        p_note:trainerNote.trim()||null,p_photo_path:pending.photoPath,p_booking_id:pending.bookingId
       });
-      setShowNoteBox(false);
-      setSessionTopic("");
-      setSessionContent("");
-      setTrainerNote("");
-      clearSessionPhoto();
-      setLastScannedHistoryId(null);
-  
-      if (isValidUuid(trainerId)) await fetchTrainerStats(trainerId);
-      if (selectedNoteClientId) {
-        await fetchClientLessonHistory(selectedNoteClientId);
-      }
-    } catch (error) {
-      setNoteMessage(getErrorMessage(error) || "Unable to save session update.");
-    } finally {
-      setSavingNote(false);
-    }
+      if(error)throw error;
+      if(!isValidUuid(data?.history_id)||data.session_topic!==cleanTopic||data.session_content!==cleanContent)throw new Error("Could not verify the saved session. Retry this form; do not scan again.");
+      setLastScannedRemaining(data.remaining_after ?? null);
+      setResult({type:"success",message:`SESSION COMPLETE - ${lastScannedClientName}. Content saved; session balance verified.`});
+      pendingScanRef.current=null;
+      window.sessionStorage.removeItem(`fxa-session-draft:${trainerId}`);
+      setShowNoteBox(false);setSessionTopic("");setSessionContent("");setTrainerNote("");clearSessionPhoto();setLastScannedHistoryId(null);
+      if(isValidUuid(trainerId))await fetchTrainerStats(trainerId);
+      if(selectedNoteClientId)await fetchClientLessonHistory(selectedNoteClientId);
+    } catch(error){setNoteMessage(`${getErrorMessage(error)} Your form is retained. Retry Save & Finish with the same details.`);}
+    finally{saveLockRef.current=false;setSavingNote(false);}
   }
 
   async function startScanner(
@@ -1245,7 +1173,7 @@ export default function TrainerScanPage() {
       return;
     }
 
-    if (scannerStarted || scannerRef.current) return;
+    if (scannerStarted || scannerRef.current || cameraStartRef.current) return;
 
     const environmentIssue = getCameraEnvironmentIssue();
     if (environmentIssue) {
@@ -1280,6 +1208,8 @@ export default function TrainerScanPage() {
     setLastScannedAt(null);
     scanningLockRef.current = false;
 
+    cameraStartRef.current=true;
+    const cameraGeneration=++cameraGenerationRef.current;
     const qrSize = Math.min(
       320,
       Math.max(
@@ -1297,7 +1227,7 @@ export default function TrainerScanPage() {
     };
 
     const onScanSuccess = async (decodedText: string) => {
-      if (scanningLockRef.current) return;
+      if (scanningLockRef.current || cameraGeneration !== cameraGenerationRef.current) return;
       scanningLockRef.current = true;
 
       const qrToken = extractQrToken(decodedText);
@@ -1334,6 +1264,7 @@ export default function TrainerScanPage() {
           onScanSuccess,
           () => {},
         );
+        if(cameraGeneration !== cameraGenerationRef.current){if(scanner.isScanning)await scanner.stop();scanner.clear();return;}
         setCameraOpening(false);
       } catch (firstError) {
         const firstMessage = getCameraStartErrorMessage(firstError).toLowerCase();
@@ -1358,6 +1289,7 @@ export default function TrainerScanPage() {
           onScanSuccess,
           () => {},
         );
+        if(cameraGeneration !== cameraGenerationRef.current){if(scanner.isScanning)await scanner.stop();scanner.clear();return;}
         setCameraOpening(false);
       }
     } catch (error) {
@@ -1379,171 +1311,38 @@ export default function TrainerScanPage() {
         type: "error",
         message: getCameraStartErrorMessage(error),
       });
-    }
+    } finally { cameraStartRef.current=false; }
   }
 
-  async function markSession(
-    qrToken: string,
-    sessionType: SessionType,
-    sessionStatus: SessionStatus,
-  ) {
-    const cleanQrToken = qrToken.trim();
-
-    setShowNoteBox(false);
-    setSessionTopic("");
-    setSessionContent("");
-    setTrainerNote("");
-    clearSessionPhoto();
-    setLastScannedHistoryId(null);
-    setLastScannedStatus("success");
-    setNoteMessage("");
-
-    const { data: authData, error: authError } = await supabase.auth.getUser();
-    const authenticatedUserId = authData.user?.id;
-
-    if (authError || !isValidUuid(authenticatedUserId)) {
-      setResult({
-        type: "error",
-        message: "Your login session does not contain a valid staff ID. Please sign out and sign in again. No session was deducted.",
-      });
-      return;
-    }
-
-    if (!isValidUuid(trainerId) || trainerId !== authenticatedUserId) {
-      setTrainerId(authenticatedUserId);
-    }
-
-    const cleanTrainerRole = normalizeScannerRole(trainerRole);
-
-    if (!canScanClients(cleanTrainerRole)) {
-      setResult({
-        type: "error",
-        message:
-          "This account cannot scan clients. Allowed roles: trainer, nutrition coach, or admin.",
-      });
-      return;
-    }
-
-    if (
-      sessionType === "nutrition_follow_up" &&
-      cleanTrainerRole !== "nutrition_coach" &&
-      cleanTrainerRole !== "admin"
-    ) {
-      setResult({
-        type: "error",
-        message:
-          "Only a Nutrition Coach or Admin can record a nutrition follow-up.",
-      });
-      return;
-    }
-
-    if (
-      sessionType === "training" &&
-      !["success", "no_show", "late_cancel"].includes(sessionStatus)
-    ) {
-      setResult({
-        type: "error",
-        message: "Invalid training status. No session was deducted.",
-      });
-      return;
-    }
-
-    let rpcRecorded = false;
-
+  async function markSession(qrToken:string,sessionType:SessionType,sessionStatus:SessionStatus) {
+    if(pendingScanRef.current)return;
     try {
-      const { data, error } = await supabase.rpc("record_staff_session", {
-        p_qr_token: cleanQrToken,
-        p_session_type: sessionType,
-        p_session_status:
-          sessionType === "nutrition_follow_up" ? "success" : sessionStatus,
-      });
-
-      if (error) {
-        // The database function is atomic: when it returns an error, no training
-        // session should be deducted and no successful history row is created.
-        const lowerMessage = error.message.toLowerCase();
-
-        if (
-          lowerMessage.includes("record_staff_session") ||
-          lowerMessage.includes("function") ||
-          lowerMessage.includes("schema cache")
-        ) {
-          throw new Error(
-            "The secure session function is not installed yet. Run the nutrition follow-up SQL migration in Supabase, then reload the app.",
-          );
-        }
-
-        throw error;
-      }
-
-      // At this point the RPC completed successfully. Any later client-side
-      // validation error must not claim that no session was deducted.
-      rpcRecorded = true;
-
-      const rawRow = Array.isArray(data) ? data[0] : data;
-      const row = rawRow as RecordSessionRpcRow | null;
-
-      if (!row || !isValidUuid(row.history_id)) {
-        console.error("Invalid RPC response from record_staff_session:", rawRow);
-        throw new Error(
-          "The scan function returned an invalid history ID. No additional action was taken in the app. Check the record_staff_session SQL function return columns.",
-        );
-      }
-
-      const savedStatus: SessionStatus =
-        row.session_type === "nutrition_follow_up"
-          ? "success"
-          : row.session_status || sessionStatus;
-
-      setLastScannedHistoryId(row.history_id);
-      setLastScannedType(row.session_type || sessionType);
-      setLastScannedStatus(savedStatus);
-      setLastScannedClientId(row.client_id || "");
-      setLastScannedClientName(row.client_name || "Client");
-      setLastScannedRemaining(row.remaining_after ?? null);
-      setLastScannedAt(new Date().toISOString());
-      setShowNoteBox(true);
-
-      const trainingRemaining = row.remaining_after ?? 0;
-      const nutritionRemaining = row.nutrition_remaining ?? 0;
-      const nutritionUsed = row.nutrition_used ?? 0;
-      const nutritionAllowed = row.nutrition_allowed ?? 0;
-
-      if (row.session_type === "nutrition_follow_up") {
-        setResult({
-          type: "success",
-          message: `QR RECORDED — ${row.client_name}. Nutrition follow-up was recorded and no training session was deducted. Complete the required Topic + Follow-up Content below before continuing. Nutrition follow-ups remaining: ${nutritionRemaining} (${nutritionUsed}/${nutritionAllowed} used). Training sessions remaining: ${trainingRemaining}.`,
-        });
-      } else if (savedStatus === "no_show") {
-        setResult({
-          type: "success",
-          message: `NO-SHOW RECORDED — ${row.client_name}. 1 training session was deducted. Complete the required Topic + Follow-up Action below before continuing. Training sessions remaining: ${trainingRemaining}.`,
-        });
-      } else if (savedStatus === "late_cancel") {
-        setResult({
-          type: "success",
-          message: `LATE CANCEL RECORDED — ${row.client_name}. 1 training session was deducted. Complete the required Topic + Cancellation Details below before continuing. Training sessions remaining: ${trainingRemaining}.`,
-        });
-      } else {
-        setResult({
-          type: "success",
-          message: `QR RECORDED — ${row.client_name}. 1 training session was deducted. Complete the required Session Topic + Session Content below before this workflow is finished. Training sessions remaining: ${trainingRemaining}.`,
-        });
-      }
-
-      if (isValidUuid(authenticatedUserId)) {
-        await fetchTrainerStats(authenticatedUserId);
-      }
-    } catch (error) {
-      const baseMessage = getErrorMessage(error) || "Unable to process this scan.";
-      setResult({
-        type: "error",
-        message: rpcRecorded
-          ? `${baseMessage} The database may already have recorded this scan. Check Session History before scanning the client again.`
-          : `${baseMessage} No session was deducted.`,
-      });
-    }
+      const {data,error}=await supabase.rpc("fxa_preview_session",{p_qr_token:qrToken.trim(),p_session_type:sessionType,p_session_status:sessionType==="nutrition_follow_up"?"success":sessionStatus});
+      if(error)throw error;
+      if(!isValidUuid(data?.client_id))throw new Error("Invalid scan response.");
+      const id=crypto.randomUUID();
+      const bookingId=new URLSearchParams(window.location.search).get("bookingId");
+      pendingScanRef.current={qr:qrToken.trim(),requestId:id,photoPath:null,bookingId};
+      setLastScannedHistoryId(id);setLastScannedType(sessionType);setLastScannedStatus(sessionType==="nutrition_follow_up"?"success":sessionStatus);
+      setLastScannedClientId(data.client_id);setLastScannedClientName(data.client_name);setLastScannedRemaining(data.remaining_after);setLastScannedAt(new Date().toISOString());
+      setSessionTopic("");setSessionContent("");setTrainerNote("");setNoteMessage("");setShowNoteBox(true);
+      setResult({type:"success",message:`QR VERIFIED - ${data.client_name}. No session has been deducted. Add Topic and Content, then tap Save & Finish.`});
+    }catch(error){setResult({type:"error",message:`${getErrorMessage(error)} No session was deducted.`});}
   }
+
+  useEffect(()=>{
+    if(!trainerId || pendingScanRef.current)return;
+    let alive=true;Promise.resolve().then(()=>{if(!alive)return;try{const raw=window.sessionStorage.getItem(`fxa-session-draft:${trainerId}`);if(!raw)return;const d=JSON.parse(raw);
+      if(!isValidUuid(d.pending?.requestId)||!isValidUuid(d.clientId))return;
+      pendingScanRef.current=d.pending;setLastScannedHistoryId(d.pending.requestId);setLastScannedClientId(d.clientId);setLastScannedClientName(d.name);setLastScannedType(d.type);setLastScannedStatus(d.status);setSessionTopic(d.topic||"");setSessionContent(d.content||"");setTrainerNote(d.note||"");setLastScannedRemaining(d.remaining);setShowNoteBox(true);setActiveMobileTab("scan");
+    }catch{window.sessionStorage.removeItem(`fxa-session-draft:${trainerId}`);}});return()=>{alive=false;};
+  },[trainerId]);
+  useEffect(()=>{
+    if(!trainerId||!pendingScanRef.current||!showNoteBox)return;
+    const draft={pending:pendingScanRef.current,clientId:lastScannedClientId,name:lastScannedClientName,type:lastScannedType,status:lastScannedStatus,topic:sessionTopic,content:sessionContent,note:trainerNote,remaining:lastScannedRemaining};
+    try { window.sessionStorage.setItem(`fxa-session-draft:${trainerId}`,JSON.stringify(draft)); } catch { /* Restricted storage must not crash the scanner. */ }
+  },[trainerId,showNoteBox,lastScannedClientId,lastScannedClientName,lastScannedType,lastScannedStatus,sessionTopic,sessionContent,trainerNote,lastScannedRemaining]);
+
 
   useEffect(() => {
     let alive = true;
@@ -1699,6 +1498,8 @@ export default function TrainerScanPage() {
         }
 
         #qr-reader video {
+          object-fit: cover;
+          transition: opacity 160ms ease-out;
           border-radius: 22px !important;
           object-fit: cover !important;
         }
@@ -2160,11 +1961,11 @@ export default function TrainerScanPage() {
                   <span className="absolute bottom-0 right-0 z-20 h-8 w-8 rounded-br-[24px] border-b-4 border-r-4 border-yellow-400" />
                   <div
                     id="qr-reader"
-                    className="min-h-[360px] w-full overflow-hidden rounded-[22px] bg-[#080808] text-white md:min-h-[500px]"
+                    className="aspect-[3/4] w-full overflow-hidden rounded-[22px] bg-[#080808] text-white"
                   />
 
                   {cameraOpening ? (
-                    <div className="pointer-events-none absolute inset-2 z-10 flex min-h-[360px] items-center justify-center rounded-[22px] bg-black/85 md:min-h-[500px]">
+                    <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-[22px] bg-black/85">
                       <div className="text-center">
                         <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-yellow-400/20 border-t-yellow-400" />
                         <p className="mt-4 text-sm font-bold text-white">Opening camera...</p>

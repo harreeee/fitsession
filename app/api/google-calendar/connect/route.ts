@@ -1,69 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createServiceSupabaseClient } from "../../../../lib/supabaseServer";
-import { getGoogleOAuthUrl } from "../../../../lib/googleCalendar";
-
-export const runtime = "nodejs";
-
-export async function GET(request: NextRequest) {
-  try {
-    const token = request.nextUrl.searchParams.get("token");
-
-    if (!token) {
-      return NextResponse.json(
-        { error: "Missing Supabase access token." },
-        { status: 401 }
-      );
-    }
-
-    const supabase = createServiceSupabaseClient();
-
-    const { data: userData, error: userError } = await supabase.auth.getUser(
-      token
-    );
-
-    if (userError || !userData.user) {
-      return NextResponse.json(
-        { error: userError?.message || "Invalid Supabase access token." },
-        { status: 401 }
-      );
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", userData.user.id)
-      .maybeSingle();
-
-    if (profileError) {
-      throw profileError;
-    }
-
-    if (
-      profile?.role !== "admin" &&
-      profile?.role !== "trainer" &&
-      profile?.role !== "nutrition_coach"
-    ) {
-      return NextResponse.json({ error: "Not allowed." }, { status: 403 });
-    }
-
-    const state = crypto.randomUUID();
-
-    const { error: stateError } = await supabase
-      .from("google_calendar_oauth_states")
-      .insert({
-        state,
-        trainer_id: userData.user.id,
-      });
-
-    if (stateError) {
-      throw stateError;
-    }
-
-    return NextResponse.redirect(getGoogleOAuthUrl(state));
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Google Calendar connect failed.";
-
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-}
+import { NextResponse } from 'next/server';
+import { bookingContext, fail, BookingError } from '@/lib/booking/server';
+import { getGoogleOAuthUrl, requireEnv } from '@/lib/googleCalendar';
+export async function POST(request:Request){try{
+ const {admin,user}=await bookingContext(request,['trainer','admin']);
+ if(new URL(requireEnv('GOOGLE_REDIRECT_URI')).origin!==new URL(request.url).origin)throw new BookingError('Google callback is not configured for this environment.',503);
+ const state=crypto.randomUUID();const {error}=await admin.from('google_calendar_oauth_states').insert({state,trainer_id:user.id});if(error)throw error;
+ const response=NextResponse.json({url:getGoogleOAuthUrl(state)});
+ response.cookies.set('fxa-calendar-state',state,{httpOnly:true,secure:new URL(request.url).protocol==='https:',sameSite:'lax',maxAge:600,path:'/api/google-calendar/callback'});
+ return response;
+}catch(e){return fail(e);}}

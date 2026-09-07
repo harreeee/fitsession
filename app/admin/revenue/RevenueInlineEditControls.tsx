@@ -1,4 +1,5 @@
 "use client";
+import { businessDate, currentPackage as selectCurrentPackage } from "@/lib/businessTime";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabaseClient";
@@ -121,6 +122,7 @@ export default function RevenueInlineEditControls() {
 
   const [transactions, setTransactions] = useState<BusinessTransaction[]>([]);
   const [payables, setPayables] = useState<BusinessPayable[]>([]);
+  const [fullBalances,setFullBalances]=useState<Map<string,number>>(new Map());
   const [accounts, setAccounts] = useState<FinanceAccount[]>([]);
   const [transfers, setTransfers] = useState<FinanceTransfer[]>([]);
   const [clientPurchases, setClientPurchases] = useState<ClientPurchase[]>([]);
@@ -186,6 +188,9 @@ export default function RevenueInlineEditControls() {
     setTransactions((transactionResult.data || []) as BusinessTransaction[]);
     setPayables((payableResult.data || []) as BusinessPayable[]);
     setAccounts((accountResult.data || []) as FinanceAccount[]);
+    const totals=await supabase.rpc("fxa_finance_balances");
+    if(totals.error){setMessage(totals.error.message);setLoading(false);return;}
+    setFullBalances(new Map((totals.data||[]).map((r:{id:string;balance:number|string})=>[r.id,Number(r.balance)])));
     setTransfers((transferResult.data || []) as FinanceTransfer[]);
     setClientPurchases((purchaseResult.data || []) as ClientPurchase[]);
     setLoading(false);
@@ -200,29 +205,7 @@ export default function RevenueInlineEditControls() {
     [accounts],
   );
 
-  const accountBalances = useMemo(() => {
-    const balances = new Map<string, number>();
-
-    for (const account of accounts) {
-      balances.set(account.id, numberValue(account.opening_balance));
-    }
-
-    for (const transaction of transactions) {
-      if (!transaction.account_id) continue;
-      const current = balances.get(transaction.account_id) || 0;
-      const amount = numberValue(transaction.amount);
-
-      if (transaction.transaction_type === "income") {
-        balances.set(transaction.account_id, current + Math.abs(amount));
-      } else if (transaction.transaction_type === "expense") {
-        balances.set(transaction.account_id, current - Math.abs(amount));
-      } else {
-        balances.set(transaction.account_id, current + amount);
-      }
-    }
-
-    return balances;
-  }, [accounts, transactions]);
+  const accountBalances = fullBalances;
 
   const cleanSearch = search.trim().toLowerCase();
 
@@ -470,6 +453,7 @@ export default function RevenueInlineEditControls() {
     closeEditor();
     setMessage("Đã cập nhật. Các số tổng hợp Revenue sẽ tự tính lại từ dữ liệu nguồn.");
     await fetchData();
+    window.dispatchEvent(new Event("fxa:finance-updated"));
   }
 
   function transactionEditButton(row: BusinessTransaction) {

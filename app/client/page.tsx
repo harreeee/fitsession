@@ -1,4 +1,5 @@
 "use client";
+import { businessDate, currentPackage as selectCurrentPackage } from "@/lib/businessTime";
 
 import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -19,6 +20,7 @@ type ClientData = {
     used_sessions: number | null;
     remaining_sessions: number | null;
     status: string | null;
+    created_at?: string | null;
   }[];
 };
 
@@ -633,7 +635,7 @@ export default function ClientPortalPage() {
       .from("clients")
       .select(
         `id, full_name, email, phone, qr_token, status,
-        session_packages (total_sessions, used_sessions, remaining_sessions, status)`
+        session_packages (total_sessions, used_sessions, remaining_sessions, status, created_at)`
       )
       .or(`profile_id.eq.${userData.user.id},email.eq.${loginEmail}`)
       .limit(1)
@@ -752,10 +754,7 @@ export default function ClientPortalPage() {
     );
   }
 
-  const activePackage =
-    client.session_packages?.find(
-      (packageRow) => packageRow.status === "active"
-    ) || client.session_packages?.[0];
+  const activePackage = selectCurrentPackage(client.session_packages || []);
 
   const usedPct = getSessionBarWidth(
     activePackage?.used_sessions ?? 0,

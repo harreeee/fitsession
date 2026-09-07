@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 type AllowedClientUpdate = {
+  assigned_nutrition_coach_id?: string | null;
+  assigned_trainer_id?: string | null;
+  sales_person_id?: string | null;
+  client_note?: string | null;
+  client_code?: string | null;
   full_name?: string | null;
   email?: string | null;
   phone?: string | null;
@@ -13,6 +18,11 @@ type AllowedClientUpdate = {
 };
 
 const allowedFields = new Set<keyof AllowedClientUpdate>([
+  "assigned_nutrition_coach_id",
+  "assigned_trainer_id",
+  "sales_person_id",
+  "client_note",
+  "client_code",
   "full_name",
   "email",
   "phone",
@@ -103,7 +113,7 @@ export async function PATCH(
 
     const { data: profile, error: profileError } = await supabaseAdmin
       .from("profiles")
-      .select("id, role")
+      .select("id, role, has_manager_access")
       .eq("id", user.id)
       .single();
 
@@ -114,7 +124,7 @@ export async function PATCH(
       );
     }
 
-    if (profile.role !== "admin" && profile.role !== "manager") {
+    if (profile.role !== "admin" && profile.role !== "manager" && !(profile.role === "trainer" && profile.has_manager_access)) {
       return NextResponse.json(
         { error: "You do not have permission to edit client information." },
         { status: 403 }
@@ -149,6 +159,11 @@ export async function PATCH(
       );
     }
 
+    if(profile.role!=="admin" && Object.hasOwn(updatePayload,"client_code"))return NextResponse.json({error:"Only admins may edit client codes."},{status:403});
+    if(updatePayload.full_name!==undefined && !updatePayload.full_name?.trim())return NextResponse.json({error:"Client name is required."},{status:400});
+    for(const [key,roles] of [["assigned_trainer_id",["trainer"]],["assigned_nutrition_coach_id",["nutrition_coach"]],["sales_person_id",["trainer","nutrition_coach","admin"]]] as const){
+      const value=updatePayload[key];if(value){const result=await supabaseAdmin.from("profiles").select("id").eq("id",value).in("role",[...roles]).single();if(result.error)return NextResponse.json({error:"Selected staff member is invalid."},{status:400});}
+    }
     const { data: updatedClient, error: updateError } = await supabaseAdmin
       .from("clients")
       .update(updatePayload)

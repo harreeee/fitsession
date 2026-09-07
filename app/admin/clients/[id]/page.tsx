@@ -1,6 +1,9 @@
 "use client";
+import { bookingFetch } from "@/lib/booking/client";
+import { sessionText } from "@/lib/dataIntegrity";
+import { businessDate, currentPackage as selectCurrentPackage } from "@/lib/businessTime";
 
-import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { supabase } from "../../../../lib/supabaseClient";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -73,6 +76,8 @@ type SessionHistory = {
   status: string;
   message: string | null;
   trainer_note: string | null;
+  session_topic?: string | null;
+  session_content?: string | null;
   remaining_after: number | null;
   created_at: string | null;
   trainer_name: string;
@@ -153,7 +158,7 @@ function formatDateTimeInput(value: string | null | undefined) {
 }
 
 function getTodayInputDate() {
-  return new Date().toISOString().slice(0, 10);
+  return businessDate();
 }
 
 function formatMoney(value: number | null | undefined) {
@@ -306,6 +311,15 @@ function isDebtPurchase(purchase: ClientPurchase) {
 function AdminClientDetailPageContent() {
   const params = useParams();
   const router = useRouter();
+  const mutationLock=useRef(false);
+  const operationKeys=useRef<Record<string,string>>({});
+  const requestKey=(kind:string)=>operationKeys.current[kind] ||= crypto.randomUUID();
+  const errorText=(e:unknown)=>e instanceof Error?e.message:(e as {message?:string})?.message||"Unable to save.";
+  async function checkedClientUpdate(values:Record<string,unknown>){
+    try{await bookingFetch(`/api/admin/clients/${clientId}/basic-info`,"PATCH",values);return {error:null};}
+    catch(e){return {error:{message:errorText(e)}};}
+  }
+
   const searchParams = useSearchParams();
 
   const clientId = params.id as string;
@@ -444,7 +458,7 @@ function AdminClientDetailPageContent() {
     const { data: historyData, error: historyError } = await supabase
       .from("session_history")
       .select(
-        "id, trainer_id, session_type, status, message, trainer_note, remaining_after, created_at",
+        "id, trainer_id, session_type, status, message, session_topic, session_content, trainer_note, remaining_after, created_at",
       )
       .eq("client_id", clientId)
       .order("created_at", { ascending: false })
@@ -654,12 +668,7 @@ function AdminClientDetailPageContent() {
 
     setGeneratingActivationCode(true);
 
-    const { error } = await supabase
-      .from("clients")
-      .update({
-        activation_code: nextCode,
-      })
-      .eq("id", client.id);
+    const { error } = await supabase.from("clients").update({activation_code:nextCode}).eq("id",client.id).select("id").single();
 
     if (error) {
       alert(error.message);
@@ -728,10 +737,7 @@ function AdminClientDetailPageContent() {
                 : null,
           };
 
-    const { error } = await supabase
-      .from("clients")
-      .update(updatePayload)
-      .eq("id", client.id);
+    const { error } = await checkedClientUpdate(updatePayload);
 
     if (error) {
       alert(error.message);
@@ -756,12 +762,9 @@ function AdminClientDetailPageContent() {
 
     setSavingSalesPerson(true);
 
-    const { error } = await supabase
-      .from("clients")
-      .update({
+    const { error } = await checkedClientUpdate({
         sales_person_id: selectedSalesPersonId || null,
-      })
-      .eq("id", client.id);
+      });
 
     if (error) {
       alert(error.message);
@@ -786,13 +789,10 @@ function AdminClientDetailPageContent() {
 
     setSavingStaffAssignment(true);
 
-    const { error } = await supabase
-      .from("clients")
-      .update({
+    const { error } = await checkedClientUpdate({
         assigned_trainer_id: selectedTrainerId || null,
         assigned_nutrition_coach_id: selectedNutritionCoachId || null,
-      })
-      .eq("id", client.id);
+      });
 
     if (error) {
       alert(error.message);
@@ -862,272 +862,24 @@ function AdminClientDetailPageContent() {
     setSavingUploadedPurchaseType(false);
   }
 
-  async function saveNewRenewPackage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!client) return;
-
-    if (!allowPackageEdit) {
-      alert("Only admins can renew packages.");
-      return;
-    }
-
-    const addedSessions = packageTotalSessions.trim()
-      ? Number(packageTotalSessions)
-      : null;
-
-    const numericPackageValue = packageValue.trim()
-      ? Number(packageValue)
-      : null;
-
-    const numericAmountPaid = packageAmountPaid.trim()
-      ? Number(packageAmountPaid)
-      : (numericPackageValue ?? 0);
-
-    if (
-      addedSessions === null ||
-      Number.isNaN(addedSessions) ||
-      addedSessions <= 0
-    ) {
-      alert("Sessions to add must be a valid number greater than 0.");
-      return;
-    }
-
-    if (
-      numericPackageValue !== null &&
-      (Number.isNaN(numericPackageValue) || numericPackageValue < 0)
-    ) {
-      alert("Package value must be a valid number.");
-      return;
-    }
-
-    if (Number.isNaN(numericAmountPaid) || numericAmountPaid < 0) {
-      alert("Amount paid must be a valid number.");
-      return;
-    }
-
-    const cleanPackageValue = numericPackageValue ?? 0;
-    const cleanAmountPaid = Math.min(numericAmountPaid, cleanPackageValue);
-    const balanceDue = Math.max(cleanPackageValue - cleanAmountPaid, 0);
-
-    const currentPackage = packages[0] || null;
-
-    setSavingPackage(true);
-
-    if (currentPackage) {
-      const { totalSessions, usedSessions, remainingSessions } =
-        getPackageNumbers(currentPackage);
-
-      const currentPackageValue = Number(currentPackage.package_value || 0);
-
-      const newTotalSessions = totalSessions + addedSessions;
-      const newRemainingSessions = remainingSessions + addedSessions;
-      const newPackageValue = currentPackageValue + cleanPackageValue;
-
-      const { error: packageUpdateError } = await supabase
-        .from("session_packages")
-        .update({
-          package_name:
-            packageName.trim() ||
-            currentPackage.package_name ||
-            "Renew Package",
-          total_sessions: newTotalSessions,
-          used_sessions: usedSessions,
-          remaining_sessions: newRemainingSessions,
-          package_value: newPackageValue,
-          starts_at: packageStartDate
-            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
-            : currentPackage.starts_at,
-          expires_at: packageExpireDate
-            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
-            : currentPackage.expires_at,
-          status: "active",
-        })
-        .eq("id", currentPackage.id);
-
-      if (packageUpdateError) {
-        alert(packageUpdateError.message);
-        setSavingPackage(false);
-        return;
-      }
-    } else {
-      const { error: packageInsertError } = await supabase
-        .from("session_packages")
-        .insert({
-          client_id: client.id,
-          package_name: packageName.trim() || "Renew Package",
-          total_sessions: addedSessions,
-          used_sessions: 0,
-          remaining_sessions: addedSessions,
-          package_value: cleanPackageValue,
-          starts_at: packageStartDate
-            ? new Date(`${packageStartDate}T00:00:00`).toISOString()
-            : null,
-          expires_at: packageExpireDate
-            ? new Date(`${packageExpireDate}T23:59:59`).toISOString()
-            : null,
-          status: "active",
-          created_at: new Date().toISOString(),
-        });
-
-      if (packageInsertError) {
-        alert(packageInsertError.message);
-        setSavingPackage(false);
-        return;
-      }
-    }
-
-    const { error: purchaseInsertError } = await supabase
-      .from("client_purchases")
-      .insert({
-        client_id: client.id,
-        plan_name: packageName.trim() || "Renew Package",
-        session_count: addedSessions,
-        price: cleanPackageValue,
-        amount_paid: cleanAmountPaid,
-        balance_due: balanceDue,
-        debt_deadline: balanceDue > 0 ? packageExpireDate || null : null,
-        purchase_type: "renew",
-        status: "paid",
-        created_at: new Date().toISOString(),
-      });
-
-    if (purchaseInsertError) {
-      alert(purchaseInsertError.message);
-      setSavingPackage(false);
-      return;
-    }
-
-    setPackageName("");
-    setPackageTotalSessions("");
-    setPackageValue("");
-    setPackageAmountPaid("");
-    setPackageStartDate("");
-    setPackageExpireDate("");
-
-    alert(`Renew completed. Added ${addedSessions} sessions.`);
-    await fetchClientDetail();
-    setRenewPackageMode(false);
-    setSavingPackage(false);
+  async function saveNewRenewPackage(event:FormEvent<HTMLFormElement>){
+    event.preventDefault();if(!client||!allowPackageEdit||mutationLock.current)return;
+    const n=Number(packageTotalSessions),value=Number(packageValue||0),paid=packageAmountPaid.trim()?Number(packageAmountPaid):value;
+    if(!Number.isInteger(n)||n<=0||!Number.isFinite(value)||!Number.isFinite(paid)||paid<0||paid>value){alert("Check sessions and payment amounts.");return;}
+    mutationLock.current=true;setSavingPackage(true);
+    try{const {error}=await supabase.rpc("fxa_renew_package",{p_request_id:requestKey("renew"),p_client_id:client.id,p_package:{name:packageName,sessions:n,value,paid,starts_at:packageStartDate,expires_at:packageExpireDate}});if(error)throw error;
+      delete operationKeys.current.renew;alert(`Renew completed. Added ${n} sessions.`);await fetchClientDetail();setRenewPackageMode(false);window.dispatchEvent(new Event("fxa:finance-updated"));
+    }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setSavingPackage(false);}
   }
 
-  async function adjustClientSessions(actionType: SessionAdjustAction) {
-    if (!client) return;
-
-    if (!allowPackageEdit) {
-      alert("Only admins can adjust sessions.");
-      return;
-    }
-
-    const currentPackage = packages[0] || null;
-
-    if (!currentPackage) {
-      alert("No package found. Please renew/add a package first.");
-      return;
-    }
-
-    const amount = sessionAdjustValue.trim()
-      ? Number(sessionAdjustValue)
-      : null;
-
-    if (amount === null || Number.isNaN(amount) || amount < 0) {
-      alert("Please enter a valid session number.");
-      return;
-    }
-
-    if ((actionType === "add" || actionType === "subtract") && amount <= 0) {
-      alert("Session amount must be greater than 0.");
-      return;
-    }
-
-    const { totalSessions, usedSessions, remainingSessions } =
-      getPackageNumbers(currentPackage);
-
-    let nextTotalSessions = totalSessions;
-    let nextUsedSessions = usedSessions;
-    let nextRemainingSessions = remainingSessions;
-    let actionLabel = "Update Sessions";
-
-    if (actionType === "add") {
-      actionLabel = "Add Sessions";
-      nextTotalSessions = totalSessions + amount;
-      nextUsedSessions = usedSessions;
-      nextRemainingSessions = remainingSessions + amount;
-    }
-
-    if (actionType === "subtract") {
-      actionLabel = "Subtract Sessions";
-
-      if (amount > remainingSessions) {
-        alert(
-          `Cannot subtract ${amount} sessions. Client only has ${remainingSessions} remaining.`,
-        );
-        return;
-      }
-
-      nextTotalSessions = totalSessions;
-      nextUsedSessions = usedSessions + amount;
-      nextRemainingSessions = remainingSessions - amount;
-    }
-
-    if (actionType === "fixRemaining") {
-      actionLabel = "Fix Remaining Sessions";
-
-      if (amount > totalSessions) {
-        alert(
-          `Remaining sessions cannot be higher than total sessions.\n\nCurrent Total: ${totalSessions}\nYou entered Remaining: ${amount}\n\nUse Fix Total first if the total session number is wrong.`,
-        );
-        return;
-      }
-
-      nextTotalSessions = totalSessions;
-      nextRemainingSessions = amount;
-      nextUsedSessions = Math.max(totalSessions - amount, 0);
-    }
-
-    if (actionType === "fixTotal") {
-      actionLabel = "Fix Total Sessions";
-
-      if (amount < usedSessions) {
-        alert(
-          `Total sessions cannot be lower than used sessions. Used sessions is currently ${usedSessions}.`,
-        );
-        return;
-      }
-
-      nextTotalSessions = amount;
-      nextUsedSessions = usedSessions;
-      nextRemainingSessions = Math.max(amount - usedSessions, 0);
-    }
-
-    const confirmed = window.confirm(
-      `${actionLabel}?\n\nBefore:\nTotal: ${totalSessions}\nUsed: ${usedSessions}\nRemaining: ${remainingSessions}\n\nAfter:\nTotal: ${nextTotalSessions}\nUsed: ${nextUsedSessions}\nRemaining: ${nextRemainingSessions}`,
-    );
-
-    if (!confirmed) return;
-
-    setSessionAdjustAction(actionType);
-
-    const { error } = await supabase
-      .from("session_packages")
-      .update({
-        total_sessions: nextTotalSessions,
-        used_sessions: nextUsedSessions,
-        remaining_sessions: nextRemainingSessions,
-        status: nextRemainingSessions <= 0 ? "completed" : "active",
-      })
-      .eq("id", currentPackage.id);
-
-    if (error) {
-      alert(error.message);
-      setSessionAdjustAction(null);
-      return;
-    }
-
-    setSessionAdjustValue("");
-    alert("Sessions updated.");
-    await fetchClientDetail();
-    setSessionAdjustAction(null);
+  async function adjustClientSessions(actionType:SessionAdjustAction){
+    if(!client||!allowPackageEdit||mutationLock.current)return;const value=Number(sessionAdjustValue);
+    if(!Number.isInteger(value)||value<0){alert("Enter a non-negative whole number.");return;}
+    if(!window.confirm(`Apply ${actionType}: ${value} sessions?`))return;
+    mutationLock.current=true;setSessionAdjustAction(actionType);
+    try{const {error}=await supabase.rpc("fxa_adjust_sessions",{p_request_id:requestKey("adjust"),p_client_id:client.id,p_action:actionType,p_value:value});if(error)throw error;
+      delete operationKeys.current.adjust;setSessionAdjustValue("");await fetchClientDetail();alert("Sessions updated.");
+    }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setSessionAdjustAction(null);}
   }
 
   function startFixExistingDebt(purchase: ClientPurchase) {
@@ -1198,283 +950,27 @@ function AdminClientDetailPageContent() {
     setAddingDebt(false);
   }
 
-  async function completeDebtRecord(
-    purchase: ClientPurchase,
-    forcedPaymentAmount?: number,
-  ) {
-    if (!client) return;
-
-    if (!allowDebtEdit) {
-      alert("Only admins can record debt payments.");
-      return;
-    }
-
-    const currentBalance = Number(purchase.balance_due || 0);
-
-    if (currentBalance <= 0) {
-      alert("This debt is already complete.");
-      return;
-    }
-
-    const paymentAmountText =
-      forcedPaymentAmount !== undefined
-        ? String(forcedPaymentAmount)
-        : debtPaymentAmounts[purchase.id] ?? String(currentBalance);
-
-    const paymentAmount = Number(paymentAmountText);
-
-    if (Number.isNaN(paymentAmount) || paymentAmount <= 0) {
-      alert("Payment amount must be greater than 0.");
-      return;
-    }
-
-    if (paymentAmount > currentBalance) {
-      alert(
-        `Payment cannot be greater than current debt balance: ${formatMoney(
-          currentBalance,
-        )}`,
-      );
-      return;
-    }
-
-    const paymentDate = debtPaymentDates[purchase.id] || getTodayInputDate();
-
-    if (!paymentDate) {
-      alert("Payment date is required.");
-      return;
-    }
-
-    const newBalance = Math.max(currentBalance - paymentAmount, 0);
-    const currentPaid = Number(purchase.amount_paid || 0);
-    const newPaidAmount = currentPaid + paymentAmount;
-    const isFullPayment = newBalance <= 0;
-
-    const confirmed = window.confirm(
-      `${isFullPayment ? "Complete debt" : "Record debt payment"}?\n\nClient: ${
-        client.full_name
-      }\nPayment: ${formatMoney(paymentAmount)}\nCurrent Debt: ${formatMoney(
-        currentBalance,
-      )}\nNew Debt Balance: ${formatMoney(
-        newBalance,
-      )}\n\nThis will also add income to Revenue.`,
-    );
-
-    if (!confirmed) return;
-
-    setCompletingDebtId(purchase.id);
-
-    const { data: userData } = await supabase.auth.getUser();
-
-    const { error: purchaseUpdateError } = await supabase
-      .from("client_purchases")
-      .update({
-        amount_paid: newPaidAmount,
-        balance_due: newBalance,
-        debt_deadline: newBalance > 0 ? purchase.debt_deadline : null,
-        status: isFullPayment ? "paid" : "confirmed",
-      })
-      .eq("id", purchase.id);
-
-    if (purchaseUpdateError) {
-      alert(purchaseUpdateError.message);
-      setCompletingDebtId(null);
-      return;
-    }
-
-    const { error: incomeInsertError } = await supabase
-      .from("business_transactions")
-      .insert({
-        transaction_type: "income",
-        source: "debt_payment",
-        title: `${isFullPayment ? "Completed debt" : "Debt payment"} - ${
-          client.full_name
-        }`,
-        amount: paymentAmount,
-        notes: [
-          `Client: ${client.full_name}`,
-          `Client Code: ${client.client_code || "-"}`,
-          `Debt Record: ${purchase.plan_name || "Manual Debt"}`,
-          `Original Balance: ${formatMoney(currentBalance)}`,
-          `Payment Received: ${formatMoney(paymentAmount)}`,
-          `Remaining Balance: ${formatMoney(newBalance)}`,
-        ].join(" | "),
-        created_by: userData.user?.id || null,
-        transaction_date: paymentDate,
-      });
-
-    if (incomeInsertError) {
-      alert(
-        `Debt balance was updated, but income was not recorded: ${incomeInsertError.message}`,
-      );
-      setCompletingDebtId(null);
-      await fetchClientDetail();
-      return;
-    }
-
-    setDebtPaymentAmounts((current) => {
-      const next = { ...current };
-      delete next[purchase.id];
-      return next;
-    });
-
-    setDebtPaymentDates((current) => {
-      const next = { ...current };
-      delete next[purchase.id];
-      return next;
-    });
-
-    alert(
-      isFullPayment
-        ? "Debt completed. Revenue income was added."
-        : "Partial debt payment recorded. Revenue income was added.",
-    );
-
-    await fetchClientDetail();
-    setCompletingDebtId(null);
+  async function completeDebtRecord(purchase:ClientPurchase,forcedPaymentAmount?:number){
+    if(!client||!allowDebtEdit||mutationLock.current)return;
+    const amount=forcedPaymentAmount??Number(debtPaymentAmounts[purchase.id]??purchase.balance_due??0);
+    if(!Number.isFinite(amount)||amount<=0||amount>Number(purchase.balance_due||0)){alert("Enter a payment within the outstanding balance.");return;}
+    if(!window.confirm(`Record payment of ${formatMoney(amount)} and add it to Revenue?`))return;
+    mutationLock.current=true;setCompletingDebtId(purchase.id);
+    try{const {error}=await supabase.rpc("fxa_record_debt_payment",{p_request_id:requestKey(`payment:${purchase.id}`),p_purchase_id:purchase.id,p_amount:amount,p_date:debtPaymentDates[purchase.id]||getTodayInputDate()});if(error)throw error;
+      delete operationKeys.current[`payment:${purchase.id}`];await fetchClientDetail();alert("Payment and Revenue saved together.");window.dispatchEvent(new Event("fxa:finance-updated"));
+    }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setCompletingDebtId(null);}
   }
 
-  async function saveDebtDetails(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!client) return;
-
-    if (!allowDebtEdit) {
-      alert("Only admins can edit debt details.");
-      return;
-    }
-
-    const debtPurchase =
-      purchases.find((purchase) => purchase.id === selectedDebtFixId) ||
-      purchases.find((purchase) => Number(purchase.balance_due || 0) > 0) ||
-      purchases[0] ||
-      null;
-
-    const numericDebtAmount = debtAmount.trim() ? Number(debtAmount) : 0;
-
-    if (Number.isNaN(numericDebtAmount) || numericDebtAmount < 0) {
-      alert("Debt must be a valid number.");
-      return;
-    }
-
-    if (numericDebtAmount > 0 && !debtDeadline) {
-      alert("Please add a deadline for this debt.");
-      return;
-    }
-
-    if (debtFixAddsRevenue && !debtFixRevenueDate) {
-      alert("Revenue date is required when adding the debt fix to Revenue.");
-      return;
-    }
-
-    const oldDebtAmount = debtPurchase
-      ? Number(debtPurchase.balance_due || 0)
-      : 0;
-    const debtReductionAmount = debtPurchase
-      ? Math.max(oldDebtAmount - numericDebtAmount, 0)
-      : 0;
-    const shouldAddRevenue = debtFixAddsRevenue && debtReductionAmount > 0;
-    const nextPaidAmount = shouldAddRevenue
-      ? Number(debtPurchase?.amount_paid || 0) + debtReductionAmount
-      : Number(debtPurchase?.amount_paid || 0);
-
-    const confirmed = window.confirm(
-      shouldAddRevenue
-        ? `Save debt fix and add revenue?\n\nClient: ${client.full_name}\nDebt Record: ${
-            debtPurchase?.plan_name || "Manual Debt"
-          }\nOld Debt: ${formatMoney(oldDebtAmount)}\nNew Debt: ${formatMoney(
-            numericDebtAmount,
-          )}\nRevenue Added: ${formatMoney(
-            debtReductionAmount,
-          )}\n\nThis will create an Income transaction on the Revenue page.`
-        : `Save debt correction?\n\nClient: ${client.full_name}\nDebt Record: ${
-            debtPurchase?.plan_name || "Manual Debt"
-          }\nOld Debt: ${formatMoney(oldDebtAmount)}\nNew Debt: ${formatMoney(
-            numericDebtAmount,
-          )}\n\nNo revenue transaction will be created.`,
-    );
-
-    if (!confirmed) return;
-
-    setSavingDebt(true);
-
-    if (debtPurchase) {
-      const { error } = await supabase
-        .from("client_purchases")
-        .update({
-          amount_paid: nextPaidAmount,
-          balance_due: numericDebtAmount,
-          debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
-          status: numericDebtAmount <= 0 ? "paid" : "confirmed",
-        })
-        .eq("id", debtPurchase.id);
-
-      if (error) {
-        alert(error.message);
-        setSavingDebt(false);
-        return;
-      }
-
-      if (shouldAddRevenue) {
-        const { data: userData } = await supabase.auth.getUser();
-
-        const { error: incomeInsertError } = await supabase
-          .from("business_transactions")
-          .insert({
-            transaction_type: "income",
-            source: "debt_payment",
-            title: `Debt fix payment - ${client.full_name}`,
-            amount: debtReductionAmount,
-            notes: [
-              `Client: ${client.full_name}`,
-              `Client Code: ${client.client_code || "-"}`,
-              `Debt Record: ${debtPurchase.plan_name || "Manual Debt"}`,
-              `Old Debt Balance: ${formatMoney(oldDebtAmount)}`,
-              `New Debt Balance: ${formatMoney(numericDebtAmount)}`,
-              `Revenue Added From Debt Fix: ${formatMoney(debtReductionAmount)}`,
-            ].join(" | "),
-            created_by: userData.user?.id || null,
-            transaction_date: debtFixRevenueDate,
-          });
-
-        if (incomeInsertError) {
-          alert(
-            `Debt was updated, but revenue was not recorded: ${incomeInsertError.message}`,
-          );
-          setSavingDebt(false);
-          await fetchClientDetail();
-          return;
-        }
-      }
-    } else {
-      const { error } = await supabase.from("client_purchases").insert({
-        client_id: client.id,
-        plan_name: "Debt - Manual Debt",
-        session_count: 0,
-        price: numericDebtAmount,
-        amount_paid: 0,
-        balance_due: numericDebtAmount,
-        debt_deadline: numericDebtAmount > 0 ? debtDeadline : null,
-        purchase_type: "debt",
-        status: "confirmed",
-        created_at: new Date().toISOString(),
-      });
-
-      if (error) {
-        alert(error.message);
-        setSavingDebt(false);
-        return;
-      }
-    }
-
-    alert(
-      shouldAddRevenue
-        ? "Debt fix saved and revenue income was added."
-        : "Debt details saved.",
-    );
-
-    setSelectedDebtFixId(null);
-    await fetchClientDetail();
-    setSavingDebt(false);
+  async function saveDebtDetails(event:FormEvent<HTMLFormElement>){
+    event.preventDefault();if(!client||!allowDebtEdit||mutationLock.current)return;
+    const purchase=purchases.find(p=>p.id===selectedDebtFixId)||purchases.find(p=>Number(p.balance_due||0)>0)||purchases[0]||null;
+    const amount=Number(debtAmount||0);
+    if(!Number.isFinite(amount)||amount<0||(amount>0&&!debtDeadline)){alert("Enter a valid debt and deadline.");return;}
+    if(!window.confirm("Save this debt correction?"))return;
+    mutationLock.current=true;setSavingDebt(true);
+    try{const {error}=await supabase.rpc("fxa_set_debt",{p_request_id:requestKey("debt_fix"),p_client_id:client.id,p_purchase_id:purchase?.id||null,p_new_balance:amount,p_deadline:debtDeadline||null,p_record_income:debtFixAddsRevenue,p_income_date:debtFixRevenueDate||getTodayInputDate(),p_expected_balance:purchase?.balance_due??0});if(error)throw error;
+      delete operationKeys.current.debt_fix;setSelectedDebtFixId(null);await fetchClientDetail();alert("Debt details saved.");window.dispatchEvent(new Event("fxa:finance-updated"));
+    }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setSavingDebt(false);}
   }
 
   function startEditSessionHistory(log: SessionHistory) {
@@ -1500,133 +996,13 @@ function AdminClientDetailPageContent() {
     setEditSessionNote("");
   }
 
-  async function saveSessionHistoryEdit(log: SessionHistory) {
-    if (!isAdmin) {
-      alert("Only admins can edit session history.");
-      return;
-    }
-
-    if (!editSessionDateTime) {
-      alert("Session date and time are required.");
-      return;
-    }
-
-    const currentPackage = packages[0] || null;
-    const sessionType: SessionType = log.session_type || "training";
-    const isTrainingSession = sessionType === "training";
-    const oldCompleted = log.status === "success" || log.status === "completed";
-    const nextCompleted = editSessionStatus === "success" || editSessionStatus === "completed";
-
-    // Only training sessions affect the training package balance.
-    // A failed/cancelled/reversed nutrition follow-up must never refund or deduct a training session.
-    const statusChangesSessionBalance =
-      isTrainingSession && oldCompleted !== nextCompleted;
-
-    let previousPackageNumbers: ReturnType<typeof getPackageNumbers> | null = null;
-    let nextRemainingAfter = log.remaining_after;
-
-    if (statusChangesSessionBalance) {
-      if (!currentPackage) {
-        alert("No active training package was found. The training session status cannot be changed safely.");
-        return;
-      }
-
-      previousPackageNumbers = getPackageNumbers(currentPackage);
-      let nextUsed = previousPackageNumbers.usedSessions;
-      let nextRemaining = previousPackageNumbers.remainingSessions;
-
-      if (oldCompleted && !nextCompleted) {
-        nextUsed = Math.max(previousPackageNumbers.usedSessions - 1, 0);
-        nextRemaining = previousPackageNumbers.remainingSessions + 1;
-      }
-
-      if (!oldCompleted && nextCompleted) {
-        if (previousPackageNumbers.remainingSessions <= 0) {
-          alert("This client has no remaining sessions. Add or fix sessions before marking this record as completed.");
-          return;
-        }
-
-        nextUsed = previousPackageNumbers.usedSessions + 1;
-        nextRemaining = previousPackageNumbers.remainingSessions - 1;
-      }
-
-      const confirmed = window.confirm(
-        oldCompleted && !nextCompleted
-          ? `Change this completed session to ${editSessionStatus}?\n\nOne session will be returned to the client.\nRemaining: ${previousPackageNumbers.remainingSessions} → ${nextRemaining}`
-          : `Mark this record as completed?\n\nOne session will be deducted.\nRemaining: ${previousPackageNumbers.remainingSessions} → ${nextRemaining}`,
-      );
-
-      if (!confirmed) return;
-
-      setSavingSessionHistoryId(log.id);
-
-      const { error: packageError } = await supabase
-        .from("session_packages")
-        .update({
-          used_sessions: nextUsed,
-          remaining_sessions: nextRemaining,
-          status: nextRemaining <= 0 ? "completed" : "active",
-        })
-        .eq("id", currentPackage.id);
-
-      if (packageError) {
-        alert(packageError.message);
-        setSavingSessionHistoryId(null);
-        return;
-      }
-
-      nextRemainingAfter = nextRemaining;
-    } else {
-      setSavingSessionHistoryId(log.id);
-    }
-
-    const createdAtIso = new Date(editSessionDateTime).toISOString();
-
-    const { error: historyError } = await supabase
-      .from("session_history")
-      .update({
-        trainer_id: editSessionTrainerId || null,
-        status: editSessionStatus,
-        created_at: createdAtIso,
-        message: editSessionMessage.trim() || null,
-        trainer_note: editSessionNote.trim() || null,
-        remaining_after: nextRemainingAfter,
-      })
-      .eq("id", log.id)
-      .eq("client_id", clientId);
-
-    if (historyError) {
-      if (statusChangesSessionBalance && currentPackage && previousPackageNumbers) {
-        await supabase
-          .from("session_packages")
-          .update({
-            used_sessions: previousPackageNumbers.usedSessions,
-            remaining_sessions: previousPackageNumbers.remainingSessions,
-            status:
-              previousPackageNumbers.remainingSessions <= 0
-                ? "completed"
-                : "active",
-          })
-          .eq("id", currentPackage.id);
-      }
-
-      alert(`Session history was not saved: ${historyError.message}`);
-      setSavingSessionHistoryId(null);
-      return;
-    }
-
-    const balanceMessage = isTrainingSession
-      ? oldCompleted && !nextCompleted
-        ? " Training session returned to the client."
-        : !oldCompleted && nextCompleted
-          ? " One training session was deducted."
-          : " Training package balance was unchanged."
-      : " Nutrition follow-up does not affect the training package balance.";
-
-    alert(`Session history updated.${balanceMessage}`);
-    cancelEditSessionHistory();
-    await fetchClientDetail();
-    setSavingSessionHistoryId(null);
+  async function saveSessionHistoryEdit(log:SessionHistory){
+    if(!isAdmin||mutationLock.current||!editSessionDateTime)return;
+    if(!window.confirm("Save session history and reconcile its original package balance?"))return;
+    mutationLock.current=true;setSavingSessionHistoryId(log.id);
+    try{const {error}=await supabase.rpc("fxa_edit_session_history",{p_history_id:log.id,p_client_id:clientId,p_trainer_id:editSessionTrainerId||null,p_status:editSessionStatus,p_created_at:new Date(editSessionDateTime).toISOString(),p_message:editSessionMessage.trim()||null,p_note:editSessionNote.trim()||null});if(error)throw error;
+      cancelEditSessionHistory();await fetchClientDetail();alert("Session history and package balance saved.");
+    }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setSavingSessionHistoryId(null);}
   }
 
   async function toggleClientStatus() {
@@ -1639,12 +1015,9 @@ function AdminClientDetailPageContent() {
 
     const newStatus = client.status === "active" ? "inactive" : "active";
 
-    const { error } = await supabase
-      .from("clients")
-      .update({
+    const { error } = await checkedClientUpdate({
         status: newStatus,
-      })
-      .eq("id", client.id);
+      });
 
     if (error) {
       alert(error.message);
@@ -1752,7 +1125,7 @@ function AdminClientDetailPageContent() {
     );
   }
 
-  const activePackage = packages[0] || null;
+  const activePackage = selectCurrentPackage(packages);
 
   const packagePurchases = purchases.filter(isPackagePurchase);
   const debtPurchases = purchases.filter(isDebtPurchase);
@@ -3521,13 +2894,13 @@ function AdminClientDetailPageContent() {
                             </p>
                           ) : null}
 
-                          {log.trainer_note ? (
+                          {sessionText(log) ? (
                             <div className="mt-3 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-3">
                               <p className="text-xs font-semibold uppercase tracking-widest text-yellow-400">
                                 Session Note
                               </p>
                               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-yellow-100">
-                                {log.trainer_note}
+                                {sessionText(log)}
                               </p>
                             </div>
                           ) : null}
