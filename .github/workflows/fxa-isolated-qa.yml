@@ -8,43 +8,11 @@ permissions:
   contents: read
 concurrency:
   group: fxa-repair-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
-  import-reviewed-repair:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/repair/core-booking-20260907'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    outputs:
-      source_sha: ${{ steps.import.outputs.source_sha }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-      - name: Apply checksum-verified repair only on authorized branch
-        id: import
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF" = 'refs/heads/repair/core-booking-20260907'
-          test "$(git ls-remote origin "$GITHUB_REF" | cut -f1)" = "$GITHUB_SHA"
-          python3 .ci/import-repair.py --apply
-          git add --pathspec-from-file="$RUNNER_TEMP/fxa-repair-paths.txt"
-          if ! git diff --cached --quiet; then
-            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Apply verified FXA core and Booking V2 repair (51 files, no deployment)'
-            git push origin HEAD:refs/heads/repair/core-booking-20260907
-          fi
-          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "Applied source commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
   regression:
-    needs: import-reviewed-repair
-    if: always() && (needs.import-reviewed-repair.result == 'success' || needs.import-reviewed-repair.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: read
     env:
       NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
       NEXT_PUBLIC_SUPABASE_ANON_KEY: local-test-anon-key
@@ -54,7 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.import-reviewed-repair.outputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -75,7 +42,7 @@ jobs:
         run: |
           mkdir -p qa-artifacts
           git rev-parse HEAD > qa-artifacts/source-commit.txt
-          echo 'These checks use synthetic data. No production migration or deployment is performed.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Synthetic data only. No production migration or deployment.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
