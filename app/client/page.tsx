@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import NextImage from "next/image";
 import QRCode from "qrcode";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
 
@@ -828,9 +829,14 @@ export default function ClientPortalPage() {
             className="flex items-center gap-2 rounded-xl py-2 text-left"
             aria-label="Go to home"
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-yellow-400/20 bg-yellow-400/[0.08] text-sm font-black text-yellow-400">
-              FXA
-            </div>
+            <NextImage
+              src="/icon.png"
+              alt="FXA FITNESS"
+              width={36}
+              height={36}
+              priority
+              className="h-9 w-9 rounded-xl object-cover"
+            />
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-yellow-400">
                 FXA Fitness

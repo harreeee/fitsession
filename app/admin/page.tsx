@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
@@ -642,9 +643,14 @@ export default function AdminDashboardPage() {
       <header className="fu sticky top-0 z-20 border-b border-white/[0.06] bg-[#080808]/95 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-3.5">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-yellow-400/30 bg-yellow-400/15 text-sm font-black text-yellow-400">
-              F
-            </div>
+            <Image
+              src="/icon.png"
+              alt="FXA FITNESS"
+              width={32}
+              height={32}
+              priority
+              className="h-8 w-8 rounded-lg object-cover"
+            />
 
             <div>
               <p className="text-sm font-bold leading-none text-white">

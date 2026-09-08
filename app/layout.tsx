@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import Image from "next/image";
 import { Geist, Geist_Mono } from "next/font/google";
 import StaffToolsShortcut from "@/components/StaffToolsShortcut";
 import "./globals.css";
@@ -43,7 +42,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body suppressHydrationWarning className="min-h-full bg-black text-white selection:bg-yellow-400 selection:text-black">
         <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(250,204,21,0.16),_transparent_32%),linear-gradient(180deg,_#050505_0%,_#000000_45%,_#050505_100%)]">
           <div className="min-h-screen bg-[linear-gradient(rgba(255,255,255,0.025)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.025)_1px,transparent_1px)] bg-[size:48px_48px]">
-            <div className="fixed left-4 top-4 z-[100]"><div className="rounded-2xl border border-yellow-400/30 bg-black/80 p-2 shadow-2xl backdrop-blur-md"><Image src="/icon.png" alt="FXA FITNESS" width={64} height={64} priority className="h-14 w-14 rounded-xl object-cover md:h-16 md:w-16" /></div></div>
             <StaffToolsShortcut />
             {children}
           </div>

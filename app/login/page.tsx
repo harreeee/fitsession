@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   getRememberLoginPreference,
@@ -182,9 +183,14 @@ export default function LoginPage() {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#fff8df] px-4 text-zinc-950">
         <div className="w-full max-w-sm rounded-[2rem] border border-zinc-900/10 bg-white p-7 text-center shadow-[0_22px_65px_rgba(24,24,27,0.13)]">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-black text-lg font-black text-yellow-300">
-            FXA
-          </div>
+          <Image
+            src="/icon.png"
+            alt="FXA FITNESS"
+            width={64}
+            height={64}
+            priority
+            className="mx-auto h-16 w-16 rounded-2xl object-cover"
+          />
           <div className="mx-auto mt-5 h-8 w-8 animate-spin rounded-full border-2 border-yellow-300 border-t-black" />
           <p className="mt-4 text-sm font-bold text-zinc-700">
             Restoring your session...
@@ -211,9 +217,14 @@ export default function LoginPage() {
       <div className="relative z-10 flex min-h-screen flex-col px-4 py-5 sm:px-6">
         <header className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-[1.75rem] border border-zinc-900/10 bg-white/85 px-4 py-3 shadow-[0_14px_45px_rgba(24,24,27,0.08)] sm:px-5">
           <Link href="/" className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-black text-sm font-black tracking-tight text-yellow-300 shadow-md">
-              FXA
-            </div>
+            <Image
+              src="/icon.png"
+              alt="FXA FITNESS"
+              width={44}
+              height={44}
+              priority
+              className="h-11 w-11 rounded-2xl object-cover shadow-md"
+            />
 
             <div>
               <p className="text-base font-black tracking-tight text-zinc-950 sm:text-lg">
@@ -324,9 +335,14 @@ export default function LoginPage() {
 
               <div className="relative p-6 sm:p-7">
                 <div className="text-center">
-                  <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-[1.75rem] bg-black text-xl font-black tracking-tight text-yellow-300 shadow-xl">
-                    FXA
-                  </div>
+                  <Image
+                    src="/icon.png"
+                    alt="FXA FITNESS"
+                    width={80}
+                    height={80}
+                    priority
+                    className="mx-auto h-20 w-20 rounded-[1.75rem] object-cover shadow-xl"
+                  />
 
                   <p className="mt-5 text-[11px] font-black uppercase tracking-[0.32em] text-yellow-600">
                     FXA FITNESS

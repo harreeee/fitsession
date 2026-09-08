@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { businessDate, torontoInstant } from "../../../lib/businessTime";
 import { Html5Qrcode } from "html5-qrcode";
 import { useRouter } from "next/navigation";
@@ -1542,17 +1543,14 @@ export default function TrainerScanPage() {
       <div className="mx-auto max-w-6xl px-4 pb-8 pt-4 md:px-6 md:pt-6">
         <header id="home" className={`${activeMobileTab === "home" ? "block" : "hidden"} mb-5 md:mb-7 md:block`}>
           <div className="flex items-center justify-between gap-4">
-            <div className="leading-none">
-              <div className="text-[28px] font-black italic tracking-[-0.08em] text-white">
-                F<span className="text-yellow-400">X</span>A
-              </div>
-              <div className="mt-1 text-[9px] font-black tracking-[0.36em] text-white">
-                FITNESS
-              </div>
-              <div className="mt-1 text-[7px] font-bold uppercase tracking-[0.18em] text-yellow-400">
-                Stronger everyday
-              </div>
-            </div>
+            <Image
+              src="/icon.png"
+              alt="FXA FITNESS"
+              width={54}
+              height={54}
+              priority
+              className="h-[54px] w-[54px] rounded-xl object-cover"
+            />
 
             <div className="flex items-center gap-2">
               <span className="hidden rounded-full border border-white/10 bg-[#101010] px-3 py-2 text-[11px] font-bold uppercase tracking-[0.16em] text-zinc-400 sm:inline-flex">
