@@ -1544,12 +1544,12 @@ export default function TrainerScanPage() {
         <header id="home" className={`${activeMobileTab === "home" ? "block" : "hidden"} mb-5 md:mb-7 md:block`}>
           <div className="flex items-center justify-between gap-4">
             <Image
-              src="/icon.png"
+              src="/fxa-logo.png"
               alt="FXA FITNESS"
-              width={54}
-              height={54}
+              width={72}
+              height={52}
               priority
-              className="h-[54px] w-[54px] rounded-xl object-cover"
+              className="h-[52px] w-[72px] shrink-0 object-contain"
             />
 
             <div className="flex items-center gap-2">

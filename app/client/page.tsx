@@ -830,12 +830,12 @@ export default function ClientPortalPage() {
             aria-label="Go to home"
           >
             <NextImage
-              src="/icon.png"
+              src="/fxa-logo.png"
               alt="FXA FITNESS"
-              width={36}
-              height={36}
+              width={52}
+              height={38}
               priority
-              className="h-9 w-9 rounded-xl object-cover"
+              className="h-9 w-[52px] shrink-0 object-contain"
             />
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-yellow-400">
