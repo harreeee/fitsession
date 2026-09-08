@@ -104,6 +104,15 @@ function fallback(language: SummaryLanguage, counts: AttendanceCounts, remaining
   ].join("\n");
 }
 
+function shouldShowAiError(message: string) {
+  const noProviderConfigured =
+    message.includes("No working AI provider") &&
+    message.includes("Claude is not configured") &&
+    message.includes("OpenAI is not configured");
+
+  return !noProviderConfigured;
+}
+
 export async function buildClientReview(
   clientId: string,
   rangeDays: number,
@@ -171,7 +180,8 @@ export async function buildClientReview(
     aiProvider = ai.provider;
     aiModel = ai.model;
   } catch (error) {
-    aiError = error instanceof Error ? error.message : "AI provider unavailable.";
+    const message = error instanceof Error ? error.message : "AI provider unavailable.";
+    aiError = shouldShowAiError(message) ? message : null;
   }
 
   return {
