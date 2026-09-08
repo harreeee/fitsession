@@ -1,0 +1,41 @@
+name: FXA logo and booking email verify once
+
+on:
+  push:
+    branches:
+      - fix/logo-email-booking-20260908
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-check:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/logo-email-booking-20260908
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply UI logo patch
+        run: python3 scripts/apply_logo_email_patch.py
+      - name: Install dependencies
+        run: npm ci
+      - name: TypeScript check
+        run: npm run typecheck
+      - name: Commit verified app changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/admin/page.tsx app/login/page.tsx app/client/page.tsx app/trainer/scan/page.tsx
+          if git diff --cached --quiet; then
+            echo "No UI changes to commit."
+            exit 0
+          fi
+          git commit -m "Standardize official FXA header logos"
+          git push origin HEAD:fix/logo-email-booking-20260908
