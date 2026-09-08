@@ -1,0 +1,48 @@
+name: Fix Official FXA Logo Once
+
+on:
+  push:
+    branches:
+      - fix/official-fxa-logo-asset-20260908
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/official-fxa-logo-asset-20260908
+          fetch-depth: 0
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply official logo patch
+        run: python3 scripts/fix_official_fxa_logo.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check app
+        run: npx tsc --noEmit
+
+      - name: Commit verified UI changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/login/page.tsx app/admin/page.tsx app/client/page.tsx app/trainer/scan/page.tsx
+          if git diff --cached --quiet; then
+            echo "No UI changes to commit."
+            exit 0
+          fi
+          git commit -m "Use official FXA logo proportions across app UI"
+          git push origin HEAD:fix/official-fxa-logo-asset-20260908
