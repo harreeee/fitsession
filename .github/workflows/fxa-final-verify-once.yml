@@ -1,0 +1,31 @@
+name: FXA final logo and booking email verify once
+
+on:
+  push:
+    branches:
+      - fix/logo-email-booking-20260908
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: local-test-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: local-test-service-role-key
+      NEXT_PUBLIC_SITE_URL: https://www.fxafitness.app
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/logo-email-booking-20260908
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:repair
