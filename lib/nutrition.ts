@@ -1,6 +1,7 @@
 export const NUTRITION_ROLES = ["admin", "manager", "nutrition_coach"] as const;
 
 export const FOLLOW_REQUIREMENTS = [
+  "unreviewed",
   "need_follow",
   "no_follow",
   "monitor",
@@ -38,6 +39,7 @@ export const FOLLOW_OUTCOMES = [
 export type NutritionFollowOutcome = (typeof FOLLOW_OUTCOMES)[number];
 
 export const FOLLOW_REQUIREMENT_LABELS: Record<FollowRequirement, string> = {
+  unreviewed: "Chưa phân loại",
   need_follow: "Cần Follow",
   no_follow: "Không cần Follow",
   monitor: "Theo dõi",
