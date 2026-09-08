@@ -54,6 +54,7 @@ function bookingTimeLabel(startsAt: string, endsAt: string) {
 }
 
 async function sendResendEmail(input: {
+  bookingId: string;
   to: string;
   subject: string;
   html: string;
@@ -66,7 +67,10 @@ async function sendResendEmail(input: {
     'FXA FITNESS <bookings@fxafitness.app>';
 
   if (!apiKey) {
-    console.warn('[booking-email] RESEND_API_KEY is missing; trainer email skipped.');
+    console.warn('[booking-email] RESEND_API_KEY is missing; trainer email skipped.', {
+      bookingId: input.bookingId,
+      to: input.to,
+    });
     return { sent: false, reason: 'missing_RESEND_API_KEY' };
   }
 
@@ -82,15 +86,26 @@ async function sendResendEmail(input: {
       subject: input.subject,
       html: input.html,
       text: input.text,
+      headers: {
+        'X-FXA-Booking-ID': input.bookingId,
+      },
     }),
   });
 
+  const detail = await response.text().catch(() => '');
+
   if (!response.ok) {
-    const detail = await response.text().catch(() => '');
     throw new Error(
-      `Trainer booking email failed (${response.status}): ${detail.slice(0, 220)}`,
+      `Trainer booking email failed (${response.status}): ${detail.slice(0, 260)}`,
     );
   }
+
+  console.info('[booking-email] Trainer booking email sent.', {
+    bookingId: input.bookingId,
+    to: input.to,
+    from,
+    response: detail.slice(0, 260),
+  });
 
   return { sent: true };
 }
@@ -106,7 +121,10 @@ export async function sendTrainerBookingEmail(bookingId: string) {
 
   if (bookingError) throw bookingError;
   const cleanBooking = booking as BookingEmailRow | null;
-  if (!cleanBooking || cleanBooking.status !== 'booked' || !cleanBooking.trainer_id) return;
+  if (!cleanBooking || cleanBooking.status !== 'booked' || !cleanBooking.trainer_id) {
+    console.warn('[booking-email] Booking is not emailable.', { bookingId });
+    return;
+  }
 
   const { data: trainer, error: trainerError } = await db
     .from('profiles')
@@ -119,17 +137,22 @@ export async function sendTrainerBookingEmail(bookingId: string) {
   const trainerEmail = cleanTrainer?.email?.trim();
 
   if (!trainerEmail) {
-    console.warn(`[booking-email] Trainer email missing for booking ${bookingId}.`);
+    console.warn('[booking-email] Trainer email missing.', {
+      bookingId,
+      trainerId: cleanBooking.trainer_id,
+    });
     return;
   }
 
   const when = bookingTimeLabel(cleanBooking.starts_at, cleanBooking.ends_at);
   const clientName = cleanBooking.client_name || 'Client';
+  const trainerName = cleanTrainer?.full_name || 'Coach';
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.fxafitness.app';
   const bookingUrl = `${siteUrl.replace(/\/$/, '')}/trainer/calendar`;
 
   const text = [
     `New FXA booking`,
+    `Coach: ${trainerName}`,
     `Client: ${clientName}`,
     `Time: ${when} (${BUSINESS_TIME_ZONE})`,
     cleanBooking.client_email ? `Client email: ${cleanBooking.client_email}` : null,
@@ -143,6 +166,7 @@ export async function sendTrainerBookingEmail(bookingId: string) {
     <div style="font-family:Arial,sans-serif;background:#050505;color:#ffffff;padding:24px;border-radius:18px;max-width:560px">
       <p style="margin:0 0 8px;color:#facc15;font-size:12px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase">FXA FITNESS</p>
       <h1 style="margin:0 0 18px;font-size:24px;line-height:1.2">New client booking</h1>
+      <p style="margin:0 0 16px;color:#d1d5db">Hi ${escapeHtml(trainerName)}, a client has booked a session with you.</p>
       <div style="background:#111111;border:1px solid #333333;border-radius:14px;padding:18px;margin-bottom:18px">
         <p style="margin:0;color:#888888;font-size:12px;text-transform:uppercase;letter-spacing:0.12em">Client</p>
         <p style="margin:6px 0 0;font-size:20px;font-weight:800">${escapeHtml(clientName)}</p>
@@ -150,13 +174,14 @@ export async function sendTrainerBookingEmail(bookingId: string) {
         <p style="margin:6px 0 0;font-size:18px;font-weight:800;color:#facc15">${escapeHtml(when)}</p>
         <p style="margin:6px 0 0;color:#9ca3af;font-size:13px">Toronto time</p>
       </div>
-      <p style="margin:0 0 6px;color:#d1d5db">${cleanBooking.client_email ? `Email: ${escapeHtml(cleanBooking.client_email)}` : ''}</p>
-      <p style="margin:0 0 18px;color:#d1d5db">${cleanBooking.client_phone ? `Phone: ${escapeHtml(cleanBooking.client_phone)}` : ''}</p>
+      ${cleanBooking.client_email ? `<p style="margin:0 0 6px;color:#d1d5db">Email: ${escapeHtml(cleanBooking.client_email)}</p>` : ''}
+      ${cleanBooking.client_phone ? `<p style="margin:0 0 18px;color:#d1d5db">Phone: ${escapeHtml(cleanBooking.client_phone)}</p>` : ''}
       <a href="${escapeHtml(bookingUrl)}" style="display:inline-block;background:#facc15;color:#000000;text-decoration:none;font-weight:800;padding:12px 18px;border-radius:12px">Open FXA calendar</a>
     </div>
   `;
 
   await sendResendEmail({
+    bookingId,
     to: trainerEmail,
     subject: `New FXA booking: ${clientName} - ${when}`,
     text,
