@@ -53,7 +53,7 @@ export function getDashboardPathForRole(role: AppRoleValue): string {
     case "trainer":
       return "/trainer/scan";
     case "nutrition_coach":
-      return "/trainer/scan";
+      return "/nutrition";
     case "client":
       return "/client";
     default:
