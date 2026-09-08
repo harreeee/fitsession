@@ -1,4 +1,4 @@
-name: FXA AI production health check
+name: FXA production health check
 
 on:
   push:
@@ -9,18 +9,18 @@ permissions:
   contents: read
 
 jobs:
-  claude-healthcheck:
+  production-healthcheck:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Test production Claude endpoint
+      - name: Test production AI endpoint
         shell: bash
         run: |
           set -euo pipefail
           tmp="$(mktemp)"
           status="$(curl --silent --show-error --location --max-time 30 -o "$tmp" -w '%{http_code}' https://www.fxafitness.app/api/ai/test || true)"
           body="$(cat "$tmp")"
-          printf 'HTTP %s\n' "$status"
+          printf 'AI HTTP %s\n' "$status"
           printf '%s\n' "$body"
           STATUS="$status" BODY="$body" python3 - <<'PY'
           import json, os, sys
@@ -29,13 +29,30 @@ jobs:
           try:
               data = json.loads(body)
           except Exception:
-              print('Non-JSON body:', body)
+              print('Non-JSON AI body:', body)
               sys.exit(1)
           if status != '200':
-              print('Claude endpoint failed:', data)
+              print('AI endpoint failed:', data)
               sys.exit(1)
           assert data.get('success') is True, data
           message = str(data.get('message', '')).strip()
-          assert message == 'FXA Claude connection is working.', message
-          print('Claude production health check passed.')
+          assert message == 'FXA AI connection is working.', message
+          assert data.get('provider') in ('anthropic', 'openai'), data
+          print('AI production health check passed using', data.get('provider'), data.get('model'))
           PY
+
+      - name: Verify protected staff routes are deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in access revenue clients booked-calendar; do
+            status="$(curl --silent --show-error --location --max-time 20 -o /tmp/staff-body -w '%{http_code}' "https://www.fxafitness.app/api/staff/$path" || true)"
+            printf '%s -> HTTP %s\n' "$path" "$status"
+            cat /tmp/staff-body || true
+            printf '\n'
+            case "$status" in
+              401|403) ;;
+              *) echo "Expected protected staff route to reject unauthenticated request"; exit 1;;
+            esac
+          done
+          echo 'Protected staff routes are deployed and enforcing authentication.'
