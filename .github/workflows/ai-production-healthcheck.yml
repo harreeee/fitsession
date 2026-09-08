@@ -1,0 +1,29 @@
+name: FXA AI production health check
+
+on:
+  push:
+    branches:
+      - ai-healthcheck-20260907
+
+permissions:
+  contents: read
+
+jobs:
+  claude-healthcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Test production Claude endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail-with-body --silent --show-error --location --retry 2 --retry-delay 2 --max-time 30 https://www.fxafitness.app/api/ai/test)"
+          printf '%s\n' "$body"
+          BODY="$body" python3 - <<'PY'
+          import json, os
+          data = json.loads(os.environ['BODY'])
+          assert data.get('success') is True, data
+          message = str(data.get('message', '')).strip()
+          assert message == 'FXA Claude connection is working.', message
+          print('Claude production health check passed.')
+          PY
