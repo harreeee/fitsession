@@ -1,58 +1,31 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { NextResponse } from "next/server";
+import { generateAiText, getAiProviderStatus } from "@/lib/aiProvider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_MODEL;
-
-  if (!apiKey || !model) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "ANTHROPIC_API_KEY or ANTHROPIC_MODEL is missing from .env.local.",
-      },
-      { status: 500 },
-    );
-  }
+  const status = getAiProviderStatus();
 
   try {
-    const anthropic = new Anthropic({ apiKey });
-
-    const response = await anthropic.messages.create({
-      model,
-      max_tokens: 100,
-      messages: [
-        {
-          role: "user",
-          content:
-            "Reply with exactly this sentence: FXA Claude connection is working.",
-        },
-      ],
+    const result = await generateAiText({
+      system: "You are a connectivity health check.",
+      prompt: "Reply with exactly this sentence: FXA AI connection is working.",
+      maxTokens: 80,
     });
 
-    const message = response.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
-
-    return NextResponse.json({
+    return Response.json({
       success: true,
-      message,
+      message: result.text,
+      provider: result.provider,
+      model: result.model,
+      configured: status,
     });
   } catch (error) {
-    console.error("Claude API test error:", error);
-
-    return NextResponse.json(
+    return Response.json(
       {
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown Claude API error.",
+        error: error instanceof Error ? error.message : "Unknown AI provider error.",
+        configured: status,
       },
       { status: 500 },
     );
