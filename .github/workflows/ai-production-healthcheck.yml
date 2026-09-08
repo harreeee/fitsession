@@ -17,11 +17,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          body="$(curl --fail-with-body --silent --show-error --location --retry 2 --retry-delay 2 --max-time 30 https://www.fxafitness.app/api/ai/test)"
+          tmp="$(mktemp)"
+          status="$(curl --silent --show-error --location --max-time 30 -o "$tmp" -w '%{http_code}' https://www.fxafitness.app/api/ai/test || true)"
+          body="$(cat "$tmp")"
+          printf 'HTTP %s\n' "$status"
           printf '%s\n' "$body"
-          BODY="$body" python3 - <<'PY'
-          import json, os
-          data = json.loads(os.environ['BODY'])
+          STATUS="$status" BODY="$body" python3 - <<'PY'
+          import json, os, sys
+          status = os.environ['STATUS']
+          body = os.environ['BODY']
+          try:
+              data = json.loads(body)
+          except Exception:
+              print('Non-JSON body:', body)
+              sys.exit(1)
+          if status != '200':
+              print('Claude endpoint failed:', data)
+              sys.exit(1)
           assert data.get('success') is True, data
           message = str(data.get('message', '')).strip()
           assert message == 'FXA Claude connection is working.', message
