@@ -1,22 +1,29 @@
+import { businessDate } from "@/lib/businessTime";
 import { requireStaffFeature, staffAccessFail } from "@/lib/staffAccessServer";
+
+function nextMonthStart(month: string) {
+  const [yearText, monthText] = month.split("-");
+  let year = Number(yearText);
+  let monthNumber = Number(monthText) + 1;
+
+  if (monthNumber === 13) {
+    year += 1;
+    monthNumber = 1;
+  }
+
+  return `${year}-${String(monthNumber).padStart(2, "0")}-01`;
+}
 
 export async function GET(request: Request) {
   try {
     const { admin } = await requireStaffFeature(request, "revenue");
     const url = new URL(request.url);
-    const month = url.searchParams.get("month");
-    const monthStart = /^\d{4}-\d{2}$/.test(month || "")
-      ? `${month}-01`
-      : new Date().toLocaleDateString("en-CA", {
-          timeZone: "America/Toronto",
-          year: "numeric",
-          month: "2-digit",
-        }).replace("/", "-") + "-01";
-
-    const start = new Date(`${monthStart}T00:00:00-04:00`);
-    const next = new Date(start);
-    next.setUTCMonth(next.getUTCMonth() + 1);
-    const nextMonth = next.toISOString().slice(0, 10);
+    const requestedMonth = url.searchParams.get("month");
+    const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth || "")
+      ? requestedMonth!
+      : businessDate().slice(0, 7);
+    const monthStart = `${month}-01`;
+    const nextMonth = nextMonthStart(month);
 
     const { data, error } = await admin
       .from("business_transactions")
@@ -38,7 +45,7 @@ export async function GET(request: Request) {
 
     return Response.json(
       {
-        month: monthStart.slice(0, 7),
+        month,
         totals: { income, expense, net: income - expense },
         transactions: rows,
       },
