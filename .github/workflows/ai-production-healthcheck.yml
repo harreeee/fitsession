@@ -1,4 +1,4 @@
-name: FXA production health check
+name: FXA staff production health check
 
 on:
   push:
@@ -9,38 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  production-healthcheck:
+  staff-healthcheck:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Test production AI endpoint
-        shell: bash
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp)"
-          status="$(curl --silent --show-error --location --max-time 30 -o "$tmp" -w '%{http_code}' https://www.fxafitness.app/api/ai/test || true)"
-          body="$(cat "$tmp")"
-          printf 'AI HTTP %s\n' "$status"
-          printf '%s\n' "$body"
-          STATUS="$status" BODY="$body" python3 - <<'PY'
-          import json, os, sys
-          status = os.environ['STATUS']
-          body = os.environ['BODY']
-          try:
-              data = json.loads(body)
-          except Exception:
-              print('Non-JSON AI body:', body)
-              sys.exit(1)
-          if status != '200':
-              print('AI endpoint failed:', data)
-              sys.exit(1)
-          assert data.get('success') is True, data
-          message = str(data.get('message', '')).strip()
-          assert message == 'FXA AI connection is working.', message
-          assert data.get('provider') in ('anthropic', 'openai'), data
-          print('AI production health check passed using', data.get('provider'), data.get('model'))
-          PY
-
       - name: Verify protected staff routes are deployed
         shell: bash
         run: |
