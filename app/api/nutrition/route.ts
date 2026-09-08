@@ -77,21 +77,10 @@ async function requireClientAccess(
 ) {
   const client = await requireActiveClient(admin, clientId);
 
-  if (profile.role === "nutrition_coach") {
-    const effectiveCoachId = await getEffectiveNutritionCoachId(
-      admin,
-      clientId,
-      (client.assigned_nutrition_coach_id as string | null) || null,
-    );
-
-    if (effectiveCoachId !== profile.id) {
-      throw new NutritionAccessError(
-        "This client is not assigned to your Nutrition workspace.",
-        403,
-      );
-    }
-  }
-
+  // Nutrition coaches work from the shared Nutrition workspace.
+  // They can view and record follow reports for every active client, while
+  // admin/manager-only controls still protect assignments, requirements,
+  // priorities and admin notes.
   return client;
 }
 
@@ -145,17 +134,9 @@ export async function GET(request: Request) {
       (client) => String(client.status || "").toLowerCase() !== "inactive",
     );
 
-    const visibleClients =
-      profile.role === "nutrition_coach"
-        ? activeClients.filter((client) => {
-            const saved = statusByClient.get(client.id as string);
-            const effectiveCoachId =
-              (saved?.nutrition_coach_id as string | null) ||
-              (client.assigned_nutrition_coach_id as string | null) ||
-              null;
-            return effectiveCoachId === profile.id;
-          })
-        : activeClients;
+    // Nutrition is a shared operations board: admins, managers and nutrition
+    // coaches all need the active client list so no client is missed.
+    const visibleClients = activeClients;
 
     const visibleClientIds = visibleClients.map((client) => client.id as string);
     const visibleClientSet = new Set(visibleClientIds);

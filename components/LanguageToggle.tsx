@@ -1,55 +1,3 @@
-from pathlib import Path
-
-route_path = Path('app/api/nutrition/route.ts')
-layout_path = Path('app/layout.tsx')
-toggle_path = Path('components/LanguageToggle.tsx')
-
-route = route_path.read_text()
-old_access = '''  if (profile.role === "nutrition_coach") {
-    const effectiveCoachId = await getEffectiveNutritionCoachId(
-      admin,
-      clientId,
-      (client.assigned_nutrition_coach_id as string | null) || null,
-    );
-
-    if (effectiveCoachId !== profile.id) {
-      throw new NutritionAccessError(
-        "This client is not assigned to your Nutrition workspace.",
-        403,
-      );
-    }
-  }
-
-  return client;'''
-new_access = '''  // Nutrition coaches work from the shared Nutrition workspace.
-  // They can view and record follow reports for every active client, while
-  // admin/manager-only controls still protect assignments, requirements,
-  // priorities and admin notes.
-  return client;'''
-if old_access not in route:
-    raise SystemExit('Could not find nutrition coach access block to replace')
-route = route.replace(old_access, new_access)
-
-old_visible = '''    const visibleClients =
-      profile.role === "nutrition_coach"
-        ? activeClients.filter((client) => {
-            const saved = statusByClient.get(client.id as string);
-            const effectiveCoachId =
-              (saved?.nutrition_coach_id as string | null) ||
-              (client.assigned_nutrition_coach_id as string | null) ||
-              null;
-            return effectiveCoachId === profile.id;
-          })
-        : activeClients;'''
-new_visible = '''    // Nutrition is a shared operations board: admins, managers and nutrition
-    // coaches all need the active client list so no client is missed.
-    const visibleClients = activeClients;'''
-if old_visible not in route:
-    raise SystemExit('Could not find visibleClients block to replace')
-route = route.replace(old_visible, new_visible)
-route_path.write_text(route)
-
-language_toggle = r'''
 "use client";
 
 import { useEffect, useState } from "react";
@@ -164,16 +112,3 @@ export default function LanguageToggle() {
     </div>
   );
 }
-'''.lstrip()
-toggle_path.write_text(language_toggle)
-
-layout = layout_path.read_text()
-if 'import LanguageToggle from "@/components/LanguageToggle";' not in layout:
-    layout = layout.replace(
-        'import StaffToolsShortcut from "@/components/StaffToolsShortcut";\n',
-        'import StaffToolsShortcut from "@/components/StaffToolsShortcut";\nimport LanguageToggle from "@/components/LanguageToggle";\n',
-    )
-if '<LanguageToggle />' not in layout:
-    layout = layout.replace('            <StaffToolsShortcut />\n', '            <StaffToolsShortcut />\n            <LanguageToggle />\n')
-layout_path.write_text(layout)
-print('patched nutrition shared access and global language toggle')

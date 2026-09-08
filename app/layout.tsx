@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import StaffToolsShortcut from "@/components/StaffToolsShortcut";
+import LanguageToggle from "@/components/LanguageToggle";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"], display: "swap" });
@@ -43,6 +44,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(250,204,21,0.16),_transparent_32%),linear-gradient(180deg,_#050505_0%,_#000000_45%,_#050505_100%)]">
           <div className="min-h-screen bg-[linear-gradient(rgba(255,255,255,0.025)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.025)_1px,transparent_1px)] bg-[size:48px_48px]">
             <StaffToolsShortcut />
+            <LanguageToggle />
             {children}
           </div>
         </div>
