@@ -35,16 +35,11 @@ jobs:
       - name: Build Next.js app
         run: npm run build
 
-      - name: Remove one-time patch tooling
-        run: |
-          rm -f scripts/standardize_fxa_branding.py
-          rm -f .github/workflows/standardize-fxa-branding-once.yml
-
-      - name: Commit verified branding changes
+      - name: Commit verified app branding changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add app/layout.tsx app/admin/page.tsx app/login/page.tsx app/client/page.tsx app/trainer/scan/page.tsx
           if git diff --cached --quiet; then
             echo "No branding changes to commit."
             exit 0
