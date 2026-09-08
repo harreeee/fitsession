@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
+import FXABrandLogo from "@/components/FXABrandLogo";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
@@ -643,24 +643,14 @@ export default function AdminDashboardPage() {
       <header className="fu sticky top-0 z-20 border-b border-white/[0.06] bg-[#080808]/95 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-3.5">
           <div className="flex items-center gap-3">
-            <Image
-              src="/fxa-logo.png"
-              alt="FXA FITNESS"
-              width={46}
-              height={34}
+            <FXABrandLogo
               priority
-              className="h-8 w-[46px] shrink-0 object-contain"
+              className="h-8 w-[150px] sm:h-10 sm:w-[178px]"
             />
 
-            <div>
-              <p className="text-sm font-bold leading-none text-white">
-                FXA FITNESS
-              </p>
-
-              <p className="mt-0.5 text-[10px] uppercase leading-none tracking-widest text-zinc-600">
-                {getRoleLabel(currentRole)} Dashboard
-              </p>
-            </div>
+            <p className="hidden text-[10px] uppercase leading-none tracking-widest text-zinc-600 sm:block">
+              {getRoleLabel(currentRole)} Dashboard
+            </p>
           </div>
 
           <div className="flex items-center gap-2">

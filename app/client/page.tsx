@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import NextImage from "next/image";
+import FXABrandLogo from "@/components/FXABrandLogo";
 import QRCode from "qrcode";
 import { getCurrentUserRole } from "../../lib/checkUserRole";
 
@@ -829,18 +829,11 @@ export default function ClientPortalPage() {
             className="flex items-center gap-2 rounded-xl py-2 text-left"
             aria-label="Go to home"
           >
-            <NextImage
-              src="/fxa-logo.png"
-              alt="FXA FITNESS"
-              width={52}
-              height={38}
-              priority
-              className="h-9 w-[52px] shrink-0 object-contain"
-            />
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-yellow-400">
-                FXA Fitness
-              </p>
+              <FXABrandLogo
+                priority
+                className="h-8 w-[150px]"
+              />
               <p className="mt-0.5 text-xs text-zinc-500">Client Portal</p>
             </div>
           </button>
