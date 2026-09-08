@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
+import FXABrandLogo from "@/components/FXABrandLogo";
 import { businessDate, torontoInstant } from "../../../lib/businessTime";
 import { Html5Qrcode } from "html5-qrcode";
 import { useRouter } from "next/navigation";
@@ -1543,13 +1543,9 @@ export default function TrainerScanPage() {
       <div className="mx-auto max-w-6xl px-4 pb-8 pt-4 md:px-6 md:pt-6">
         <header id="home" className={`${activeMobileTab === "home" ? "block" : "hidden"} mb-5 md:mb-7 md:block`}>
           <div className="flex items-center justify-between gap-4">
-            <Image
-              src="/fxa-logo.png"
-              alt="FXA FITNESS"
-              width={72}
-              height={52}
+            <FXABrandLogo
               priority
-              className="h-[52px] w-[72px] shrink-0 object-contain"
+              className="h-11 w-[196px] sm:h-12 sm:w-[214px]"
             />
 
             <div className="flex items-center gap-2">
