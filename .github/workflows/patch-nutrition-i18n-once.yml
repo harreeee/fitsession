@@ -36,6 +36,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install isolated test dependencies
+        run: npm ci --prefix tests --ignore-scripts
+
       - name: TypeScript check
         run: npm run typecheck
 
