@@ -644,12 +644,12 @@ export default function AdminDashboardPage() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-3.5">
           <div className="flex items-center gap-3">
             <Image
-              src="/icon.png"
+              src="/fxa-logo.png"
               alt="FXA FITNESS"
-              width={32}
-              height={32}
+              width={46}
+              height={34}
               priority
-              className="h-8 w-8 rounded-lg object-cover"
+              className="h-8 w-[46px] shrink-0 object-contain"
             />
 
             <div>

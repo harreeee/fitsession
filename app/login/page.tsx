@@ -184,12 +184,12 @@ export default function LoginPage() {
       <main className="flex min-h-screen items-center justify-center bg-[#fff8df] px-4 text-zinc-950">
         <div className="w-full max-w-sm rounded-[2rem] border border-zinc-900/10 bg-white p-7 text-center shadow-[0_22px_65px_rgba(24,24,27,0.13)]">
           <Image
-            src="/icon.png"
+            src="/fxa-logo.png"
             alt="FXA FITNESS"
-            width={64}
-            height={64}
+            width={96}
+            height={70}
             priority
-            className="mx-auto h-16 w-16 rounded-2xl object-cover"
+            className="mx-auto h-[70px] w-24 object-contain"
           />
           <div className="mx-auto mt-5 h-8 w-8 animate-spin rounded-full border-2 border-yellow-300 border-t-black" />
           <p className="mt-4 text-sm font-bold text-zinc-700">
@@ -218,12 +218,12 @@ export default function LoginPage() {
         <header className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-[1.75rem] border border-zinc-900/10 bg-white/85 px-4 py-3 shadow-[0_14px_45px_rgba(24,24,27,0.08)] sm:px-5">
           <Link href="/" className="flex items-center gap-3">
             <Image
-              src="/icon.png"
+              src="/fxa-logo.png"
               alt="FXA FITNESS"
-              width={44}
-              height={44}
+              width={62}
+              height={45}
               priority
-              className="h-11 w-11 rounded-2xl object-cover shadow-md"
+              className="h-11 w-[62px] shrink-0 object-contain"
             />
 
             <div>
@@ -336,12 +336,12 @@ export default function LoginPage() {
               <div className="relative p-6 sm:p-7">
                 <div className="text-center">
                   <Image
-                    src="/icon.png"
+                    src="/fxa-logo.png"
                     alt="FXA FITNESS"
-                    width={80}
-                    height={80}
+                    width={116}
+                    height={84}
                     priority
-                    className="mx-auto h-20 w-20 rounded-[1.75rem] object-cover shadow-xl"
+                    className="mx-auto h-[84px] w-[116px] object-contain drop-shadow-lg"
                   />
 
                   <p className="mt-5 text-[11px] font-black uppercase tracking-[0.32em] text-yellow-600">
