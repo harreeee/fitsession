@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   isFollowMethod,
   isFollowOutcome,
@@ -40,19 +41,32 @@ function cleanUuid(value: unknown) {
   return value;
 }
 
-async function requireActiveClient(
-  admin: ReturnType<typeof import("@/lib/supabaseServer").createServiceSupabaseClient>,
-  clientId: string,
-) {
+async function requireActiveClient(admin: SupabaseClient, clientId: string) {
   const { data, error } = await admin
     .from("clients")
-    .select("id, status")
+    .select("id, status, assigned_nutrition_coach_id")
     .eq("id", clientId)
     .single();
 
   if (error || !data || String(data.status || "").toLowerCase() === "inactive") {
     throw new NutritionAccessError("Client not found.", 404);
   }
+
+  return data;
+}
+
+async function requireNutritionCoach(admin: SupabaseClient, coachId: string) {
+  const { data: coach, error } = await admin
+    .from("profiles")
+    .select("id, role")
+    .eq("id", coachId)
+    .single();
+
+  if (error || !coach || coach.role !== "nutrition_coach") {
+    throw new NutritionAccessError("Nutrition coach not found.", 400);
+  }
+
+  return coach.id as string;
 }
 
 export async function GET(request: Request) {
@@ -173,7 +187,11 @@ export async function PATCH(request: Request) {
           403,
         );
       }
-      if (body.priority !== null && body.priority !== "" && !isNutritionPriority(body.priority)) {
+      if (
+        body.priority !== null &&
+        body.priority !== "" &&
+        !isNutritionPriority(body.priority)
+      ) {
         throw new NutritionAccessError("Invalid priority.", 400);
       }
       patch.priority = body.priority || null;
@@ -187,17 +205,9 @@ export async function PATCH(request: Request) {
         );
       }
       const coachId = cleanUuid(body.nutritionCoachId);
-      if (coachId) {
-        const { data: coach } = await admin
-          .from("profiles")
-          .select("id, role")
-          .eq("id", coachId)
-          .single();
-        if (!coach || coach.role !== "nutrition_coach") {
-          throw new NutritionAccessError("Nutrition coach not found.", 400);
-        }
-      }
-      patch.nutrition_coach_id = coachId;
+      patch.nutrition_coach_id = coachId
+        ? await requireNutritionCoach(admin, coachId)
+        : null;
     }
 
     if (Object.prototype.hasOwnProperty.call(body, "nextFollowAt")) {
@@ -248,7 +258,7 @@ export async function POST(request: Request) {
 
     const clientId = cleanUuid(body.clientId);
     if (!clientId) throw new NutritionAccessError("Client is required.", 400);
-    await requireActiveClient(admin, clientId);
+    const client = await requireActiveClient(admin, clientId);
 
     if (!isFollowMethod(body.method)) {
       throw new NutritionAccessError("Invalid follow method.", 400);
@@ -257,9 +267,30 @@ export async function POST(request: Request) {
       throw new NutritionAccessError("Invalid follow outcome.", 400);
     }
 
-    let nutritionCoachId = profile.id;
-    if (profile.role === "admin" || profile.role === "manager") {
-      nutritionCoachId = cleanUuid(body.nutritionCoachId) || profile.id;
+    let nutritionCoachId: string;
+    if (profile.role === "nutrition_coach") {
+      nutritionCoachId = profile.id;
+    } else {
+      const selectedCoachId = cleanUuid(body.nutritionCoachId);
+      let fallbackCoachId = client.assigned_nutrition_coach_id as string | null;
+
+      if (!fallbackCoachId) {
+        const { data: currentStatus } = await admin
+          .from("nutrition_client_status")
+          .select("nutrition_coach_id")
+          .eq("client_id", clientId)
+          .maybeSingle();
+        fallbackCoachId = (currentStatus?.nutrition_coach_id as string | null) || null;
+      }
+
+      const coachId = selectedCoachId || fallbackCoachId;
+      if (!coachId) {
+        throw new NutritionAccessError(
+          "Choose a Nutrition Coach before saving this follow report.",
+          400,
+        );
+      }
+      nutritionCoachId = await requireNutritionCoach(admin, coachId);
     }
 
     const nextFollowAt = cleanDate(body.nextFollowAt);
