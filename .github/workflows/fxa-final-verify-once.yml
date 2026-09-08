@@ -27,5 +27,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm install --no-save @electric-sql/pglite
       - run: npm run typecheck
       - run: npm run test:repair
