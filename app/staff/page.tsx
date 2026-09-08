@@ -39,6 +39,22 @@ export default function StaffToolsPage() {
 
           {access ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {(access.role === "admin" || access.role === "manager") ? (
+                <Link href="/admin/nutrition" className="rounded-3xl border border-yellow-400/30 bg-yellow-400/[0.08] p-5 transition hover:border-yellow-400/70 hover:bg-yellow-400/[0.12]">
+                  <p className="text-xs font-bold uppercase tracking-widest text-yellow-400">Admin Nutrition</p>
+                  <h2 className="mt-2 text-2xl font-black">Nutrition Control</h2>
+                  <p className="mt-2 text-sm text-gray-400">View all clients, decide follow status, set priority, assign coaches and review follow history.</p>
+                </Link>
+              ) : null}
+
+              {access.role === "nutrition_coach" ? (
+                <Link href="/nutrition" className="rounded-3xl border border-yellow-400/30 bg-yellow-400/[0.08] p-5 transition hover:border-yellow-400/70 hover:bg-yellow-400/[0.12]">
+                  <p className="text-xs font-bold uppercase tracking-widest text-yellow-400">Nutrition Coach</p>
+                  <h2 className="mt-2 text-2xl font-black">My Nutrition Work</h2>
+                  <p className="mt-2 text-sm text-gray-400">See only your assigned clients, priority workload, next follow dates and submit follow reports.</p>
+                </Link>
+              ) : null}
+
               {access.canViewRevenue ? (
                 <Link href="/staff/revenue" className={card}>
                   <p className="text-xs font-bold uppercase tracking-widest text-yellow-400">Read only</p>
