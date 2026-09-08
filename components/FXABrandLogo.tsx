@@ -18,23 +18,24 @@ export default function FXABrandLogo({
       <Image
         src="/icon.png"
         alt={label}
-        width={96}
-        height={96}
+        width={512}
+        height={512}
         priority={priority}
-        sizes="96px"
+        sizes="(max-width: 640px) 48px, 96px"
         className={`shrink-0 object-contain ${className}`}
       />
     );
   }
 
   return (
-    <span
-      aria-label={label}
-      className={`inline-flex shrink-0 items-center justify-center rounded-lg border border-yellow-400/25 bg-black px-2.5 py-1 shadow-[0_0_18px_rgba(250,204,21,0.08)] ${className}`}
-    >
-      <span className="whitespace-nowrap text-[20px] font-black uppercase leading-none tracking-[-0.04em] text-yellow-400 sm:text-[22px]">
-        FXA FITNESS
-      </span>
-    </span>
+    <Image
+      src="/fxa-logo-horizontal.png"
+      alt={label}
+      width={925}
+      height={170}
+      priority={priority}
+      sizes="(max-width: 640px) 170px, 260px"
+      className={`shrink-0 object-contain ${className}`}
+    />
   );
 }
