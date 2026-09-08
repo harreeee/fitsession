@@ -31,6 +31,10 @@ before(async () => {
     "insert into profiles(id,role,full_name) values($1,'admin','Admin'),($2,'trainer','Trainer'),($3,'nutrition_coach','Nutrition')",
     [ids.admin, ids.trainer, ids.nutrition],
   );
+  // The isolated base fixture is stricter than production and only grants SELECT
+  // on profiles. Grant UPDATE here so these tests exercise the migration trigger
+  // itself rather than stopping earlier at the table privilege layer.
+  await db.exec('grant update on profiles to authenticated');
 });
 
 after(async () => {
