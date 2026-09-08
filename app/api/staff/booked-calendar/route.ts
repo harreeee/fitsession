@@ -1,38 +1,24 @@
+import { addDays, businessDate, torontoInstant } from "@/lib/businessTime";
 import { requireStaffFeature, staffAccessFail } from "@/lib/staffAccessServer";
 
 function getTorontoWeekRange() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Toronto",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    weekday: "short",
-  }).formatToParts(new Date());
+  const today = businessDate();
+  const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
+  const daysSinceMonday = weekday === 0 ? 6 : weekday - 1;
+  const monday = addDays(today, -daysSinceMonday);
+  const nextMonday = addDays(monday, 7);
+  const startsAt = torontoInstant(monday, 0);
+  const endsAt = torontoInstant(nextMonday, 0);
 
-  const value = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value || "";
-  const date = `${value("year")}-${value("month")}-${value("day")}`;
-  const weekday = value("weekday");
-  const index = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(weekday);
-  const noon = new Date(`${date}T12:00:00Z`);
-  noon.setUTCDate(noon.getUTCDate() - Math.max(index, 0));
-  const monday = noon.toISOString().slice(0, 10);
-  noon.setUTCDate(noon.getUTCDate() + 7);
-  const nextMonday = noon.toISOString().slice(0, 10);
-
-  // Offsets are intentionally resolved by the runtime for the current Toronto week.
-  const offset = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Toronto",
-    timeZoneName: "longOffset",
-  })
-    .formatToParts(new Date(`${monday}T12:00:00Z`))
-    .find((part) => part.type === "timeZoneName")?.value.replace("GMT", "") || "-04:00";
+  if (!startsAt || !endsAt) {
+    throw new Error("Could not resolve Toronto week boundaries.");
+  }
 
   return {
     weekStart: monday,
     weekEnd: nextMonday,
-    startsAt: `${monday}T00:00:00${offset}`,
-    endsAt: `${nextMonday}T00:00:00${offset}`,
+    startsAt,
+    endsAt,
   };
 }
 
