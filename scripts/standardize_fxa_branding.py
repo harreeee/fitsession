@@ -21,7 +21,7 @@ def add_import_after(path: str, anchor: str, import_line: str) -> None:
     if count != 1:
         raise SystemExit(f"{path}: import anchor expected once, found {count}")
     p.write_text(text.replace(anchor, anchor + import_line, 1), encoding="utf-8")
-    print(f"added Image import to {path}")
+    print(f"added logo component import to {path}")
 
 
 # Remove the global floating logo that followed every page in the top-left corner.
@@ -58,12 +58,12 @@ replace_once(
     '''                  <Image\n                    src="/icon.png"\n                    alt="FXA FITNESS"\n                    width={80}\n                    height={80}\n                    priority\n                    className="mx-auto h-20 w-20 rounded-[1.75rem] object-cover shadow-xl"\n                  />''',
 )
 
-# Client portal header: replace the FXA text tile with the official logo.
-add_import_after("app/client/page.tsx", 'import Link from "next/link";\n', 'import Image from "next/image";\n')
+# Client portal header: alias Next.js Image so the existing browser new Image() API keeps working.
+add_import_after("app/client/page.tsx", 'import Link from "next/link";\n', 'import NextImage from "next/image";\n')
 replace_once(
     "app/client/page.tsx",
     '''            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-yellow-400/20 bg-yellow-400/[0.08] text-sm font-black text-yellow-400">\n              FXA\n            </div>''',
-    '''            <Image\n              src="/icon.png"\n              alt="FXA FITNESS"\n              width={36}\n              height={36}\n              priority\n              className="h-9 w-9 rounded-xl object-cover"\n            />''',
+    '''            <NextImage\n              src="/icon.png"\n              alt="FXA FITNESS"\n              width={36}\n              height={36}\n              priority\n              className="h-9 w-9 rounded-xl object-cover"\n            />''',
 )
 
 # Trainer / staff home: replace the hand-built F-X-A wordmark with the real logo.
