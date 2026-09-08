@@ -55,6 +55,46 @@ async function requireActiveClient(admin: SupabaseClient, clientId: string) {
   return data;
 }
 
+async function getEffectiveNutritionCoachId(
+  admin: SupabaseClient,
+  clientId: string,
+  fallbackCoachId: string | null,
+) {
+  const { data, error } = await admin
+    .from("nutrition_client_status")
+    .select("nutrition_coach_id")
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data?.nutrition_coach_id as string | null) || fallbackCoachId || null;
+}
+
+async function requireClientAccess(
+  admin: SupabaseClient,
+  profile: { id: string; role: string },
+  clientId: string,
+) {
+  const client = await requireActiveClient(admin, clientId);
+
+  if (profile.role === "nutrition_coach") {
+    const effectiveCoachId = await getEffectiveNutritionCoachId(
+      admin,
+      clientId,
+      (client.assigned_nutrition_coach_id as string | null) || null,
+    );
+
+    if (effectiveCoachId !== profile.id) {
+      throw new NutritionAccessError(
+        "This client is not assigned to your Nutrition workspace.",
+        403,
+      );
+    }
+  }
+
+  return client;
+}
+
 async function requireNutritionCoach(admin: SupabaseClient, coachId: string) {
   const { data: coach, error } = await admin
     .from("profiles")
@@ -73,40 +113,70 @@ export async function GET(request: Request) {
   try {
     const { admin, profile } = await getNutritionAccessContext(request);
 
-    const [clientsResult, statusResult, profilesResult, logsResult] =
-      await Promise.all([
-        admin
-          .from("clients")
-          .select(
-            "id, client_code, full_name, status, assigned_trainer_id, assigned_nutrition_coach_id",
-          )
-          .order("full_name", { ascending: true }),
-        admin
-          .from("nutrition_client_status")
-          .select(
-            "client_id, follow_requirement, follow_reason, workflow_status, priority, nutrition_coach_id, next_follow_at, admin_note, updated_by, updated_at",
-          ),
-        admin
-          .from("profiles")
-          .select("id, full_name, email, role")
-          .in("role", ["trainer", "nutrition_coach", "admin", "manager"])
-          .order("full_name", { ascending: true }),
-        admin
-          .from("nutrition_follow_logs")
-          .select(
-            "id, client_id, nutrition_coach_id, follow_date, method, client_responded, nutrition_summary, body_comp, activity, current_issue, action_taken, follow_result, next_action, next_follow_at, outcome, result_4r, review_4r, refer_4r, renew_4r, created_at",
-          )
-          .order("follow_date", { ascending: false })
-          .limit(500),
-      ]);
+    const [clientsResult, statusResult, profilesResult] = await Promise.all([
+      admin
+        .from("clients")
+        .select(
+          "id, client_code, full_name, status, assigned_trainer_id, assigned_nutrition_coach_id",
+        )
+        .order("full_name", { ascending: true }),
+      admin
+        .from("nutrition_client_status")
+        .select(
+          "client_id, follow_requirement, follow_reason, workflow_status, priority, nutrition_coach_id, next_follow_at, admin_note, updated_by, updated_at",
+        ),
+      admin
+        .from("profiles")
+        .select("id, full_name, email, role")
+        .in("role", ["trainer", "nutrition_coach", "admin", "manager"])
+        .order("full_name", { ascending: true }),
+    ]);
 
-    for (const result of [clientsResult, statusResult, profilesResult, logsResult]) {
+    for (const result of [clientsResult, statusResult, profilesResult]) {
       if (result.error) throw result.error;
     }
+
+    const statusRows = statusResult.data || [];
+    const statusByClient = new Map(
+      statusRows.map((row) => [row.client_id as string, row]),
+    );
 
     const activeClients = (clientsResult.data || []).filter(
       (client) => String(client.status || "").toLowerCase() !== "inactive",
     );
+
+    const visibleClients =
+      profile.role === "nutrition_coach"
+        ? activeClients.filter((client) => {
+            const saved = statusByClient.get(client.id as string);
+            const effectiveCoachId =
+              (saved?.nutrition_coach_id as string | null) ||
+              (client.assigned_nutrition_coach_id as string | null) ||
+              null;
+            return effectiveCoachId === profile.id;
+          })
+        : activeClients;
+
+    const visibleClientIds = visibleClients.map((client) => client.id as string);
+    const visibleClientSet = new Set(visibleClientIds);
+    const visibleStatuses = statusRows.filter((row) =>
+      visibleClientSet.has(row.client_id as string),
+    );
+
+    let logs: unknown[] = [];
+    if (visibleClientIds.length > 0) {
+      const logsResult = await admin
+        .from("nutrition_follow_logs")
+        .select(
+          "id, client_id, nutrition_coach_id, follow_date, method, client_responded, nutrition_summary, body_comp, activity, current_issue, action_taken, follow_result, next_action, next_follow_at, outcome, result_4r, review_4r, refer_4r, renew_4r, created_at",
+        )
+        .in("client_id", visibleClientIds)
+        .order("follow_date", { ascending: false })
+        .limit(500);
+
+      if (logsResult.error) throw logsResult.error;
+      logs = logsResult.data || [];
+    }
 
     return Response.json(
       {
@@ -116,10 +186,10 @@ export async function GET(request: Request) {
           canEditRequirement: canEditNutritionRequirement(profile.role),
           canRecordFollow: canRecordNutritionFollow(profile.role),
         },
-        clients: activeClients,
-        statuses: statusResult.data || [],
+        clients: visibleClients,
+        statuses: visibleStatuses,
         profiles: profilesResult.data || [],
-        logs: logsResult.data || [],
+        logs,
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -139,7 +209,7 @@ export async function PATCH(request: Request) {
 
     const clientId = cleanUuid(body.clientId);
     if (!clientId) throw new NutritionAccessError("Client is required.", 400);
-    await requireActiveClient(admin, clientId);
+    await requireClientAccess(admin, profile, clientId);
 
     const patch: Record<string, unknown> = {
       client_id: clientId,
@@ -258,7 +328,7 @@ export async function POST(request: Request) {
 
     const clientId = cleanUuid(body.clientId);
     if (!clientId) throw new NutritionAccessError("Client is required.", 400);
-    const client = await requireActiveClient(admin, clientId);
+    const client = await requireClientAccess(admin, profile, clientId);
 
     if (!isFollowMethod(body.method)) {
       throw new NutritionAccessError("Invalid follow method.", 400);
@@ -272,16 +342,11 @@ export async function POST(request: Request) {
       nutritionCoachId = profile.id;
     } else {
       const selectedCoachId = cleanUuid(body.nutritionCoachId);
-      let fallbackCoachId = client.assigned_nutrition_coach_id as string | null;
-
-      if (!fallbackCoachId) {
-        const { data: currentStatus } = await admin
-          .from("nutrition_client_status")
-          .select("nutrition_coach_id")
-          .eq("client_id", clientId)
-          .maybeSingle();
-        fallbackCoachId = (currentStatus?.nutrition_coach_id as string | null) || null;
-      }
+      const fallbackCoachId = await getEffectiveNutritionCoachId(
+        admin,
+        clientId,
+        (client.assigned_nutrition_coach_id as string | null) || null,
+      );
 
       const coachId = selectedCoachId || fallbackCoachId;
       if (!coachId) {
