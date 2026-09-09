@@ -41,6 +41,40 @@ function cleanUuid(value: unknown) {
   return value;
 }
 
+function fourRPayload(body: Record<string, unknown>) {
+  const result = Boolean(body.result4r);
+  const review = Boolean(body.review4r);
+  const refer = Boolean(body.refer4r);
+  const renew = Boolean(body.renew4r);
+  const resultDetail = cleanText(body.result4rDetail, 1200);
+  const reviewDetail = cleanText(body.review4rDetail, 1200);
+  const referDetail = cleanText(body.refer4rDetail, 1200);
+  const renewDetail = cleanText(body.renew4rDetail, 1200);
+
+  const missing: string[] = [];
+  if (result && !resultDetail) missing.push("Result");
+  if (review && !reviewDetail) missing.push("Review");
+  if (refer && !referDetail) missing.push("Refer");
+  if (renew && !renewDetail) missing.push("Renew");
+  if (missing.length) {
+    throw new NutritionAccessError(
+      `Ghi rõ nội dung cho 4R: ${missing.join(", ")}.`,
+      400,
+    );
+  }
+
+  return {
+    result_4r: result,
+    result_4r_detail: result ? resultDetail : null,
+    review_4r: review,
+    review_4r_detail: review ? reviewDetail : null,
+    refer_4r: refer,
+    refer_4r_detail: refer ? referDetail : null,
+    renew_4r: renew,
+    renew_4r_detail: renew ? renewDetail : null,
+  };
+}
+
 async function requireActiveClient(admin: SupabaseClient, clientId: string) {
   const { data, error } = await admin
     .from("clients")
@@ -72,16 +106,10 @@ async function getEffectiveNutritionCoachId(
 
 async function requireClientAccess(
   admin: SupabaseClient,
-  profile: { id: string; role: string },
+  _profile: { id: string; role: string },
   clientId: string,
 ) {
-  const client = await requireActiveClient(admin, clientId);
-
-  // Nutrition coaches work from the shared Nutrition workspace.
-  // They can view and record follow reports for every active client, while
-  // admin/manager-only controls still protect assignments, requirements,
-  // priorities and admin notes.
-  return client;
+  return requireActiveClient(admin, clientId);
 }
 
 async function requireNutritionCoach(admin: SupabaseClient, coachId: string) {
@@ -106,7 +134,7 @@ export async function GET(request: Request) {
       admin
         .from("clients")
         .select(
-          "id, client_code, full_name, status, assigned_trainer_id, assigned_nutrition_coach_id",
+          "id, profile_id, client_code, full_name, status, assigned_trainer_id, assigned_nutrition_coach_id",
         )
         .order("full_name", { ascending: true }),
       admin
@@ -126,18 +154,10 @@ export async function GET(request: Request) {
     }
 
     const statusRows = statusResult.data || [];
-    const statusByClient = new Map(
-      statusRows.map((row) => [row.client_id as string, row]),
-    );
-
     const activeClients = (clientsResult.data || []).filter(
       (client) => String(client.status || "").toLowerCase() !== "inactive",
     );
-
-    // Nutrition is a shared operations board: admins, managers and nutrition
-    // coaches all need the active client list so no client is missed.
     const visibleClients = activeClients;
-
     const visibleClientIds = visibleClients.map((client) => client.id as string);
     const visibleClientSet = new Set(visibleClientIds);
     const visibleStatuses = statusRows.filter((row) =>
@@ -149,14 +169,42 @@ export async function GET(request: Request) {
       const logsResult = await admin
         .from("nutrition_follow_logs")
         .select(
-          "id, client_id, nutrition_coach_id, follow_date, method, client_responded, nutrition_summary, body_comp, activity, current_issue, action_taken, follow_result, next_action, next_follow_at, outcome, result_4r, review_4r, refer_4r, renew_4r, created_at",
+          "id, client_id, nutrition_coach_id, follow_date, method, client_responded, nutrition_summary, body_comp, activity, current_issue, action_taken, follow_result, next_action, next_follow_at, outcome, result_4r, result_4r_detail, review_4r, review_4r_detail, refer_4r, refer_4r_detail, renew_4r, renew_4r_detail, created_at, updated_at",
         )
         .in("client_id", visibleClientIds)
         .order("follow_date", { ascending: false })
-        .limit(500);
+        .limit(1000);
 
       if (logsResult.error) throw logsResult.error;
       logs = logsResult.data || [];
+    }
+
+    const clientKeyToId = new Map<string, string>();
+    for (const client of visibleClients) {
+      clientKeyToId.set(client.id as string, client.id as string);
+      if (client.profile_id) clientKeyToId.set(client.profile_id as string, client.id as string);
+    }
+    const historyClientKeys = Array.from(clientKeyToId.keys());
+    let nutritionSessions: unknown[] = [];
+
+    if (historyClientKeys.length > 0) {
+      const sessionsResult = await admin
+        .from("session_history")
+        .select(
+          "id, client_id, trainer_id, session_type, status, message, session_topic, session_content, trainer_note, photo_path, created_at",
+        )
+        .eq("session_type", "nutrition_follow_up")
+        .in("client_id", historyClientKeys)
+        .order("created_at", { ascending: false })
+        .limit(1000);
+
+      if (sessionsResult.error) throw sessionsResult.error;
+      nutritionSessions = (sessionsResult.data || [])
+        .map((row) => ({
+          ...row,
+          client_id: clientKeyToId.get(row.client_id as string) || row.client_id,
+        }))
+        .filter((row) => visibleClientSet.has(row.client_id as string));
     }
 
     return Response.json(
@@ -171,6 +219,7 @@ export async function GET(request: Request) {
         statuses: visibleStatuses,
         profiles: profilesResult.data || [],
         logs,
+        nutritionSessions,
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -286,10 +335,7 @@ export async function PATCH(request: Request) {
       .single();
 
     if (error) throw error;
-
-    return Response.json(data, {
-      headers: { "Cache-Control": "no-store" },
-    });
+    return Response.json(data, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return nutritionFail(error);
   }
@@ -328,7 +374,6 @@ export async function POST(request: Request) {
         clientId,
         (client.assigned_nutrition_coach_id as string | null) || null,
       );
-
       const coachId = selectedCoachId || fallbackCoachId;
       if (!coachId) {
         throw new NutritionAccessError(
@@ -340,7 +385,6 @@ export async function POST(request: Request) {
     }
 
     const nextFollowAt = cleanDate(body.nextFollowAt);
-
     const logRow = {
       client_id: clientId,
       nutrition_coach_id: nutritionCoachId,
@@ -356,11 +400,10 @@ export async function POST(request: Request) {
       next_action: cleanText(body.nextAction),
       next_follow_at: nextFollowAt,
       outcome: body.outcome,
-      result_4r: Boolean(body.result4r),
-      review_4r: Boolean(body.review4r),
-      refer_4r: Boolean(body.refer4r),
-      renew_4r: Boolean(body.renew4r),
+      ...fourRPayload(body),
       created_by: profile.id,
+      updated_by: profile.id,
+      updated_at: new Date().toISOString(),
     };
 
     const { data: log, error: logError } = await admin
@@ -390,6 +433,58 @@ export async function POST(request: Request) {
       { log, status },
       { headers: { "Cache-Control": "no-store" } },
     );
+  } catch (error) {
+    return nutritionFail(error);
+  }
+}
+
+export async function PUT(request: Request) {
+  try {
+    const { admin, profile } = await getNutritionAccessContext(request);
+    if (!canRecordNutritionFollow(profile.role)) {
+      throw new NutritionAccessError("Access denied.", 403);
+    }
+
+    const body = (await request.json().catch(() => null)) as
+      | Record<string, unknown>
+      | null;
+    if (!body) throw new NutritionAccessError("Invalid request.", 400);
+
+    const logId = cleanUuid(body.logId);
+    if (!logId) throw new NutritionAccessError("Follow report is required.", 400);
+
+    const { data: existing, error: existingError } = await admin
+      .from("nutrition_follow_logs")
+      .select("id, client_id, nutrition_coach_id")
+      .eq("id", logId)
+      .single();
+    if (existingError || !existing) {
+      throw new NutritionAccessError("Follow report not found.", 404);
+    }
+
+    await requireClientAccess(admin, profile, existing.client_id as string);
+    if (
+      profile.role === "nutrition_coach" &&
+      existing.nutrition_coach_id !== profile.id
+    ) {
+      throw new NutritionAccessError("You can only edit your own 4R records.", 403);
+    }
+
+    const patch = {
+      ...fourRPayload(body),
+      updated_by: profile.id,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await admin
+      .from("nutrition_follow_logs")
+      .update(patch)
+      .eq("id", logId)
+      .select()
+      .single();
+    if (error) throw error;
+
+    return Response.json(data, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return nutritionFail(error);
   }
