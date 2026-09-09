@@ -83,6 +83,45 @@ type NutritionPayload = {
 };
 
 type ViewKey = "action" | "all" | "followed" | "no_follow";
+type FourRName = "Renew" | "Refer" | "Result" | "Review";
+type FourRFlags = { renew: boolean; refer: boolean; result: boolean; review: boolean };
+
+const FOUR_R_DEFINITIONS: Array<{
+  name: FourRName;
+  key: keyof FourRFlags;
+  formName: "renew4r" | "refer4r" | "result4r" | "review4r";
+  description: string;
+  color: string;
+}> = [
+  {
+    name: "Renew",
+    key: "renew",
+    formName: "renew4r",
+    description: "Khách đã gia hạn hoặc xác nhận renewal.",
+    color: "text-emerald-300",
+  },
+  {
+    name: "Refer",
+    key: "refer",
+    formName: "refer4r",
+    description: "Khách đã giới thiệu referral/lead mới.",
+    color: "text-sky-300",
+  },
+  {
+    name: "Result",
+    key: "result",
+    formName: "result4r",
+    description: "Có kết quả/progress thực tế có thể ghi nhận.",
+    color: "text-yellow-300",
+  },
+  {
+    name: "Review",
+    key: "review",
+    formName: "review4r",
+    description: "Đã nhận review/testimonial, ví dụ Google hoặc Facebook.",
+    color: "text-violet-300",
+  },
+];
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
@@ -104,7 +143,41 @@ function formatDateTime(value: string | null | undefined) {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "America/Toronto",
   });
+}
+
+function torontoMonth(value: Date | string) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  if (!Number.isFinite(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Toronto",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value || "";
+  const month = parts.find((part) => part.type === "month")?.value || "";
+  return year && month ? `${year}-${month}` : "";
+}
+
+function formatMonthLabel(month: string) {
+  if (!/^\d{4}-\d{2}$/.test(month)) return month;
+  const date = new Date(`${month}-15T12:00:00Z`);
+  return date.toLocaleDateString("en-CA", {
+    month: "long",
+    year: "numeric",
+    timeZone: "America/Toronto",
+  });
+}
+
+function fourRFlagsForLogs(logs: FollowLog[], month: string): FourRFlags {
+  const monthLogs = logs.filter((log) => torontoMonth(log.follow_date) === month);
+  return {
+    renew: monthLogs.some((log) => log.renew_4r),
+    refer: monthLogs.some((log) => log.refer_4r),
+    result: monthLogs.some((log) => log.result_4r),
+    review: monthLogs.some((log) => log.review_4r),
+  };
 }
 
 function isOverdue(value: string | null | undefined, status: NutritionWorkflowStatus) {
@@ -146,6 +219,7 @@ export default function NutritionPage() {
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showFollowForm, setShowFollowForm] = useState(false);
+  const fourRMonth = torontoMonth(new Date());
 
   async function load() {
     setLoading(true);
@@ -193,6 +267,69 @@ export default function NutritionPage() {
     [data],
   );
 
+  const fourRMetrics = useMemo(() => {
+    const empty = {
+      renew: 0,
+      refer: 0,
+      result: 0,
+      review: 0,
+      clientsWithAny: 0,
+      followReports: 0,
+      scopeLabel: "Nutrition Team",
+    };
+    if (!data) return empty;
+
+    let scoped = data.logs.filter((log) => torontoMonth(log.follow_date) === fourRMonth);
+    let scopeLabel = "Nutrition Team";
+
+    if (data.viewer.role === "nutrition_coach") {
+      scoped = scoped.filter((log) => log.nutrition_coach_id === data.viewer.id);
+      scopeLabel = data.viewer.fullName || "My 4R";
+    } else if (coachFilter === "unassigned") {
+      scoped = [];
+      scopeLabel = "Unassigned";
+    } else if (coachFilter !== "all") {
+      scoped = scoped.filter((log) => log.nutrition_coach_id === coachFilter);
+      const coach = profilesById.get(coachFilter);
+      scopeLabel = coach?.full_name || coach?.email || "Selected Coach";
+    }
+
+    const renew = new Set<string>();
+    const refer = new Set<string>();
+    const result = new Set<string>();
+    const review = new Set<string>();
+    const any = new Set<string>();
+
+    for (const log of scoped) {
+      if (log.renew_4r) {
+        renew.add(log.client_id);
+        any.add(log.client_id);
+      }
+      if (log.refer_4r) {
+        refer.add(log.client_id);
+        any.add(log.client_id);
+      }
+      if (log.result_4r) {
+        result.add(log.client_id);
+        any.add(log.client_id);
+      }
+      if (log.review_4r) {
+        review.add(log.client_id);
+        any.add(log.client_id);
+      }
+    }
+
+    return {
+      renew: renew.size,
+      refer: refer.size,
+      result: result.size,
+      review: review.size,
+      clientsWithAny: any.size,
+      followReports: scoped.length,
+      scopeLabel,
+    };
+  }, [data, fourRMonth, coachFilter, profilesById]);
+
   const rows = useMemo(() => {
     if (!data) return [];
     const searchText = search.trim().toLowerCase();
@@ -223,6 +360,7 @@ export default function NutritionPage() {
           trainerName: trainer?.full_name || trainer?.email || "—",
           latestLog,
           overdue,
+          fourR: fourRFlagsForLogs(logs, fourRMonth),
         };
       })
       .filter((row) => {
@@ -256,7 +394,7 @@ export default function NutritionPage() {
         if (aDate !== bDate) return aDate.localeCompare(bDate);
         return a.client.full_name.localeCompare(b.client.full_name);
       });
-  }, [data, search, coachFilter, statusFilter, requirementFilter, priorityFilter, view, statusesByClient, logsByClient, profilesById]);
+  }, [data, search, coachFilter, statusFilter, requirementFilter, priorityFilter, view, statusesByClient, logsByClient, profilesById, fourRMonth]);
 
   const summary = useMemo(() => {
     if (!data) return { need: 0, overdue: 0, progress: 0, waiting: 0, followed: 0, unreviewed: 0 };
@@ -283,6 +421,7 @@ export default function NutritionPage() {
   const selectedCoachId = selected
     ? selectedStatus?.nutrition_coach_id || selected.assigned_nutrition_coach_id || ""
     : "";
+  const selectedFourR = fourRFlagsForLogs(selectedLogs, fourRMonth);
 
   async function patchClient(clientId: string, patch: Record<string, unknown>) {
     setSaving(true);
@@ -372,6 +511,38 @@ export default function NutritionPage() {
           ))}
         </section>
 
+        <section className="mb-5 rounded-3xl border border-yellow-400/20 bg-[linear-gradient(135deg,rgba(250,204,21,0.08),rgba(255,255,255,0.025))] p-4 md:p-5">
+          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.28em] text-yellow-400">Monthly KPI</p>
+              <h2 className="mt-1 text-2xl font-black">4R · {formatMonthLabel(fourRMonth)}</h2>
+              <p className="mt-1 text-xs text-zinc-400">Renew · Refer · Result · Review — {fourRMetrics.scopeLabel}</p>
+            </div>
+            <div className="text-xs text-zinc-500 md:text-right">
+              <p>{fourRMetrics.followReports} follow reports trong scope</p>
+              <p>{fourRMetrics.clientsWithAny} khách có ít nhất 1 chỉ số 4R</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {FOUR_R_DEFINITIONS.map((item) => (
+              <div key={item.name} className="rounded-2xl border border-white/[0.08] bg-black/35 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className={`text-sm font-black ${item.color}`}>{item.name}</p>
+                    <p className="mt-1 text-[11px] leading-4 text-zinc-500">{item.description}</p>
+                  </div>
+                  <p className="text-4xl font-black text-white">{fourRMetrics[item.key]}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <p className="mt-3 text-[11px] leading-5 text-zinc-500">
+            KPI tính theo khách unique trong từng tháng Toronto: cùng một khách được đánh dấu cùng một R nhiều lần vẫn chỉ tính 1 lần cho R đó. Chỉ tick 4R khi đã đạt kết quả thực tế, không tick chỉ vì đã hỏi khách.
+          </p>
+        </section>
+
         <section className="mb-4 rounded-3xl border border-white/[0.08] bg-white/[0.035] p-4">
           <div className="mb-4 flex flex-wrap gap-2">
             {([
@@ -412,26 +583,36 @@ export default function NutritionPage() {
           <section className="overflow-hidden rounded-3xl border border-white/[0.08] bg-[#0d0d0d]">
             <div className="border-b border-white/[0.07] px-4 py-3 text-xs text-zinc-500">Showing {rows.length} clients · Overdue + P1/P2 được đưa lên đầu</div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1120px] text-left text-sm">
+              <table className="w-full min-w-[1260px] text-left text-sm">
                 <thead className="bg-yellow-400 text-black">
                   <tr>
-                    <th className="px-4 py-3">Khách hàng</th><th className="px-3 py-3">Need Follow</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Priority</th><th className="px-3 py-3">Nutrition Coach</th><th className="px-3 py-3">Last Follow</th><th className="px-3 py-3">Next Follow</th><th className="px-3 py-3">PT</th><th className="px-4 py-3 text-right">Action</th>
+                    <th className="px-4 py-3">Khách hàng</th><th className="px-3 py-3">Need Follow</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Priority</th><th className="px-3 py-3">Nutrition Coach</th><th className="px-3 py-3">4R tháng</th><th className="px-3 py-3">Last Follow</th><th className="px-3 py-3">Next Follow</th><th className="px-3 py-3">PT</th><th className="px-4 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.client.id} className={`border-b border-white/[0.06] hover:bg-white/[0.04] ${row.overdue ? "bg-rose-500/[0.045]" : ""}`}>
-                      <td className="px-4 py-3"><p className="font-bold text-white">{row.client.full_name}</p><p className="text-xs text-zinc-600">{row.client.client_code || "—"}</p></td>
-                      <td className="px-3 py-3"><span className={`rounded-full border px-2 py-1 text-[11px] font-bold ${requirementClass(row.requirement)}`}>{FOLLOW_REQUIREMENT_LABELS[row.requirement]}</span></td>
-                      <td className={`px-3 py-3 font-semibold ${statusClass(row.workflowStatus)}`}>{WORKFLOW_STATUS_LABELS[row.workflowStatus]}</td>
-                      <td className="px-3 py-3 font-black">{row.priority ? PRIORITY_LABELS[row.priority] : "—"}</td>
-                      <td className="px-3 py-3">{row.coachName}</td>
-                      <td className="px-3 py-3">{row.latestLog ? formatDateTime(row.latestLog.follow_date) : "—"}</td>
-                      <td className={`px-3 py-3 ${row.overdue ? "font-black text-rose-300" : "text-zinc-300"}`}>{row.overdue ? "⚠ " : ""}{formatDate(row.saved?.next_follow_at)}</td>
-                      <td className="px-3 py-3 text-zinc-400">{row.trainerName}</td>
-                      <td className="px-4 py-3 text-right"><button onClick={() => { setSelectedClientId(row.client.id); setShowFollowForm(false); }} className="rounded-xl bg-yellow-400 px-3 py-2 text-xs font-black text-black hover:bg-yellow-300">Open</button></td>
-                    </tr>
-                  ))}
+                  {rows.map((row) => {
+                    const achieved = FOUR_R_DEFINITIONS.filter((item) => row.fourR[item.key]);
+                    return (
+                      <tr key={row.client.id} className={`border-b border-white/[0.06] hover:bg-white/[0.04] ${row.overdue ? "bg-rose-500/[0.045]" : ""}`}>
+                        <td className="px-4 py-3"><p className="font-bold text-white">{row.client.full_name}</p><p className="text-xs text-zinc-600">{row.client.client_code || "—"}</p></td>
+                        <td className="px-3 py-3"><span className={`rounded-full border px-2 py-1 text-[11px] font-bold ${requirementClass(row.requirement)}`}>{FOLLOW_REQUIREMENT_LABELS[row.requirement]}</span></td>
+                        <td className={`px-3 py-3 font-semibold ${statusClass(row.workflowStatus)}`}>{WORKFLOW_STATUS_LABELS[row.workflowStatus]}</td>
+                        <td className="px-3 py-3 font-black">{row.priority ? PRIORITY_LABELS[row.priority] : "—"}</td>
+                        <td className="px-3 py-3">{row.coachName}</td>
+                        <td className="px-3 py-3">
+                          {achieved.length ? (
+                            <div className="flex max-w-[190px] flex-wrap gap-1">
+                              {achieved.map((item) => <span key={item.name} className="rounded-md border border-white/10 bg-white/[0.05] px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">{item.name}</span>)}
+                            </div>
+                          ) : <span className="text-zinc-700">—</span>}
+                        </td>
+                        <td className="px-3 py-3">{row.latestLog ? formatDateTime(row.latestLog.follow_date) : "—"}</td>
+                        <td className={`px-3 py-3 ${row.overdue ? "font-black text-rose-300" : "text-zinc-300"}`}>{row.overdue ? "⚠ " : ""}{formatDate(row.saved?.next_follow_at)}</td>
+                        <td className="px-3 py-3 text-zinc-400">{row.trainerName}</td>
+                        <td className="px-4 py-3 text-right"><button onClick={() => { setSelectedClientId(row.client.id); setShowFollowForm(false); }} className="rounded-xl bg-yellow-400 px-3 py-2 text-xs font-black text-black hover:bg-yellow-300">Open</button></td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -479,6 +660,22 @@ export default function NutritionPage() {
               </label>
             </div>
 
+            <section className="mt-5 rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-yellow-400">Client 4R</p>
+                  <h3 className="mt-1 font-black">{formatMonthLabel(fourRMonth)}</h3>
+                </div>
+                <p className="text-xs text-zinc-500">{FOUR_R_DEFINITIONS.filter((item) => selectedFourR[item.key]).length}/4 achieved</p>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {FOUR_R_DEFINITIONS.map((item) => {
+                  const achieved = selectedFourR[item.key];
+                  return <div key={item.name} className={`rounded-xl border px-3 py-2 text-center text-xs font-black ${achieved ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-white/[0.08] bg-black/30 text-zinc-600"}`}>{achieved ? "✓ " : ""}{item.name}</div>;
+                })}
+              </div>
+            </section>
+
             {data?.permissions.canRecordFollow ? <button onClick={() => setShowFollowForm((value) => !value)} className="mt-5 w-full rounded-2xl bg-yellow-400 px-4 py-3 text-sm font-black text-black hover:bg-yellow-300">+ Record Follow</button> : null}
 
             {showFollowForm ? (
@@ -491,7 +688,20 @@ export default function NutritionPage() {
                 </div>
                 {[ ["nutritionSummary","Ăn uống / compliance"], ["bodyComp","Weight / body comp"], ["activity","Training / activity"], ["currentIssue","Vấn đề hiện tại"], ["actionTaken","Action đã làm"], ["followResult","Kết quả follow"], ["nextAction","Next action"] ].map(([name, placeholder]) => <textarea key={name} name={name} placeholder={placeholder} rows={2} className="w-full rounded-xl border border-white/10 bg-black px-3 py-2.5 text-sm outline-none focus:border-yellow-400" />)}
                 <div className="grid gap-3 sm:grid-cols-2"><input name="nextFollowAt" type="date" className="rounded-xl border border-white/10 bg-black px-3 py-2.5 text-sm" /><select name="outcome" defaultValue="complete" className="rounded-xl border border-white/10 bg-black px-3 py-2.5 text-sm">{Object.entries(FOLLOW_OUTCOME_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
-                <div className="flex flex-wrap gap-4 text-sm text-zinc-300">{[["result4r","Result"],["review4r","Review"],["refer4r","Refer"],["renew4r","Renew"]].map(([name,label]) => <label key={name} className="flex items-center gap-2"><input type="checkbox" name={name} />{label}</label>)}</div>
+
+                <div className="rounded-2xl border border-white/[0.08] bg-black/30 p-3">
+                  <p className="text-xs font-black uppercase tracking-widest text-yellow-400">4R đạt được trong lần follow này</p>
+                  <p className="mt-1 text-[11px] leading-4 text-zinc-500">Chỉ tick khi kết quả đã thực sự xảy ra. Việc hỏi khách về renewal/review/referral chưa được tính là 4R.</p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {FOUR_R_DEFINITIONS.map((item) => (
+                      <label key={item.formName} className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/[0.08] bg-white/[0.025] p-3">
+                        <input type="checkbox" name={item.formName} className="mt-1" />
+                        <span><span className={`block text-sm font-black ${item.color}`}>{item.name}</span><span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">{item.description}</span></span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
                 <button disabled={saving} className="w-full rounded-xl bg-emerald-400 px-4 py-3 text-sm font-black text-black disabled:opacity-50">{saving ? "Saving..." : "Submit Follow"}</button>
               </form>
             ) : null}
@@ -499,16 +709,19 @@ export default function NutritionPage() {
             <section className="mt-6">
               <div className="mb-3 flex items-center justify-between"><h3 className="text-lg font-black">Follow History</h3><span className="text-xs text-zinc-500">{selectedLogs.length} records</span></div>
               <div className="space-y-3">
-                {selectedLogs.map((log) => (
-                  <article key={log.id} className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-bold">{formatDateTime(log.follow_date)}</p><p className="text-xs text-zinc-500">{profilesById.get(log.nutrition_coach_id)?.full_name || "Nutrition Coach"} · {FOLLOW_METHOD_LABELS[log.method]}</p></div><span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-zinc-300">{FOLLOW_OUTCOME_LABELS[log.outcome]}</span></div>
-                    {log.current_issue ? <p className="mt-3 text-sm"><span className="text-zinc-500">Issue:</span> {log.current_issue}</p> : null}
-                    {log.action_taken ? <p className="mt-1 text-sm"><span className="text-zinc-500">Action:</span> {log.action_taken}</p> : null}
-                    {log.follow_result ? <p className="mt-1 text-sm"><span className="text-zinc-500">Result:</span> {log.follow_result}</p> : null}
-                    {log.next_action ? <p className="mt-1 text-sm"><span className="text-zinc-500">Next:</span> {log.next_action}</p> : null}
-                    <p className="mt-2 text-xs text-zinc-600">Next follow: {formatDate(log.next_follow_at)} · 4R: {[log.result_4r && "Result", log.review_4r && "Review", log.refer_4r && "Refer", log.renew_4r && "Renew"].filter(Boolean).join(", ") || "—"}</p>
-                  </article>
-                ))}
+                {selectedLogs.map((log) => {
+                  const achieved = [log.renew_4r && "Renew", log.refer_4r && "Refer", log.result_4r && "Result", log.review_4r && "Review"].filter(Boolean);
+                  return (
+                    <article key={log.id} className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-bold">{formatDateTime(log.follow_date)}</p><p className="text-xs text-zinc-500">{profilesById.get(log.nutrition_coach_id)?.full_name || "Nutrition Coach"} · {FOLLOW_METHOD_LABELS[log.method]}</p></div><span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-bold text-zinc-300">{FOLLOW_OUTCOME_LABELS[log.outcome]}</span></div>
+                      {log.current_issue ? <p className="mt-3 text-sm"><span className="text-zinc-500">Issue:</span> {log.current_issue}</p> : null}
+                      {log.action_taken ? <p className="mt-1 text-sm"><span className="text-zinc-500">Action:</span> {log.action_taken}</p> : null}
+                      {log.follow_result ? <p className="mt-1 text-sm"><span className="text-zinc-500">Result:</span> {log.follow_result}</p> : null}
+                      {log.next_action ? <p className="mt-1 text-sm"><span className="text-zinc-500">Next:</span> {log.next_action}</p> : null}
+                      <p className="mt-2 text-xs text-zinc-600">Next follow: {formatDate(log.next_follow_at)} · 4R: {achieved.join(", ") || "—"}</p>
+                    </article>
+                  );
+                })}
                 {!selectedLogs.length ? <p className="rounded-2xl border border-white/[0.08] p-5 text-center text-sm text-zinc-500">Chưa có lịch sử follow.</p> : null}
               </div>
             </section>
