@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -49,7 +48,6 @@ export default function AdminAiAssistant() {
 
   async function askQuestion(rawQuestion?: string) {
     const cleanQuestion = (rawQuestion ?? question).trim();
-
     if (!cleanQuestion || loading) return;
 
     const userMessage: ChatMessage = {
@@ -61,10 +59,7 @@ export default function AdminAiAssistant() {
     const history = messages
       .filter((message) => message.id !== "welcome")
       .slice(-8)
-      .map((message) => ({
-        role: message.role,
-        content: message.content,
-      }));
+      .map((message) => ({ role: message.role, content: message.content }));
 
     setMessages((current) => [...current, userMessage]);
     setQuestion("");
@@ -86,29 +81,18 @@ export default function AdminAiAssistant() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({
-          question: cleanQuestion,
-          history,
-        }),
+        body: JSON.stringify({ question: cleanQuestion, history }),
       });
 
-      const data = (await response.json().catch(() => null)) as
-        | AssistantResponse
-        | null;
+      const data = (await response.json().catch(() => null)) as AssistantResponse | null;
 
       if (!response.ok || !data?.success || !data.answer) {
-        throw new Error(
-          data?.error || `AI assistant request failed with ${response.status}.`,
-        );
+        throw new Error(data?.error || `AI assistant request failed with ${response.status}.`);
       }
 
       setMessages((current) => [
         ...current,
-        {
-          id: createMessageId(),
-          role: "assistant",
-          content: data.answer || "No answer was returned.",
-        },
+        { id: createMessageId(), role: "assistant", content: data.answer || "No answer was returned." },
       ]);
     } catch (error) {
       setMessages((current) => [
@@ -145,25 +129,14 @@ export default function AdminAiAssistant() {
 
   return (
     <>
-      <div className="fixed bottom-5 right-5 z-[120] flex flex-col items-end gap-2 sm:flex-row sm:items-center">
-        <Link
-          href="/admin/package-expiry"
-          className="flex items-center gap-2 rounded-2xl border border-red-300/40 bg-red-400 px-4 py-3 text-xs font-bold uppercase tracking-wide text-black shadow-[0_18px_60px_rgba(248,113,113,0.24)] transition hover:bg-red-300 active:scale-[0.98]"
-          aria-label="Open package expiry management"
-        >
-          <span aria-hidden="true">📅</span>
-          Package Expiry
-        </Link>
-
+      <div className="fixed bottom-5 right-5 z-[120]">
         <button
           type="button"
           onClick={() => setOpen(true)}
           className="flex items-center gap-3 rounded-2xl border border-violet-300/40 bg-violet-400 px-5 py-3 text-sm font-bold uppercase tracking-wide text-black shadow-[0_18px_60px_rgba(167,139,250,0.35)] transition hover:bg-violet-300 active:scale-[0.98]"
           aria-label="Open FXA AI Assistant"
         >
-          <span className="text-lg" aria-hidden="true">
-            ✦
-          </span>
+          <span className="text-lg" aria-hidden="true">✦</span>
           Ask Angel
         </button>
       </div>
@@ -175,86 +148,41 @@ export default function AdminAiAssistant() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-violet-300">
-                      FXA AI Assistant Angelique
-                    </p>
-                    <span className="rounded-full border border-green-400/25 bg-green-400/10 px-2 py-1 text-[10px] font-semibold uppercase text-green-300">
-                      Read-only
-                    </span>
+                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-violet-300">FXA AI Assistant Angelique</p>
+                    <span className="rounded-full border border-green-400/25 bg-green-400/10 px-2 py-1 text-[10px] font-semibold uppercase text-green-300">Read-only</span>
                   </div>
-
-                  <h2 className="mt-2 text-2xl font-semibold text-white">
-                    Ask about your business
-                  </h2>
-
-                  <p className="mt-2 text-xs leading-5 text-gray-400">
-                    Answers use current FXA data. Review important details before
-                    making decisions.
-                  </p>
+                  <h2 className="mt-2 text-2xl font-semibold text-white">Ask about your business</h2>
+                  <p className="mt-2 text-xs leading-5 text-gray-400">Answers use current FXA data. Review important details before making decisions.</p>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => setOpen(false)}
-                  className="rounded-xl border border-white/15 px-3 py-2 text-sm text-gray-300 transition hover:border-white/30 hover:text-white"
-                  aria-label="Close FXA AI Assistant"
-                >
-                  Close
-                </button>
+                <button type="button" onClick={() => setOpen(false)} className="rounded-xl border border-white/15 px-3 py-2 text-sm text-gray-300 transition hover:border-white/30 hover:text-white" aria-label="Close FXA AI Assistant">Close</button>
               </div>
             </header>
 
             <div className="border-b border-white/10 px-4 py-3">
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {SUGGESTED_QUESTIONS.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => void askQuestion(item)}
-                    disabled={loading}
-                    className="shrink-0 rounded-full border border-violet-400/25 bg-violet-400/10 px-3 py-2 text-left text-xs text-violet-200 transition hover:bg-violet-400/20 disabled:opacity-50"
-                  >
-                    {item}
-                  </button>
+                  <button key={item} type="button" onClick={() => void askQuestion(item)} disabled={loading} className="shrink-0 rounded-full border border-violet-400/25 bg-violet-400/10 px-3 py-2 text-left text-xs text-violet-200 transition hover:bg-violet-400/20 disabled:opacity-50">{item}</button>
                 ))}
               </div>
             </div>
 
             <div className="flex-1 space-y-4 overflow-y-auto p-4 md:p-5">
               {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex ${
-                    message.role === "user" ? "justify-end" : "justify-start"
-                  }`}
-                >
-                  <div
-                    className={`max-w-[90%] rounded-3xl border px-4 py-3 text-sm leading-6 md:max-w-[85%] ${
-                      message.role === "user"
-                        ? "border-yellow-400/30 bg-yellow-400 text-black"
-                        : "border-white/10 bg-white/[0.06] text-gray-200"
-                    }`}
-                  >
+                <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[90%] rounded-3xl border px-4 py-3 text-sm leading-6 md:max-w-[85%] ${message.role === "user" ? "border-yellow-400/30 bg-yellow-400 text-black" : "border-white/10 bg-white/[0.06] text-gray-200"}`}>
                     <p className="whitespace-pre-wrap">{message.content}</p>
                   </div>
                 </div>
               ))}
 
               {loading ? (
-                <div className="flex justify-start">
-                  <div className="rounded-3xl border border-violet-400/20 bg-violet-400/10 px-4 py-3 text-sm text-violet-200">
-                    Reviewing FXA data...
-                  </div>
-                </div>
+                <div className="flex justify-start"><div className="rounded-3xl border border-violet-400/20 bg-violet-400/10 px-4 py-3 text-sm text-violet-200">Reviewing FXA data...</div></div>
               ) : null}
 
               <div ref={messageEndRef} />
             </div>
 
-            <form
-              onSubmit={submitQuestion}
-              className="border-t border-white/10 bg-black/80 p-4"
-            >
+            <form onSubmit={submitQuestion} className="border-t border-white/10 bg-black/80 p-4">
               <textarea
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
@@ -271,22 +199,8 @@ export default function AdminAiAssistant() {
               />
 
               <div className="mt-3 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={clearConversation}
-                  disabled={loading}
-                  className="rounded-xl border border-white/15 px-4 py-2 text-xs font-semibold uppercase text-gray-400 transition hover:text-white disabled:opacity-50"
-                >
-                  Clear
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={loading || !question.trim()}
-                  className="rounded-xl bg-violet-400 px-5 py-2.5 text-xs font-bold uppercase text-black transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {loading ? "Thinking..." : "Ask Question"}
-                </button>
+                <button type="button" onClick={clearConversation} disabled={loading} className="rounded-xl border border-white/15 px-4 py-2 text-xs font-semibold uppercase text-gray-400 transition hover:text-white disabled:opacity-50">Clear</button>
+                <button type="submit" disabled={loading || !question.trim()} className="rounded-xl bg-violet-400 px-5 py-2.5 text-xs font-bold uppercase text-black transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-50">{loading ? "Thinking..." : "Ask Question"}</button>
               </div>
             </form>
           </section>
