@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -144,17 +145,28 @@ export default function AdminAiAssistant() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="fixed bottom-5 right-5 z-[120] flex items-center gap-3 rounded-2xl border border-violet-300/40 bg-violet-400 px-5 py-3 text-sm font-bold uppercase tracking-wide text-black shadow-[0_18px_60px_rgba(167,139,250,0.35)] transition hover:bg-violet-300 active:scale-[0.98]"
-        aria-label="Open FXA AI Assistant"
-      >
-        <span className="text-lg" aria-hidden="true">
-          ✦
-        </span>
-        Ask Angel 
-      </button>
+      <div className="fixed bottom-5 right-5 z-[120] flex flex-col items-end gap-2 sm:flex-row sm:items-center">
+        <Link
+          href="/admin/package-expiry"
+          className="flex items-center gap-2 rounded-2xl border border-red-300/40 bg-red-400 px-4 py-3 text-xs font-bold uppercase tracking-wide text-black shadow-[0_18px_60px_rgba(248,113,113,0.24)] transition hover:bg-red-300 active:scale-[0.98]"
+          aria-label="Open package expiry management"
+        >
+          <span aria-hidden="true">📅</span>
+          Package Expiry
+        </Link>
+
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex items-center gap-3 rounded-2xl border border-violet-300/40 bg-violet-400 px-5 py-3 text-sm font-bold uppercase tracking-wide text-black shadow-[0_18px_60px_rgba(167,139,250,0.35)] transition hover:bg-violet-300 active:scale-[0.98]"
+          aria-label="Open FXA AI Assistant"
+        >
+          <span className="text-lg" aria-hidden="true">
+            ✦
+          </span>
+          Ask Angel
+        </button>
+      </div>
 
       {open ? (
         <div className="fixed inset-0 z-[130] flex items-end justify-end bg-black/70 p-0 backdrop-blur-sm md:p-5">
