@@ -2338,7 +2338,8 @@ export default function TrainerScanPage() {
                         No session content was saved for this record.
                       </p>
                     )}
-                    {log.trainer_note ? (
+                    {log.trainer_note &&
+                    log.trainer_note.trim() !== log.session_content?.trim() ? (
                       <div className="mt-3 rounded-xl border border-yellow-400/15 bg-yellow-400/[0.05] p-3">
                         <p className="text-[9px] font-black uppercase tracking-[0.12em] text-yellow-500/80">
                           Trainer Note
@@ -2408,6 +2409,10 @@ export default function TrainerScanPage() {
                           {log.session_type === "nutrition_follow_up"
                             ? "No training session deducted"
                             : "1 session deducted"}
+                          {log.session_type !== "nutrition_follow_up" &&
+                          log.remaining_after !== null
+                            ? ` · ${log.remaining_after} sessions remaining`
+                            : ""}
                         </p>
                       </div>
                       <div className="text-right">
