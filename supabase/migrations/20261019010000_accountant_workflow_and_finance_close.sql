@@ -175,7 +175,12 @@ begin
  update public.client_purchases set price=p_new_price,balance_due=v_balance,debt_deadline=p_debt_deadline,
  status=case when p_new_price=0 then 'pending' when v_balance=0 then 'paid' when coalesce(v_old.amount_paid,0)>0 then 'partial' else 'confirmed' end
  where id=p_purchase_id;
- -- session_packages.package_value may aggregate multiple renewals. Do not overwrite cumulatively here.
+ -- Existing renewal RPC accumulates package_value into the most recent session_package.
+ -- Apply the contract delta, not the entire new price, so renewals are never double-counted.
+ if v_old.session_count>0 and v_old.price is distinct from p_new_price then
+  update public.session_packages sp set package_value=coalesce(sp.package_value,0)+(p_new_price-v_old.price)
+  where sp.id=(select id from public.session_packages where client_id=v_old.client_id order by (status='active') desc,created_at desc limit 1);
+ end if;
  if v_old.price is distinct from p_new_price then
    insert into public.finance_edit_audit(table_name,record_id,field_name,old_value,new_value,reason,edited_by,old_value_json,new_value_json)
     values('client_purchases',p_purchase_id,'price',v_old.price,p_new_price,p_reason,v_actor,to_jsonb(v_old.price),to_jsonb(p_new_price));
@@ -1496,3 +1501,42 @@ end $$;
 
 -- Protect closing periods from changes after a sign-off. Audit changes require reopening through a future review flow.
 -- Do not back-date historical receivables into a current-time snapshot.
+
+-- Prevent Admin manually overwriting aggregate package monetary totals.
+create or replace function public.fxa_guard_session_package_value()
+returns trigger language plpgsql security definer set search_path='' as $$
+declare v_role text;
+begin
+ select role into v_role from public.profiles where id=auth.uid();
+ if v_role in ('admin','manager','trainer','nutrition_coach','client') then
+  if tg_op='INSERT' and coalesce(new.package_value,0)<>0 then
+   raise exception 'Only Accountant sets the package contract value.';
+  elsif tg_op='UPDATE' and new.package_value is distinct from old.package_value then
+   raise exception 'Only Accountant sets the package contract value.';
+  end if;
+ end if;
+ return new;
+end $$;
+drop trigger if exists fxa_guard_session_package_value on public.session_packages;
+create trigger fxa_guard_session_package_value before insert or update on public.session_packages
+for each row execute function public.fxa_guard_session_package_value();
+
+-- Accountant can create a standalone manual debt record with a reason and audit.
+create or replace function public.fxa_accountant_add_manual_debt(
+ p_client_id uuid,p_amount numeric,p_deadline date,p_note text,p_reason text)
+returns uuid language plpgsql security definer set search_path='' as $$
+declare v_actor uuid:=public.fxa_require_accountant(); v_id uuid;
+begin
+ if length(btrim(coalesce(p_reason,'')))<5 then raise exception 'Reason must have at least 5 characters';end if;
+ if p_amount is null or p_amount<=0 or p_amount<>round(p_amount,2) then raise exception 'Invalid debt amount';end if;
+ if p_deadline is null then raise exception 'Debt deadline is required';end if;
+ if not exists(select 1 from public.clients where id=p_client_id) then raise exception 'Client not found';end if;
+ insert into public.client_purchases(client_id,plan_name,session_count,price,amount_paid,balance_due,debt_deadline,purchase_type,status)
+ values(p_client_id,'Debt - '||coalesce(nullif(btrim(p_note),''),'Manual Debt'),0,p_amount,0,p_amount,p_deadline,'debt','confirmed')
+ returning id into v_id;
+ insert into public.finance_edit_audit(table_name,record_id,field_name,old_value,new_value,old_value_json,new_value_json,reason,edited_by)
+ values('client_purchases',v_id,'manual_debt_created',null,p_amount,null,to_jsonb(p_amount),p_reason,v_actor);
+ return v_id;
+end $$;
+revoke all on function public.fxa_accountant_add_manual_debt(uuid,numeric,date,text,text) from public;
+grant execute on function public.fxa_accountant_add_manual_debt(uuid,numeric,date,text,text) to authenticated;
