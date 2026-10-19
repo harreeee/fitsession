@@ -1340,7 +1340,7 @@ export default function AdminReportsPage() {
         return;
       }
 
-      if (role === "admin" || role === "manager") {
+      if (role === "admin" || role === "manager" || role === "accountant") {
         setCurrentRole(role);
 
         const { data, error: profileError } = await supabase
