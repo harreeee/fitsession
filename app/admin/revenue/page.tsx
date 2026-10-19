@@ -1208,8 +1208,8 @@ export default function RevenuePage() {
 }
   async function deleteTransaction(transaction: BusinessTransaction) {
     if (!isAdmin) return;
-    if (transaction.payable_id || transaction.transfer_id) {
-      setMessage("Không thể xóa trực tiếp giao dịch công nợ hoặc chuyển khoản.");
+    if (transaction.payable_id || transaction.transfer_id || transaction.purchase_id) {
+      setMessage("Không thể xóa giao dịch có liên kết. Dùng chức năng chỉnh sửa có lịch sử và lý do để giữ số tiền đồng bộ.");
       return;
     }
     if (!window.confirm(`Xóa giao dịch “${transaction.title}”?`)) return;
@@ -1432,7 +1432,7 @@ export default function RevenuePage() {
                             <td className="px-3 py-3">{accountMap.get(row.account_id || "")?.name || "Chưa phân bổ"}</td>
                             <td className="px-3 py-3">{row.trainer_id ? staffName(staffMap.get(row.trainer_id)) : "-"}</td>
                             <td className={`px-3 py-3 text-right font-semibold tabular-nums ${row.transaction_type === "income" || (row.transaction_type === "cash_adjustment" && numberValue(row.amount) > 0) ? "text-emerald-300" : "text-rose-300"}`}>{row.transaction_type === "expense" ? "-" : ""}{money(row.amount)}</td>
-                            {isAdmin ? <td className="px-3 py-3"><button type="button" onClick={() => void deleteTransaction(row)} disabled={Boolean(row.payable_id || row.transfer_id)} className="text-xs text-rose-300 disabled:text-zinc-700">Xóa</button></td> : null}
+                            {isAdmin ? <td className="px-3 py-3"><button type="button" onClick={() => void deleteTransaction(row)} disabled={Boolean(row.payable_id || row.transfer_id || row.purchase_id)} className="text-xs text-rose-300 disabled:text-zinc-700">Xóa</button></td> : null}
                           </tr>
                         ))}
                       </tbody>
