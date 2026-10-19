@@ -15,7 +15,7 @@ import {
 import { supabase } from "../../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
 
-type AdminRole = "admin" | "manager";
+type AdminRole = "admin" | "manager" | "accountant";
 type TabKey =
   | "overview"
   | "journal"
@@ -421,7 +421,7 @@ export default function RevenuePage() {
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const [editingPayable, setEditingPayable] = useState<PayableEditState | null>(null);
 
-  const isAdmin = role === "admin";
+  const isAdmin = role === "accountant";
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -542,7 +542,7 @@ export default function RevenuePage() {
         router.push("/login");
         return;
       }
-      if (currentRole === "admin" || currentRole === "manager") {
+      if (currentRole === "admin" || currentRole === "manager" || currentRole === "accountant") {
         setRole(currentRole);
         setCheckingRole(false);
         await fetchData();
@@ -1262,9 +1262,9 @@ export default function RevenuePage() {
             </div>
           </div>
 
-          {role === "manager" ? (
+          {role !== "accountant" ? (
             <div className="mt-5 rounded-2xl border border-sky-400/20 bg-sky-400/[0.08] p-3 text-sm text-sky-200">
-              Manager đang ở chế độ chỉ xem. Chỉ Admin được thêm, sửa số dư, chuyển tiền và thanh toán công nợ.
+              Manager đang ở chế độ chỉ xem. Chỉ Accountant được ghi sổ, điều chỉnh nguồn tiền và thanh toán công nợ.
             </div>
           ) : null}
         </header>
