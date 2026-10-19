@@ -206,7 +206,7 @@ export default function AdminRevenueEditPage() {
         router.push("/login");
         return;
       }
-      if (role !== "admin") {
+      if (role !== "accountant") {
         if (role === "manager") {
           router.push("/admin/revenue");
           return;
@@ -441,7 +441,7 @@ export default function AdminRevenueEditPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-yellow-400">
               Admin Only
             </p>
-            <h1 className="mt-2 text-3xl font-semibold md:text-4xl">Revenue Number Editor</h1>
+            <h1 className="mt-2 text-3xl font-semibold md:text-4xl">Accountant Correction Desk</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
               Correct source numbers here. Dashboard totals, cash flow and P&amp;L remain calculated values and update automatically.
             </p>
