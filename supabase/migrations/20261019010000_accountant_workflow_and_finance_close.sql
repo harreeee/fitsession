@@ -31,9 +31,9 @@ create policy "accountant read finance edit history" on public.finance_edit_audi
 -- Admin retains finance SELECT for oversight, loses direct write access.
 drop policy if exists "Admin can manage business transactions" on public.business_transactions;
 drop policy if exists "business_transactions_admin_all" on public.business_transactions;
-create policy "accountant journal writes" on public.business_transactions for all to authenticated
- using (public.current_user_role()='accountant')
- with check (public.current_user_role()='accountant');
+-- Journal writes are only via the privileged RPCs, which validate Accountant role and links.
+-- Do not grant direct UPDATE/DELETE through PostgREST, even to Accountant:
+-- they would bypass the obligatory audit reason and purchase reconciliation.
 
 drop policy if exists "admin manage finance accounts" on public.finance_accounts;
 create policy "accountant manage finance accounts" on public.finance_accounts for all to authenticated
