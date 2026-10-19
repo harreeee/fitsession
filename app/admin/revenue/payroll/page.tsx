@@ -12,7 +12,7 @@ import {
 import { supabase } from "../../../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../../../lib/checkUserRole";
 
-type AdminRole = "admin" | "manager";
+type AdminRole = "admin" | "manager" | "accountant";
 type PayableStatus = "unpaid" | "partial" | "paid" | "cancelled";
 
 type StaffProfile = {
@@ -261,7 +261,7 @@ export default function PayrollPage() {
         router.push("/login");
         return;
       }
-      if (currentRole === "admin" || currentRole === "manager") {
+      if (currentRole === "admin" || currentRole === "manager" || currentRole === "accountant") {
         setRole(currentRole);
         setCheckingRole(false);
         await fetchData();
