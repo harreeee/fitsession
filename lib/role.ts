@@ -217,11 +217,11 @@ export function canDeleteLeads(role: AppRoleValue): boolean {
  */
 
 export function canAddClients(role: AppRoleValue): boolean {
-  return role === "admin" || role === "manager";
+  return role === "admin";
 }
 
 export function canEditClientBasicInfo(role: AppRoleValue): boolean {
-  return role === "admin" || role === "manager";
+  return role === "admin";
 }
 
 export function canChangeClientStatus(role: AppRoleValue): boolean {
@@ -311,7 +311,7 @@ export function canEditPurchases(role: AppRoleValue): boolean {
 }
 
 export function canEditDebt(role: AppRoleValue): boolean {
-  return role === "admin";
+  return false; // Monetary edits are exclusively in Accountant Revenue.
 }
 
 export function canCompleteDebt(role: AppRoleValue): boolean {
