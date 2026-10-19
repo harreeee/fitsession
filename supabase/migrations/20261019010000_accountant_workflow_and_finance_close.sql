@@ -1315,3 +1315,156 @@ end;
 $function$
 
 -- Previously drafted full transaction editor is also Accountant-only.
+
+-- Complete the separation: Accountant owns the generic transaction editor.
+create or replace function public.admin_edit_finance_transaction_details(
+ p_transaction_id uuid, p_changes jsonb, p_reason text
+) returns void language plpgsql security definer set search_path='' as $$
+declare
+ v_admin uuid;
+ v_reason text:=btrim(coalesce(p_reason,''));
+ v_old public.business_transactions%rowtype;
+ v_new public.business_transactions%rowtype;
+ v_purchase public.client_purchases%rowtype;
+ v_account public.finance_accounts%rowtype;
+ v_category public.finance_categories%rowtype;
+ v_doc jsonb;
+ v_before jsonb;
+ v_after jsonb;
+ v_type text;
+ v_source text;
+ v_title text;
+ v_amount numeric;
+ v_date date;
+ v_month date;
+ v_account_id uuid;
+ v_category_id uuid;
+ v_trainer_id uuid;
+ v_delta numeric;
+ v_field text;
+ v_old_value jsonb;
+ v_new_value jsonb;
+ v_fields text[]:=array['transaction_type','source','title','amount','notes','transaction_date','accounting_month','counterparty','document_no','account_id','category_id','trainer_id','report_group'];
+begin
+ v_admin:=public.fxa_require_accountant();
+ if length(v_reason)<5 then raise exception 'Lý do sửa phải có ít nhất 5 ký tự.'; end if;
+ if p_changes is null or jsonb_typeof(p_changes)<>'object' then raise exception 'Invalid finance changes.'; end if;
+ if exists(select 1 from jsonb_object_keys(p_changes) k where k<>all(v_fields)) then
+  raise exception 'A protected system field cannot be edited.';
+ end if;
+ select * into v_old from public.business_transactions where id=p_transaction_id for update;
+ if not found then raise exception 'Transaction not found.'; end if;
+ if v_old.transfer_id is not null then raise exception 'Edit this transaction through Transfers to preserve both ledger entries.'; end if;
+ if v_old.payable_id is not null then raise exception 'Edit this transaction through Payables to preserve payable balances.'; end if;
+ v_doc:=to_jsonb(v_old)||p_changes;
+ v_type:=v_doc->>'transaction_type';
+ v_source:=btrim(coalesce(v_doc->>'source',''));
+ v_title:=btrim(coalesce(v_doc->>'title',''));
+ v_amount:=nullif(v_doc->>'amount','')::numeric;
+ v_date:=nullif(v_doc->>'transaction_date','')::date;
+ v_month:=nullif(v_doc->>'accounting_month','')::date;
+ v_account_id:=nullif(v_doc->>'account_id','')::uuid;
+ v_category_id:=nullif(v_doc->>'category_id','')::uuid;
+ v_trainer_id:=nullif(v_doc->>'trainer_id','')::uuid;
+ if v_type not in ('income','expense','cash_adjustment') or v_amount is null or v_amount<>round(v_amount,2) or v_date is null or v_month is null then
+  raise exception 'Invalid type, amount, payment date or accounting month.';
+ end if;
+ if date_trunc('month',v_month)::date <> v_month then raise exception 'Accounting month must be the first day of the month.'; end if;
+ if v_type in ('income','expense') and v_amount<=0 then raise exception 'Income/expense must be greater than zero.'; end if;
+ if v_title='' or v_source='' then raise exception 'Transaction description and origin are required.'; end if;
+ select * into v_account from public.finance_accounts where id=v_account_id;
+ if not found or not v_account.is_active then raise exception 'Select an active financial account.'; end if;
+ if v_type<>'cash_adjustment' then
+  select * into v_category from public.finance_categories where id=v_category_id;
+  if not found or not v_category.is_active or v_category.category_kind<>v_type then
+   raise exception 'Category must be active and match transaction type.';
+  end if;
+  if v_category.system_key='salary' and v_trainer_id is null then raise exception 'Salary transactions require a trainer.'; end if;
+ end if;
+ if v_old.purchase_id is not null then
+  if v_type<>v_old.transaction_type or v_source<>v_old.source or v_type<>'income' then
+   raise exception 'Client payment source and type cannot be changed. Edit the client purchase instead.';
+  end if;
+  if (v_source='debt_payment' and v_category.system_key<>'client_debt_collection')
+    or (v_source='package_payment' and v_category.system_key<>'sales_service_revenue') then
+   raise exception 'Client payments must retain the appropriate ledger category.';
+  end if;
+ elsif v_source in ('debt_payment','package_payment') and v_source<>v_old.source then
+  raise exception 'Client-payment source is assigned only by Clients.';
+ end if;
+ if v_amount<>v_old.amount and v_old.purchase_id is not null then
+  select * into v_purchase from public.client_purchases where id=v_old.purchase_id for update;
+  if not found then raise exception 'Linked purchase is missing.'; end if;
+  -- Payment amount corrections preserve the existing price-paid-debt difference,
+  -- including legacy records. No historic amount is silently normalized.
+  v_delta:=v_amount-v_old.amount;
+  if coalesce(v_purchase.amount_paid,0)+v_delta<0 or coalesce(v_purchase.balance_due,0)-v_delta<0 then
+   raise exception 'Payment correction would make paid/debt negative.';
+  end if;
+  update public.client_purchases set
+   amount_paid=coalesce(amount_paid,0)+v_delta, balance_due=coalesce(balance_due,0)-v_delta,
+   status=case when coalesce(balance_due,0)-v_delta=0 then 'paid'
+               when coalesce(amount_paid,0)+v_delta>0 then 'partial' else 'confirmed' end
+   where id=v_purchase.id;
+  insert into public.finance_edit_audit(table_name,record_id,field_name,old_value,new_value,old_value_json,new_value_json,reason,edited_by)
+   values('client_purchases',v_purchase.id,'amount_paid',v_purchase.amount_paid,v_purchase.amount_paid+v_delta,to_jsonb(v_purchase.amount_paid),to_jsonb(v_purchase.amount_paid+v_delta),v_reason,v_admin),
+         ('client_purchases',v_purchase.id,'balance_due',v_purchase.balance_due,v_purchase.balance_due-v_delta,to_jsonb(v_purchase.balance_due),to_jsonb(v_purchase.balance_due-v_delta),v_reason,v_admin);
+ end if;
+ v_before:=to_jsonb(v_old);
+ update public.business_transactions set
+  transaction_type=v_type,source=v_source,title=v_title,amount=v_amount,
+  notes=nullif(btrim(coalesce(v_doc->>'notes','')),''),
+  transaction_date=v_date,accounting_month=v_month,
+  report_group=case when v_type='cash_adjustment' then 'cash_only' else v_category.report_group end,
+  counterparty=nullif(btrim(coalesce(v_doc->>'counterparty','')),''),
+  document_no=nullif(btrim(coalesce(v_doc->>'document_no','')),''),
+  account_id=v_account_id,
+  category_id=case when v_type='cash_adjustment' then null else v_category_id end,
+  trainer_id=v_trainer_id
+ where id=p_transaction_id returning * into v_new;
+ v_after:=to_jsonb(v_new);
+ foreach v_field in array v_fields loop
+  v_old_value:=v_before->v_field; v_new_value:=v_after->v_field;
+  if v_old_value is distinct from v_new_value then
+   insert into public.finance_edit_audit(table_name,record_id,field_name,old_value,new_value,old_value_json,new_value_json,reason,edited_by)
+   values('business_transactions',p_transaction_id,v_field,
+    case when jsonb_typeof(v_old_value)='number' then (v_old_value#>>'{}')::numeric else null end,
+    case when jsonb_typeof(v_new_value)='number' then (v_new_value#>>'{}')::numeric else null end,
+    v_old_value,v_new_value,v_reason,v_admin);
+  end if;
+ end loop;
+ if v_old.account_id is not null and v_old.account_id<>v_account_id and
+  exists(select 1 from public.finance_accounts a where a.id=v_old.account_id and not a.allow_negative) and
+  public.get_finance_account_balance(v_old.account_id)<0 then
+  raise exception 'Edit would overdraw the original account.';
+ end if;
+ if not v_account.allow_negative and public.get_finance_account_balance(v_account_id)<0 then
+  raise exception 'Edit would overdraw the receiving/payment account.';
+ end if;
+end $$;
+
+-- Original Admin receipt RPC endpoints remain callable by old clients unless explicitly retired.
+create or replace function public.fxa_record_debt_payment(
+ p_request_id uuid,p_purchase_id uuid,p_amount numeric,p_date date)
+ returns jsonb language plpgsql security definer set search_path='' as $$
+begin
+ raise exception 'Payment entry moved to Accountant / Revenue / Client Receivables.';
+end $$;
+create or replace function public.fxa_record_debt_payment_v3(
+ p_request_id uuid,p_purchase_id uuid,p_amount numeric,p_date date,p_account_id uuid,p_notes text default null)
+ returns jsonb language plpgsql security definer set search_path='' as $$
+begin
+ raise exception 'Payment entry moved to Accountant / Revenue / Client Receivables.';
+end $$;
+create or replace function public.fxa_set_debt(
+ p_request_id uuid,p_client_id uuid,p_purchase_id uuid,p_new_balance numeric,p_deadline date,
+ p_record_income boolean,p_income_date date,p_expected_balance numeric)
+ returns jsonb language plpgsql security definer set search_path='' as $$
+begin
+ raise exception 'Debt amount corrections moved to Accountant / Revenue / Client Receivables.';
+end $$;
+create policy "accountant read transfers" on public.finance_transfers for select to authenticated
+ using (public.current_user_role()='accountant');
+create policy "accountant read legacy debts" on public.client_debts for select to authenticated
+ using (public.current_user_role()='accountant');
+-- Important: legacy P&L is cash-based; cash collection is not automatic accrual revenue.
