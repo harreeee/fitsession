@@ -869,7 +869,7 @@ function AdminClientDetailPageContent() {
 
   async function saveNewRenewPackage(event:FormEvent<HTMLFormElement>){
     event.preventDefault();if(!client||!allowPackageEdit||mutationLock.current)return;
-    const n=Number(packageTotalSessions),value=Number(packageValue||0),paid=packageAmountPaid.trim()?Number(packageAmountPaid):value;
+    const n=Number(packageTotalSessions),value=0,paid=0;
     if(!Number.isInteger(n)||n<=0||!Number.isFinite(value)||!Number.isFinite(paid)||paid<0||paid>value){alert("Check sessions and payment amounts.");return;}
     mutationLock.current=true;setSavingPackage(true);
     if(paid>0&&!paymentAccountId){alert("Chọn nguồn tiền nhận cho khoản gia hạn.");mutationLock.current=false;setSavingPackage(false);return;}
