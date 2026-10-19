@@ -65,6 +65,9 @@ export default function AdminNewClientPage() {
   const [totalSessions, setTotalSessions] = useState("");
   const [packageValue, setPackageValue] = useState("");
   const [amountPaid, setAmountPaid] = useState("");
+  const [receivingAccounts,setReceivingAccounts]=useState<Array<{id:string;name:string}>>([]);
+  const [paymentAccountId,setPaymentAccountId]=useState("");
+  useEffect(()=>{let live=true;supabase.from("finance_accounts").select("id,name").eq("is_active",true).neq("name","Số dư chưa phân bổ").order("name").then(({data,error})=>{if(live&&!error)setReceivingAccounts(data||[]);});return()=>{live=false;};},[]);
   const [startDate, setStartDate] = useState("");
   const [expireDate, setExpireDate] = useState("");
   const [purchaseType, setPurchaseType] = useState<"new" | "renew">("new");
@@ -107,9 +110,10 @@ export default function AdminNewClientPage() {
     event.preventDefault();if(createLock.current||!canAddClients(userRole))return;
     const count=Number(totalSessions||0),value=Number(packageValue||0),paid=amountPaid.trim()?Number(amountPaid):value;
     if(!fullName.trim()||!Number.isInteger(count)||count<0||!Number.isFinite(value)||!Number.isFinite(paid)||paid<0||value<0||paid>value){alert("Check the name, session count and payment amounts.");return;}
+    if(paid>0&&!paymentAccountId){alert("Chọn nguồn tiền nhận cho khoản thanh toán ban đầu.");return;}
     createLock.current=true;setSaving(true);createRequest.current ||= crypto.randomUUID();
     try{
-      const {data,error}=await supabase.rpc("fxa_create_client",{p_request_id:createRequest.current,p_client:{client_code:clientCode.trim()||createClientCode(),full_name:fullName.trim(),email:email.trim(),phone:phone.trim(),gender,date_of_birth:dateOfBirth,client_source:clientSource,client_source_other:clientSource==="other"?clientSourceOther:""},p_package:{name:packageName,sessions:count,value,paid,starts_at:startDate,expires_at:expireDate,purchase_type:purchaseType}});
+      const {data,error}=await supabase.rpc("fxa_create_client",{p_request_id:createRequest.current,p_client:{client_code:clientCode.trim()||createClientCode(),full_name:fullName.trim(),email:email.trim(),phone:phone.trim(),gender,date_of_birth:dateOfBirth,client_source:clientSource,client_source_other:clientSource==="other"?clientSourceOther:""},p_package:{name:packageName,sessions:count,value,paid,account_id:paymentAccountId||null,starts_at:startDate,expires_at:expireDate,purchase_type:purchaseType}});
       if(error)throw error;if(typeof data!=="string")throw new Error("Could not verify the saved client. Retry the same form.");
       createRequest.current="";alert("Client added successfully.");router.push(`/admin/clients/${data}`);
     }catch(error){alert(error instanceof Error?error.message:(error as {message?:string}).message||"Client could not be saved.");}
@@ -339,6 +343,7 @@ export default function AdminNewClientPage() {
                     className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
                   />
                 </label>
+              <label className="grid gap-2"><span className="text-sm font-semibold text-yellow-300">Nguồn tiền nhận (nếu đã thanh toán)</span><select value={paymentAccountId} onChange={event=>setPaymentAccountId(event.target.value)} className="w-full rounded-xl border border-yellow-400/30 bg-black px-4 py-3 text-white"><option value="">Chọn nguồn tiền</option>{receivingAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
