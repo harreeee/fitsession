@@ -15,7 +15,7 @@ import {
 import { supabase } from "../../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
 
-type AdminRole = "admin" | "manager";
+type AdminRole = "admin" | "manager" | "accountant";
 type TabKey =
   | "overview"
   | "journal"
@@ -93,6 +93,8 @@ type BusinessTransaction = {
   id: string;
   transaction_type: TransactionType;
   source: string;
+  client_id: string | null;
+  purchase_id: string | null;
   title: string;
   amount: number | string;
   notes: string | null;
@@ -419,7 +421,7 @@ export default function RevenuePage() {
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const [editingPayable, setEditingPayable] = useState<PayableEditState | null>(null);
 
-  const isAdmin = role === "admin";
+  const isAdmin = role === "accountant";
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -446,7 +448,7 @@ export default function RevenuePage() {
         .order("name"),
       allRows(supabase
         .from("business_transactions")
-        .select("id, transaction_type, source, title, amount, notes, transaction_date, accounting_month, report_group, counterparty, document_no, payable_id, account_id, category_id, transfer_id, trainer_id, created_at")
+        .select("id, transaction_type, source, client_id, purchase_id, title, amount, notes, transaction_date, accounting_month, report_group, counterparty, document_no, payable_id, account_id, category_id, transfer_id, trainer_id, created_at")
         .order("transaction_date", { ascending: false })
         .order("created_at", { ascending: false }).order("id")),
       supabase
@@ -540,7 +542,7 @@ export default function RevenuePage() {
         router.push("/login");
         return;
       }
-      if (currentRole === "admin" || currentRole === "manager") {
+      if (currentRole === "admin" || currentRole === "manager" || currentRole === "accountant") {
         setRole(currentRole);
         setCheckingRole(false);
         await fetchData();
@@ -1206,8 +1208,8 @@ export default function RevenuePage() {
 }
   async function deleteTransaction(transaction: BusinessTransaction) {
     if (!isAdmin) return;
-    if (transaction.payable_id || transaction.transfer_id) {
-      setMessage("Không thể xóa trực tiếp giao dịch công nợ hoặc chuyển khoản.");
+    if (transaction.payable_id || transaction.transfer_id || transaction.purchase_id) {
+      setMessage("Không thể xóa giao dịch có liên kết. Dùng chức năng chỉnh sửa có lịch sử và lý do để giữ số tiền đồng bộ.");
       return;
     }
     if (!window.confirm(`Xóa giao dịch “${transaction.title}”?`)) return;
@@ -1250,6 +1252,7 @@ export default function RevenuePage() {
               <Link href="/admin" className="rounded-xl border border-white/15 px-4 py-3 text-center text-xs font-semibold uppercase text-zinc-300 hover:border-yellow-400 hover:text-yellow-300">
                 Dashboard
               </Link>
+              <Link href="/admin/revenue/receivables" className="rounded-xl border border-green-400/35 px-4 py-3 text-center text-xs font-semibold uppercase text-green-300 hover:bg-green-400 hover:text-black">Client Receivables</Link>
               <Link href="/admin/revenue/payroll" className="rounded-xl border border-yellow-400/35 px-4 py-3 text-center text-xs font-semibold uppercase text-yellow-300 hover:bg-yellow-400 hover:text-black">
                 Báo lương PT
               </Link>
@@ -1260,9 +1263,9 @@ export default function RevenuePage() {
             </div>
           </div>
 
-          {role === "manager" ? (
+          {role !== "accountant" ? (
             <div className="mt-5 rounded-2xl border border-sky-400/20 bg-sky-400/[0.08] p-3 text-sm text-sky-200">
-              Manager đang ở chế độ chỉ xem. Chỉ Admin được thêm, sửa số dư, chuyển tiền và thanh toán công nợ.
+              Manager đang ở chế độ chỉ xem. Chỉ Accountant được ghi sổ, điều chỉnh nguồn tiền và thanh toán công nợ.
             </div>
           ) : null}
         </header>
@@ -1425,12 +1428,12 @@ export default function RevenuePage() {
                           <tr key={row.id} className="border-b border-white/10">
                             <td className="px-3 py-3">{formatDate(row.transaction_date)}</td>
                             <td className="px-3 py-3 uppercase">{row.transaction_type === "income" ? "Thu" : row.transaction_type === "expense" ? "Chi" : "Điều chỉnh"}</td>
-                            <td className="max-w-[320px] px-3 py-3"><p className="font-medium">{row.title}</p><p className="mt-1 text-xs text-zinc-500">{row.counterparty || "-"}</p></td>
-                            <td className="px-3 py-3">{categoryMap.get(row.category_id || "")?.name || REPORT_GROUP_LABELS[row.report_group || "cash_only"]}</td>
+                            <td className="max-w-[320px] px-3 py-3"><p className="font-medium">{row.title}</p><p className="mt-1 text-xs text-zinc-500">{row.purchase_id?"Từ Clients · ":""}{row.counterparty || "-"}</p></td>
+                            <td className="px-3 py-3">{row.source==="debt_payment" && row.transaction_type==="income" ? "Thu công nợ" : categoryMap.get(row.category_id || "")?.name || REPORT_GROUP_LABELS[row.report_group || "cash_only"]}</td>
                             <td className="px-3 py-3">{accountMap.get(row.account_id || "")?.name || "Chưa phân bổ"}</td>
                             <td className="px-3 py-3">{row.trainer_id ? staffName(staffMap.get(row.trainer_id)) : "-"}</td>
                             <td className={`px-3 py-3 text-right font-semibold tabular-nums ${row.transaction_type === "income" || (row.transaction_type === "cash_adjustment" && numberValue(row.amount) > 0) ? "text-emerald-300" : "text-rose-300"}`}>{row.transaction_type === "expense" ? "-" : ""}{money(row.amount)}</td>
-                            {isAdmin ? <td className="px-3 py-3"><button type="button" onClick={() => void deleteTransaction(row)} disabled={Boolean(row.payable_id || row.transfer_id)} className="text-xs text-rose-300 disabled:text-zinc-700">Xóa</button></td> : null}
+                            {isAdmin ? <td className="px-3 py-3"><button type="button" onClick={() => void deleteTransaction(row)} disabled={Boolean(row.payable_id || row.transfer_id || row.purchase_id)} className="text-xs text-rose-300 disabled:text-zinc-700">Xóa</button></td> : null}
                           </tr>
                         ))}
                       </tbody>

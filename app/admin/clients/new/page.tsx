@@ -65,6 +65,9 @@ export default function AdminNewClientPage() {
   const [totalSessions, setTotalSessions] = useState("");
   const [packageValue, setPackageValue] = useState("");
   const [amountPaid, setAmountPaid] = useState("");
+  const [receivingAccounts,setReceivingAccounts]=useState<Array<{id:string;name:string}>>([]);
+  const [paymentAccountId,setPaymentAccountId]=useState("");
+  useEffect(()=>{let live=true;supabase.from("finance_accounts").select("id,name").eq("is_active",true).neq("name","Số dư chưa phân bổ").order("name").then(({data,error})=>{if(live&&!error)setReceivingAccounts(data||[]);});return()=>{live=false;};},[]);
   const [startDate, setStartDate] = useState("");
   const [expireDate, setExpireDate] = useState("");
   const [purchaseType, setPurchaseType] = useState<"new" | "renew">("new");
@@ -105,11 +108,12 @@ export default function AdminNewClientPage() {
 
   async function createClient(event:FormEvent<HTMLFormElement>){
     event.preventDefault();if(createLock.current||!canAddClients(userRole))return;
-    const count=Number(totalSessions||0),value=Number(packageValue||0),paid=amountPaid.trim()?Number(amountPaid):value;
+    const count=Number(totalSessions||0),value=0,paid=0;
     if(!fullName.trim()||!Number.isInteger(count)||count<0||!Number.isFinite(value)||!Number.isFinite(paid)||paid<0||value<0||paid>value){alert("Check the name, session count and payment amounts.");return;}
+    
     createLock.current=true;setSaving(true);createRequest.current ||= crypto.randomUUID();
     try{
-      const {data,error}=await supabase.rpc("fxa_create_client",{p_request_id:createRequest.current,p_client:{client_code:clientCode.trim()||createClientCode(),full_name:fullName.trim(),email:email.trim(),phone:phone.trim(),gender,date_of_birth:dateOfBirth,client_source:clientSource,client_source_other:clientSource==="other"?clientSourceOther:""},p_package:{name:packageName,sessions:count,value,paid,starts_at:startDate,expires_at:expireDate,purchase_type:purchaseType}});
+      const {data,error}=await supabase.rpc("fxa_create_client",{p_request_id:createRequest.current,p_client:{client_code:clientCode.trim()||createClientCode(),full_name:fullName.trim(),email:email.trim(),phone:phone.trim(),gender,date_of_birth:dateOfBirth,client_source:clientSource,client_source_other:clientSource==="other"?clientSourceOther:""},p_package:{name:packageName,sessions:count,value:0,paid:0,account_id:null,starts_at:startDate,expires_at:expireDate,purchase_type:purchaseType}});
       if(error)throw error;if(typeof data!=="string")throw new Error("Could not verify the saved client. Retry the same form.");
       createRequest.current="";alert("Client added successfully.");router.push(`/admin/clients/${data}`);
     }catch(error){alert(error instanceof Error?error.message:(error as {message?:string}).message||"Client could not be saved.");}
@@ -310,36 +314,7 @@ export default function AdminNewClientPage() {
                   />
                 </label>
 
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Package Value
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={packageValue}
-                    onChange={(event) => setPackageValue(event.target.value)}
-                    placeholder="Example: 500"
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Amount Paid
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={amountPaid}
-                    onChange={(event) => setAmountPaid(event.target.value)}
-                    placeholder="Leave blank if fully paid"
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-                  />
-                </label>
-
+                <div className="rounded-xl border border-yellow-400/25 bg-yellow-400/10 p-4 text-sm text-yellow-100 md:col-span-2">Admin tạo hồ sơ và chọn số buổi. Accountant sẽ nhập giá hợp đồng, tiền thực thu, công nợ và nguồn tiền trong Revenue → Client Receivables.</div>
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
                     Start Date

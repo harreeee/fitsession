@@ -351,6 +351,13 @@ export default function AdminDashboardPage() {
       adminOnly: false,
     },
     {
+      href: "/admin/accountant-access",
+      label: "Accountant Access",
+      icon: "🔐",
+      primary: false,
+      adminOnly: true,
+    },
+    {
       href: "/admin/reports",
       label: "Reports",
       icon: "📊",
