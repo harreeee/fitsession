@@ -113,7 +113,7 @@ export default function AdminNewClientPage() {
     if(paid>0&&!paymentAccountId){alert("Chọn nguồn tiền nhận cho khoản thanh toán ban đầu.");return;}
     createLock.current=true;setSaving(true);createRequest.current ||= crypto.randomUUID();
     try{
-      const {data,error}=await supabase.rpc("fxa_create_client",{p_request_id:createRequest.current,p_client:{client_code:clientCode.trim()||createClientCode(),full_name:fullName.trim(),email:email.trim(),phone:phone.trim(),gender,date_of_birth:dateOfBirth,client_source:clientSource,client_source_other:clientSource==="other"?clientSourceOther:""},p_package:{name:packageName,sessions:count,value,paid,account_id:paymentAccountId||null,starts_at:startDate,expires_at:expireDate,purchase_type:purchaseType}});
+      const {data,error}=await supabase.rpc("fxa_create_client",{p_request_id:createRequest.current,p_client:{client_code:clientCode.trim()||createClientCode(),full_name:fullName.trim(),email:email.trim(),phone:phone.trim(),gender,date_of_birth:dateOfBirth,client_source:clientSource,client_source_other:clientSource==="other"?clientSourceOther:""},p_package:{name:packageName,sessions:count,value:0,paid:0,account_id:null,starts_at:startDate,expires_at:expireDate,purchase_type:purchaseType}});
       if(error)throw error;if(typeof data!=="string")throw new Error("Could not verify the saved client. Retry the same form.");
       createRequest.current="";alert("Client added successfully.");router.push(`/admin/clients/${data}`);
     }catch(error){alert(error instanceof Error?error.message:(error as {message?:string}).message||"Client could not be saved.");}
