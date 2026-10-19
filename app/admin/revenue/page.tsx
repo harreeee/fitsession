@@ -1252,6 +1252,7 @@ export default function RevenuePage() {
               <Link href="/admin" className="rounded-xl border border-white/15 px-4 py-3 text-center text-xs font-semibold uppercase text-zinc-300 hover:border-yellow-400 hover:text-yellow-300">
                 Dashboard
               </Link>
+              <Link href="/admin/revenue/receivables" className="rounded-xl border border-green-400/35 px-4 py-3 text-center text-xs font-semibold uppercase text-green-300 hover:bg-green-400 hover:text-black">Client Receivables</Link>
               <Link href="/admin/revenue/payroll" className="rounded-xl border border-yellow-400/35 px-4 py-3 text-center text-xs font-semibold uppercase text-yellow-300 hover:bg-yellow-400 hover:text-black">
                 Báo lương PT
               </Link>
