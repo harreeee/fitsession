@@ -108,9 +108,9 @@ export default function AdminNewClientPage() {
 
   async function createClient(event:FormEvent<HTMLFormElement>){
     event.preventDefault();if(createLock.current||!canAddClients(userRole))return;
-    const count=Number(totalSessions||0),value=Number(packageValue||0),paid=amountPaid.trim()?Number(amountPaid):value;
+    const count=Number(totalSessions||0),value=0,paid=0;
     if(!fullName.trim()||!Number.isInteger(count)||count<0||!Number.isFinite(value)||!Number.isFinite(paid)||paid<0||value<0||paid>value){alert("Check the name, session count and payment amounts.");return;}
-    if(paid>0&&!paymentAccountId){alert("Chọn nguồn tiền nhận cho khoản thanh toán ban đầu.");return;}
+    
     createLock.current=true;setSaving(true);createRequest.current ||= crypto.randomUUID();
     try{
       const {data,error}=await supabase.rpc("fxa_create_client",{p_request_id:createRequest.current,p_client:{client_code:clientCode.trim()||createClientCode(),full_name:fullName.trim(),email:email.trim(),phone:phone.trim(),gender,date_of_birth:dateOfBirth,client_source:clientSource,client_source_other:clientSource==="other"?clientSourceOther:""},p_package:{name:packageName,sessions:count,value:0,paid:0,account_id:null,starts_at:startDate,expires_at:expireDate,purchase_type:purchaseType}});
@@ -314,37 +314,7 @@ export default function AdminNewClientPage() {
                   />
                 </label>
 
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Package Value
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={packageValue}
-                    onChange={(event) => setPackageValue(event.target.value)}
-                    placeholder="Example: 500"
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
-                    Amount Paid
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={amountPaid}
-                    onChange={(event) => setAmountPaid(event.target.value)}
-                    placeholder="Leave blank if fully paid"
-                    className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm text-white outline-none focus:border-yellow-400"
-                  />
-                </label>
-              <label className="grid gap-2"><span className="text-sm font-semibold text-yellow-300">Nguồn tiền nhận (nếu đã thanh toán)</span><select value={paymentAccountId} onChange={event=>setPaymentAccountId(event.target.value)} className="w-full rounded-xl border border-yellow-400/30 bg-black px-4 py-3 text-white"><option value="">Chọn nguồn tiền</option>{receivingAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
-
+                <div className="rounded-xl border border-yellow-400/25 bg-yellow-400/10 p-4 text-sm text-yellow-100 md:col-span-2">Admin tạo hồ sơ và chọn số buổi. Accountant sẽ nhập giá hợp đồng, tiền thực thu, công nợ và nguồn tiền trong Revenue → Client Receivables.</div>
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
                     Start Date
