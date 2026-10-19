@@ -924,6 +924,7 @@ function AdminClientDetailPageContent() {
       return;
     }
 
+    alert("Accountant must add financial debt through Revenue.");return;
     setAddingDebt(true);
 
     const { error } = await supabase.from("client_purchases").insert({
@@ -958,6 +959,7 @@ function AdminClientDetailPageContent() {
 
   async function completeDebtRecord(purchase:ClientPurchase,forcedPaymentAmount?:number){
     if(!client||!allowDebtEdit||mutationLock.current)return;
+    alert("Accountant records actual receipts in Revenue → Client Receivables.");return;
     const amount=forcedPaymentAmount??Number(debtPaymentAmounts[purchase.id]??purchase.balance_due??0);
     const accountId=debtPaymentAccountIds[purchase.id]||"";
     if(!accountId){alert("Chọn nguồn tiền nhận trước khi thu công nợ.");return;}
@@ -970,7 +972,8 @@ function AdminClientDetailPageContent() {
   }
 
   async function saveDebtDetails(event:FormEvent<HTMLFormElement>){
-    event.preventDefault();if(!client||!allowDebtEdit||mutationLock.current)return;
+    event.preventDefault();alert("Accountant edits debt and contract amounts in Revenue.");return;
+    if(!client||!allowDebtEdit||mutationLock.current)return;
     const purchase=purchases.find(p=>p.id===selectedDebtFixId)||purchases.find(p=>Number(p.balance_due||0)>0)||purchases[0]||null;
     const amount=Number(debtAmount||0);
     if(!Number.isFinite(amount)||amount<0||(amount>0&&!debtDeadline)){alert("Enter a valid debt and deadline.");return;}
