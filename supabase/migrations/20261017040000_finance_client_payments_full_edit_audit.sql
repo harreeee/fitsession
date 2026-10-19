@@ -45,9 +45,10 @@ begin
  if not found then raise exception 'Missing Thu công nợ category. Apply the finance migration.'; end if;
  select full_name into v_client_name from public.clients where id=v_purchase.client_id;
  if v_client_name is null then raise exception 'Linked client not found.'; end if;
- if coalesce(v_purchase.price,0) <> coalesce(v_purchase.amount_paid,0)+v_balance then
-  raise exception 'Historical purchase amount is inconsistent. Reconcile the original receipt before recording payment.';
- end if;
+ -- Legacy imports may contain a pre-existing price/paid/debt discrepancy.
+ -- An actual receipt reduces debt and increases paid by the same amount; it must not
+ -- silently block the user or change the pre-existing discrepancy.
+ -- The admin should separately reconcile the historical record with an audit reason.
  insert into public.business_transactions(transaction_type,source,title,amount,notes,client_id,purchase_id,created_by,transaction_date,accounting_month,report_group,counterparty,account_id,category_id)
  values('income','debt_payment','Thu công nợ - '||v_client_name||' - '||v_purchase.plan_name,p_amount,
    nullif(btrim(coalesce(p_notes,'')),''),v_purchase.client_id,v_purchase.id,v_admin,
@@ -409,9 +410,8 @@ begin
  if v_amount<>v_old.amount and v_old.purchase_id is not null then
   select * into v_purchase from public.client_purchases where id=v_old.purchase_id for update;
   if not found then raise exception 'Linked purchase is missing.'; end if;
-  if abs(v_purchase.price-coalesce(v_purchase.amount_paid,0)-coalesce(v_purchase.balance_due,0))>0.009 then
-   raise exception 'Linked purchase has a historical mismatch; reconcile it before changing payment amount.';
-  end if;
+  -- Payment amount corrections preserve the existing price-paid-debt difference,
+  -- including legacy records. No historic amount is silently normalized.
   v_delta:=v_amount-v_old.amount;
   if coalesce(v_purchase.amount_paid,0)+v_delta<0 or coalesce(v_purchase.balance_due,0)-v_delta<0 then
    raise exception 'Payment correction would make paid/debt negative.';
@@ -459,3 +459,18 @@ begin
 end $$;
 revoke all on function public.admin_edit_finance_transaction_details(uuid,jsonb,text) from public;
 grant execute on function public.admin_edit_finance_transaction_details(uuid,jsonb,text) to authenticated;
+
+-- Revoke direct deletion of client-linked receipts from authenticated users.
+-- A linked receipt must be corrected through the audited editor, not silently removed.
+create or replace function public.fxa_guard_client_receipt_delete()
+returns trigger language plpgsql security invoker set search_path='' as $$
+begin
+ if old.purchase_id is not null then
+  raise exception 'Cannot delete a client-linked receipt directly. Use audited Revenue editing.';
+ end if;
+ return old;
+end $$;
+drop trigger if exists fxa_guard_client_receipt_delete on public.business_transactions;
+create trigger fxa_guard_client_receipt_delete
+before delete on public.business_transactions for each row
+execute function public.fxa_guard_client_receipt_delete();
