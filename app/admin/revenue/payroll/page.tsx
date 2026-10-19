@@ -167,7 +167,7 @@ export default function PayrollPage() {
   const [paymentAccounts, setPaymentAccounts] = useState<Record<string, string>>({});
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
 
-  const isAdmin = role === "admin";
+  const isAdmin = role === "accountant";
 
   const fetchData = useCallback(async () => {
     setLoading(true);
