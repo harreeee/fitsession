@@ -468,8 +468,10 @@ function buildClientExportRows(data: ReportData): ClientExportRow[] {
     const latestPurchase = getLatestByDate(clientPurchases);
     const numbers = getPackageNumbers(latestPackage);
     const packageValue = toNumber(latestPackage?.package_value) ?? toNumber(latestPurchase?.price);
-    const amountPaid = toNumber(latestPurchase?.amount_paid);
-    const balanceDue = toNumber(latestPurchase?.balance_due);
+    // Match Clients and Revenue: sum every non-cancelled purchase, not only the latest.
+    const activePurchases=clientPurchases.filter(p=>!["failed","cancelled"].includes(p.status||""));
+    const amountPaid=activePurchases.reduce((sum,p)=>sum+(toNumber(p.amount_paid)??0),0);
+    const balanceDue=activePurchases.reduce((sum,p)=>sum+(toNumber(p.balance_due)??0),0);
     const pt = client.assigned_trainer_id ? profileMap.get(client.assigned_trainer_id) : null;
     const nc = client.assigned_nutrition_coach_id
       ? profileMap.get(client.assigned_nutrition_coach_id)
