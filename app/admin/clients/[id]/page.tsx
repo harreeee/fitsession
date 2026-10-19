@@ -2500,60 +2500,13 @@ function AdminClientDetailPageContent() {
               {allowDebtEdit && (
                 <div className="mt-5 rounded-3xl border border-yellow-400/25 bg-yellow-400/10 p-5">
                   <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr_0.9fr]">
-                    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-black/40 p-4">
-                      <input
-                        type="checkbox"
-                        checked={debtFixAddsRevenue}
-                        onChange={(event) =>
-                          setDebtFixAddsRevenue(event.target.checked)
-                        }
-                        className="mt-1 h-4 w-4 accent-yellow-400"
-                      />
-
-                      <span>
-                        <span className="block text-xs font-semibold uppercase tracking-widest text-yellow-300">
-                          Add Debt Reduction to Revenue
-                        </span>
-                        <span className="mt-2 block text-sm leading-6 text-gray-300">
-                          When the new debt amount is lower than the current
-                          debt, the difference will be recorded as income.
-                        </span>
-                      </span>
-                    </label>
-
-                    <label>
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
-                        Revenue Date
-                      </span>
-                      <input
-                        type="date"
-                        value={debtFixRevenueDate}
-                        onChange={(event) =>
-                          setDebtFixRevenueDate(event.target.value)
-                        }
-                        disabled={!debtFixAddsRevenue}
-                        className="w-full rounded-2xl border border-yellow-400/35 bg-black/70 px-4 py-3 text-sm font-normal text-white outline-none focus:border-yellow-400 disabled:opacity-50"
-                      />
-                    </label>
-
-                    <div className="rounded-2xl border border-green-400/25 bg-green-400/10 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-widest text-green-300">
-                        Revenue Preview
+                    <div className="rounded-2xl border border-yellow-400/20 bg-black/40 p-4 lg:col-span-3">
+                      <p className="text-sm font-semibold text-yellow-300">Chỉnh sửa số công nợ (không ghi nhận thực thu)</p>
+                      <p className="mt-2 text-sm text-gray-300">
+                        Nếu chỉ chỉnh số nợ, hệ thống điều chỉnh giá trị phải thu tương ứng mà không tạo doanh thu hoặc tăng số tiền đã nhận.
+                        Nếu khách thanh toán thực tế, dùng Add Payment phía trên và chọn nguồn tiền để ghi sổ nhật ký.
                       </p>
-                      <p className="mt-2 text-2xl font-semibold text-green-300">
-                        {formatMoney(
-                          debtFixWillAddRevenue ? debtFixRevenueAmount : 0,
-                        )}
-                      </p>
-                      <p className="mt-2 text-xs text-gray-400">
-                        Old debt {formatMoney(currentDebtBalanceForFix)} → new
-                        debt{" "}
-                        {formatMoney(
-                          Number.isNaN(nextDebtBalanceForFix)
-                            ? 0
-                            : nextDebtBalanceForFix,
-                        )}
-                      </p>
+                      <p className="mt-2 text-xs text-gray-400">Dư nợ cũ: {formatMoney(currentDebtBalanceForFix)} → dư nợ sau sửa: {formatMoney(Number.isNaN(nextDebtBalanceForFix) ? 0 : nextDebtBalanceForFix)}</p>
                     </div>
                   </div>
 
@@ -2562,11 +2515,7 @@ function AdminClientDetailPageContent() {
                     disabled={savingDebt}
                     className="mt-5 rounded-2xl bg-yellow-400 px-5 py-3 text-sm font-semibold uppercase text-black transition hover:bg-yellow-300 disabled:opacity-60"
                   >
-                    {savingDebt
-                      ? "Saving..."
-                      : debtFixWillAddRevenue
-                        ? "Save Debt + Add Revenue"
-                        : "Save Debt Fix"}
+                    {savingDebt ? "Saving..." : "Save Debt Fix (No Cash In)"}
                   </button>
                 </div>
               )}
