@@ -409,7 +409,12 @@ function AdminClientDetailPageContent() {
   const [debtPaymentDates, setDebtPaymentDates] = useState<
     Record<string, string>
   >({});
-  const [debtFixAddsRevenue, setDebtFixAddsRevenue] = useState(true);
+  const [receivingAccounts,setReceivingAccounts] = useState<Array<{id:string;name:string}>>([]);
+  const [paymentAccountId,setPaymentAccountId] = useState("");
+  const [debtPaymentAccountIds,setDebtPaymentAccountIds] = useState<Record<string,string>>({});
+  const [debtPaymentNotes,setDebtPaymentNotes] = useState<Record<string,string>>({});
+  useEffect(()=>{let live=true;supabase.from("finance_accounts").select("id,name").eq("is_active",true).neq("name","Số dư chưa phân bổ").order("name").then(({data,error})=>{if(live&&!error)setReceivingAccounts(data||[]);});return()=>{live=false;};},[]);
+  const [debtFixAddsRevenue, setDebtFixAddsRevenue] = useState(false);
   const [debtFixRevenueDate, setDebtFixRevenueDate] =
     useState(getTodayInputDate());
 
@@ -867,7 +872,8 @@ function AdminClientDetailPageContent() {
     const n=Number(packageTotalSessions),value=Number(packageValue||0),paid=packageAmountPaid.trim()?Number(packageAmountPaid):value;
     if(!Number.isInteger(n)||n<=0||!Number.isFinite(value)||!Number.isFinite(paid)||paid<0||paid>value){alert("Check sessions and payment amounts.");return;}
     mutationLock.current=true;setSavingPackage(true);
-    try{const {error}=await supabase.rpc("fxa_renew_package",{p_request_id:requestKey("renew"),p_client_id:client.id,p_package:{name:packageName,sessions:n,value,paid,starts_at:packageStartDate,expires_at:packageExpireDate}});if(error)throw error;
+    if(paid>0&&!paymentAccountId){alert("Chọn nguồn tiền nhận cho khoản gia hạn.");mutationLock.current=false;setSavingPackage(false);return;}
+    try{const {error}=await supabase.rpc("fxa_renew_package",{p_request_id:requestKey("renew"),p_client_id:client.id,p_package:{name:packageName,sessions:n,value,paid,account_id:paymentAccountId||null,starts_at:packageStartDate,expires_at:packageExpireDate}});if(error)throw error;
       delete operationKeys.current.renew;alert(`Renew completed. Added ${n} sessions.`);await fetchClientDetail();setRenewPackageMode(false);window.dispatchEvent(new Event("fxa:finance-updated"));
     }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setSavingPackage(false);}
   }
@@ -886,7 +892,7 @@ function AdminClientDetailPageContent() {
     setSelectedDebtFixId(purchase.id);
     setDebtAmount(String(Number(purchase.balance_due || 0)));
     setDebtDeadline(formatDateInput(purchase.debt_deadline));
-    setDebtFixAddsRevenue(true);
+    setDebtFixAddsRevenue(false);
     setDebtFixRevenueDate(getTodayInputDate());
 
     window.setTimeout(() => {
@@ -953,10 +959,12 @@ function AdminClientDetailPageContent() {
   async function completeDebtRecord(purchase:ClientPurchase,forcedPaymentAmount?:number){
     if(!client||!allowDebtEdit||mutationLock.current)return;
     const amount=forcedPaymentAmount??Number(debtPaymentAmounts[purchase.id]??purchase.balance_due??0);
+    const accountId=debtPaymentAccountIds[purchase.id]||"";
+    if(!accountId){alert("Chọn nguồn tiền nhận trước khi thu công nợ.");return;}
     if(!Number.isFinite(amount)||amount<=0||amount>Number(purchase.balance_due||0)){alert("Enter a payment within the outstanding balance.");return;}
-    if(!window.confirm(`Record payment of ${formatMoney(amount)} and add it to Revenue?`))return;
+    if(!window.confirm(`Thu ${formatMoney(amount)} từ ${client.full_name} vào ${receivingAccounts.find(a=>a.id===accountId)?.name||"tài khoản"}? Sổ nhật ký sẽ ghi Thu công nợ.`))return;
     mutationLock.current=true;setCompletingDebtId(purchase.id);
-    try{const {error}=await supabase.rpc("fxa_record_debt_payment",{p_request_id:requestKey(`payment:${purchase.id}`),p_purchase_id:purchase.id,p_amount:amount,p_date:debtPaymentDates[purchase.id]||getTodayInputDate()});if(error)throw error;
+    try{const {error}=await supabase.rpc("fxa_record_debt_payment_v3",{p_request_id:requestKey(`payment:${purchase.id}`),p_purchase_id:purchase.id,p_amount:amount,p_date:debtPaymentDates[purchase.id]||getTodayInputDate(),p_account_id:accountId,p_notes:debtPaymentNotes[purchase.id]||null});if(error)throw error;
       delete operationKeys.current[`payment:${purchase.id}`];await fetchClientDetail();alert("Payment and Revenue saved together.");window.dispatchEvent(new Event("fxa:finance-updated"));
     }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setCompletingDebtId(null);}
   }
@@ -968,7 +976,7 @@ function AdminClientDetailPageContent() {
     if(!Number.isFinite(amount)||amount<0||(amount>0&&!debtDeadline)){alert("Enter a valid debt and deadline.");return;}
     if(!window.confirm("Save this debt correction?"))return;
     mutationLock.current=true;setSavingDebt(true);
-    try{const {error}=await supabase.rpc("fxa_set_debt",{p_request_id:requestKey("debt_fix"),p_client_id:client.id,p_purchase_id:purchase?.id||null,p_new_balance:amount,p_deadline:debtDeadline||null,p_record_income:debtFixAddsRevenue,p_income_date:debtFixRevenueDate||getTodayInputDate(),p_expected_balance:purchase?.balance_due??0});if(error)throw error;
+    try{const {error}=await supabase.rpc("fxa_set_debt",{p_request_id:requestKey("debt_fix"),p_client_id:client.id,p_purchase_id:purchase?.id||null,p_new_balance:amount,p_deadline:debtDeadline||null,p_record_income:false,p_income_date:debtFixRevenueDate||getTodayInputDate(),p_expected_balance:purchase?.balance_due??0});if(error)throw error;
       delete operationKeys.current.debt_fix;setSelectedDebtFixId(null);await fetchClientDetail();alert("Debt details saved.");window.dispatchEvent(new Event("fxa:finance-updated"));
     }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setSavingDebt(false);}
   }
@@ -2069,6 +2077,13 @@ function AdminClientDetailPageContent() {
                       placeholder="Leave blank if fully paid"
                     />
                   </label>
+                  <label>
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-yellow-300">Nguồn tiền nhận (bắt buộc nếu đã thu)</span>
+                    <select value={paymentAccountId} onChange={event=>setPaymentAccountId(event.target.value)} className="w-full rounded-2xl border border-yellow-500/30 bg-black/60 px-4 py-3 text-sm text-white">
+                      <option value="">Chọn nguồn tiền</option>
+                      {receivingAccounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}
+                    </select>
+                  </label>
 
                   <label>
                     <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-400">
@@ -2315,7 +2330,7 @@ function AdminClientDetailPageContent() {
                           </div>
 
                           {allowDebtEdit && (
-                            <div className="mt-5 grid gap-4 rounded-3xl border border-white/10 bg-black/45 p-5 lg:grid-cols-[1fr_1fr_auto_auto_auto]">
+                            <div className="mt-5 grid gap-4 rounded-3xl border border-white/10 bg-black/45 p-5 lg:grid-cols-2 xl:grid-cols-3">
                               <label>
                                 <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">
                                   Payment Amount
@@ -2353,6 +2368,17 @@ function AdminClientDetailPageContent() {
                                 />
                               </label>
 
+                              <label>
+                                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-green-300">Nguồn tiền nhận *</span>
+                                <select value={debtPaymentAccountIds[purchase.id]||""} onChange={event=>setDebtPaymentAccountIds(current=>({...current,[purchase.id]:event.target.value}))} className="w-full rounded-2xl border border-green-400/35 bg-black/70 px-4 py-3 text-sm text-white" required>
+                                  <option value="">Chọn nguồn tiền</option>
+                                  {receivingAccounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}
+                                </select>
+                              </label>
+                              <label>
+                                <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-300">Ghi chú / số chứng từ</span>
+                                <input value={debtPaymentNotes[purchase.id]||""} onChange={event=>setDebtPaymentNotes(current=>({...current,[purchase.id]:event.target.value}))} placeholder="Tuỳ chọn" className="w-full rounded-2xl border border-green-400/35 bg-black/70 px-4 py-3 text-sm text-white" />
+                              </label>
                               <div className="flex items-end">
                                 <button
                                   type="button"
