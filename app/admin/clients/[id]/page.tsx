@@ -2146,9 +2146,7 @@ function AdminClientDetailPageContent() {
                 </h2>
 
                 <p className="mt-2 text-sm font-normal text-gray-300">
-                  Add debt when a client owes money. Use Add Payment when money
-                  is collected. Complete Debt records the full remaining balance
-                  as paid and adds the payment to Revenue.
+                  Admin manages client and package details. Accountant enters debt amounts, receives payments and adjusts financial numbers in Revenue → Client Receivables.
                 </p>
               </div>
 
