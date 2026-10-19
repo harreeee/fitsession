@@ -263,7 +263,7 @@ declare v_actor uuid:=public.fxa_require_accountant();v_cash_in numeric;v_cash_o
  v_receivable numeric;v_payable numeric;v_unallocated int;v_invalid int;
 begin
  if p_month is null or date_trunc('month',p_month)::date<>p_month then raise exception 'Use the first day of month';end if;
- if p_month>=date_trunc('month',current_date)::date then raise exception 'Only completed months can be closed';end if;
+ if p_month<>date_trunc('month',current_date - interval '1 month')::date then raise exception 'Only the most recent completed month may be closed; legacy months require historical reconciliation.';end if;
  if length(btrim(coalesce(p_note,'')))<5 then raise exception 'Closing note is required';end if;
  if exists(select 1 from public.fxa_month_end_closings where month_start=p_month) then raise exception 'Month already closed. No silent overwriting.';end if;
  select count(*) filter(where account_id is null),
@@ -1468,3 +1468,31 @@ create policy "accountant read transfers" on public.finance_transfers for select
 create policy "accountant read legacy debts" on public.client_debts for select to authenticated
  using (public.current_user_role()='accountant');
 -- Important: legacy P&L is cash-based; cash collection is not automatic accrual revenue.
+
+-- Account balance functions must permit the Accountant role; otherwise payables
+-- and the inline financial editor cannot read balances.
+create or replace function public.fxa_finance_balances()
+returns table(id uuid,balance numeric) language plpgsql security definer set search_path='' as $$
+begin
+ perform fxa_private.require_role(array['admin','manager','accountant']);
+ return query select a.id, coalesce(a.opening_balance,0)+coalesce(sum(
+ case when t.transaction_type='income' then abs(t.amount)
+ when t.transaction_type='expense' then -abs(t.amount) else t.amount end),0)
+ from public.finance_accounts a left join public.business_transactions t on t.account_id=a.id
+ group by a.id;
+end $$;
+create or replace function public.get_finance_account_balance(p_account_id uuid)
+returns numeric language plpgsql stable security definer set search_path='' as $$
+declare v_balance numeric;
+begin
+ perform fxa_private.require_role(array['admin','manager','accountant']);
+ select coalesce(a.opening_balance,0)+coalesce(sum(case when t.transaction_type='income' then abs(t.amount)
+ when t.transaction_type='expense' then -abs(t.amount) else t.amount end),0)
+ into v_balance from public.finance_accounts a
+ left join public.business_transactions t on t.account_id=a.id
+ where a.id=p_account_id group by a.opening_balance;
+ return coalesce(v_balance,0);
+end $$;
+
+-- Protect closing periods from changes after a sign-off. Audit changes require reopening through a future review flow.
+-- Do not back-date historical receivables into a current-time snapshot.
