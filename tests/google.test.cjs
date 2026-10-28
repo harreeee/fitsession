@@ -6,9 +6,9 @@ const db={from:query,async rpc(name,args){if(name==='fxa_claim_booking_sync')ret
 const p=require.resolve('../lib/supabaseServer.ts');require.cache[p]={id:p,filename:p,loaded:true,exports:{createServiceSupabaseClient:()=>db}};
 const g=require('../lib/googleCalendar.ts'),sync=require('../lib/booking/sync.ts');after(()=>{global.fetch=baseFetch;});
 const response=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
-test('Google HTTP 403 does not open false availability',async()=>{global.fetch=async()=>response({error:{}},403);await assert.rejects(g.getBusyTimes('pt','2026-09-08','2026-09-09'),/Cannot verify/);});
-test('Google per-calendar errors fail closed even with HTTP 200',async()=>{global.fetch=async()=>response({calendars:{primary:{busy:[],errors:[{reason:'notFound'}]}}});await assert.rejects(g.getBusyTimes('pt','2026-09-08','2026-09-09'),/Cannot verify/);});
-test('Google malformed busy intervals rejected',async()=>{global.fetch=async()=>response({calendars:{primary:{busy:[{start:'bad',end:'bad'}]}}});await assert.rejects(g.getBusyTimes('pt','2026-09-08','2026-09-09'),/Invalid calendar/);});
+test('Google HTTP 403 does not open false availability',async()=>{global.fetch=async(url)=>String(url).includes('/calendarList')?response({items:[]}):response({error:{}},403);await assert.rejects(g.getBusyTimes('pt','2026-09-08','2026-09-09'),/Cannot verify/);});
+test('Google per-calendar errors fail closed even with HTTP 200',async()=>{global.fetch=async(url)=>String(url).includes('/calendarList')?response({items:[]}):response({calendars:{primary:{busy:[],errors:[{reason:'notFound'}]}}});await assert.rejects(g.getBusyTimes('pt','2026-09-08','2026-09-09'),/Cannot verify/);});
+test('Google malformed busy intervals rejected',async()=>{global.fetch=async(url)=>String(url).includes('/calendarList')?response({items:[]}):response({calendars:{primary:{busy:[{start:'bad',end:'bad'}]}}});await assert.rejects(g.getBusyTimes('pt','2026-09-08','2026-09-09'),/Invalid calendar/);});
 test('Google disconnected calendar blocks booking',async()=>{current=null;await assert.rejects(g.getBusyTimes('pt','2026-09-08','2026-09-09'),/not connected/);current={...connection};});
 test('token refresh preserves prior refresh token when Google omits it',async()=>{process.env.GOOGLE_CLIENT_ID='synthetic';process.env.GOOGLE_CLIENT_SECRET='synthetic';global.fetch=async()=>response({access_token:'new-access',expires_in:3600});await g.refreshGoogleAccessToken({...connection,token_expiry:'2000-01-01'});assert.equal(updated.refresh_token,'old-refresh');});
 test('deterministic calendar ID is valid Google base32hex',()=>{const id=crypto.randomUUID();assert.match(sync.googleEventId(id),/^[0-9a-v]{5,1024}$/);assert.equal(sync.googleEventId(id),sync.googleEventId(id));});
@@ -17,3 +17,33 @@ test('Google outage records retryable error without losing booking',async()=>{bo
 test('retry event collision verifies same booking instead of creating duplicate',async()=>{booking=book();let n=0;global.fetch=async()=>++n===1?response({},409):response({id:sync.googleEventId(booking.id),extendedProperties:{private:{fxaBookingId:booking.id}}});await sync.syncBooking(booking.id);assert.equal(n,2);assert.equal(finish.p_error,null);});
 test('calendar cancellation treats already deleted as success',async()=>{booking={...book(),status:'cancelled'};global.fetch=async()=>response({},410);await sync.syncBooking(booking.id);assert.equal(finish.p_error,null);});
 test('legacy linked Google event is verified without duplicate insertion',async()=>{booking={...book(),google_event_id:'legacyid'};let method;global.fetch=async(url,init)=>{method=init.method||'GET';return response({status:'confirmed',start:{dateTime:booking.starts_at},end:{dateTime:booking.ends_at}});};await sync.syncBooking(booking.id);assert.equal(method,'GET');assert.equal(finish.p_error,null);});
+
+test('Busy event in a visible secondary Google Calendar blocks a client slot',async()=>{
+ let queried=[];
+ global.fetch=async(url,init)=>{
+  if(String(url).includes('/calendarList'))return response({items:[{id:'owner@example.test',primary:true,selected:true},{id:'secondary@example.test',selected:true},{id:'hidden@example.test',selected:false}]});
+  queried=JSON.parse(init.body).items.map(x=>x.id);
+  return response({calendars:{primary:{busy:[]},'secondary@example.test':{busy:[{start:'2026-10-29T22:45:00Z',end:'2026-10-29T23:15:00Z'}]}}});
+ };
+ const busy=await g.getBusyTimes('pt','2026-10-29T04:00:00Z','2026-10-30T04:00:00Z');
+ assert.deepEqual(queried,['primary','secondary@example.test']);
+ assert.deepEqual(busy,[{start:'2026-10-29T22:45:00Z',end:'2026-10-29T23:15:00Z'}]);
+});
+test('Older OAuth tokens still check primary calendar until reconnected',async()=>{
+ let queried=[];
+ global.fetch=async(url,init)=>{
+  if(String(url).includes('/calendarList'))return response({error:{errors:[{reason:'insufficientPermissions'}]}},403);
+  queried=JSON.parse(init.body).items.map(x=>x.id);
+  return response({calendars:{primary:{busy:[{start:'2026-10-29T22:00:00Z',end:'2026-10-29T23:00:00Z'}]}}});
+ };
+ const busy=await g.getBusyTimes('pt','2026-10-29T04:00:00Z','2026-10-30T04:00:00Z');
+ assert.deepEqual(queried,['primary']);
+ assert.equal(busy.length,1);
+});
+test('Inaccessible secondary calendar fails closed instead of offering free slots',async()=>{
+ global.fetch=async(url)=>{
+  if(String(url).includes('/calendarList'))return response({items:[{id:'secondary@example.test',selected:true}]});
+  return response({calendars:{primary:{busy:[]},'secondary@example.test':{busy:[],errors:[{reason:'notFound'}]}}});
+ };
+ await assert.rejects(g.getBusyTimes('pt','2026-10-29T04:00:00Z','2026-10-30T04:00:00Z'),/Cannot verify/);
+});

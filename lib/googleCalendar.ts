@@ -6,7 +6,7 @@ export async function googleFetch(url: string, init: RequestInit = {}) {
 }
 export function getGoogleOAuthUrl(state: string) {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-  url.search = new URLSearchParams({ client_id: requireEnv('GOOGLE_CLIENT_ID'), redirect_uri: requireEnv('GOOGLE_REDIRECT_URI'), response_type: 'code', access_type: 'offline', prompt: 'consent', scope: ['https://www.googleapis.com/auth/calendar.events','https://www.googleapis.com/auth/calendar.freebusy','https://www.googleapis.com/auth/userinfo.email'].join(' '), state }).toString();
+  url.search = new URLSearchParams({ client_id: requireEnv('GOOGLE_CLIENT_ID'), redirect_uri: requireEnv('GOOGLE_REDIRECT_URI'), response_type: 'code', access_type: 'offline', prompt: 'consent', scope: ['https://www.googleapis.com/auth/calendar.events','https://www.googleapis.com/auth/calendar.freebusy','https://www.googleapis.com/auth/calendar.calendarlist.readonly','https://www.googleapis.com/auth/userinfo.email'].join(' '), state }).toString();
   return url.toString();
 }
 export async function exchangeCodeForTokens(code: string) {
@@ -29,12 +29,55 @@ export async function refreshGoogleAccessToken(connection: CalendarConnection) {
   const { error } = await createServiceSupabaseClient().from('trainer_google_calendar_connections').update({ access_token: data.access_token, refresh_token: data.refresh_token || connection.refresh_token, token_expiry: new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString(), updated_at: new Date().toISOString() }).eq('id', connection.id);
   if (error) throw new Error('Could not refresh calendar connection.'); return String(data.access_token);
 }
+/** Check all visible Google calendars, not just the primary one. Older OAuth
+ * tokens may lack calendarlist.readonly: fall back to the connected calendar
+ * until that trainer explicitly reconnects. Unexpected errors fail closed.
+ */
+async function calendarsToCheck(token: string, connectedCalendarId: string): Promise<string[]> {
+  const fallback = [...new Set([connectedCalendarId, 'primary'])];
+  const response = await googleFetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250', {
+    headers: { Authorization: 'Bearer ' + token },
+  });
+  if (response.status === 403) {
+    const failure = await response.json().catch(() => null);
+    if (/insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(JSON.stringify(failure))) return fallback;
+  }
+  if (!response.ok) throw new Error('Cannot verify trainer calendar list. Please reconnect Google Calendar.');
+  const data = await response.json() as { items?: Array<{id?: string; primary?: boolean; selected?: boolean; hidden?: boolean; deleted?: boolean}>; nextPageToken?: string };
+  if (!Array.isArray(data.items) || data.nextPageToken) throw new Error('Cannot verify trainer calendar list. Please retry.');
+  const calendarIds = new Set(fallback);
+  for (const calendar of data.items) {
+    if (!calendar || calendar.primary || calendar.selected === false || calendar.hidden || calendar.deleted) continue;
+    if (typeof calendar.id === 'string' && calendar.id.trim()) calendarIds.add(calendar.id);
+  }
+  if (calendarIds.size > 50) throw new Error('Too many Google calendars to check. Please contact FXA.');
+  return [...calendarIds];
+}
+
 export async function getBusyTimes(trainerId: string, timeMin: string, timeMax: string): Promise<Array<{start:string;end:string}>> {
-  const c = await getTrainerCalendarConnection(trainerId); if (!c) throw new Error('Trainer calendar is not connected.');
-  const token = await refreshGoogleAccessToken(c);
-  const res = await googleFetch('https://www.googleapis.com/calendar/v3/freeBusy', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ timeMin, timeMax, timeZone: 'America/Toronto', items: [{ id: c.calendar_id || 'primary' }] }) });
-  const data = await res.json(); const calendar = data.calendars?.[c.calendar_id || 'primary'];
-  if (!res.ok || !calendar || calendar.errors?.length || !Array.isArray(calendar.busy)) throw new Error('Cannot verify trainer calendar availability. Please retry.');
-  if (calendar.busy.some((b: {start:string;end:string}) => !Number.isFinite(Date.parse(b.start)) || !Number.isFinite(Date.parse(b.end)) || Date.parse(b.end)<=Date.parse(b.start))) throw new Error('Invalid calendar response.');
-  return calendar.busy;
+  const connection = await getTrainerCalendarConnection(trainerId);
+  if (!connection) throw new Error('Trainer calendar is not connected.');
+  const token = await refreshGoogleAccessToken(connection);
+  const ids = await calendarsToCheck(token, connection.calendar_id || 'primary');
+  const response = await googleFetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ timeMin, timeMax, timeZone: 'America/Toronto', items: ids.map(id => ({ id })) }),
+  });
+  const data = await response.json().catch(() => null) as { calendars?: Record<string, { busy?: Array<{start:string;end:string}>; errors?: unknown }> } | null;
+  if (!response.ok || !data?.calendars) throw new Error('Cannot verify trainer calendar availability. Please retry.');
+  const busy: Array<{start:string;end:string}> = [];
+  for (const id of ids) {
+    const calendar = data.calendars[id];
+    if (!calendar || (Array.isArray(calendar.errors) ? calendar.errors.length > 0 : !!calendar.errors) || !Array.isArray(calendar.busy)) {
+      throw new Error('Cannot verify trainer calendar availability. Please retry.');
+    }
+    for (const interval of calendar.busy) {
+      if (typeof interval?.start !== 'string' || typeof interval?.end !== 'string'
+          || !Number.isFinite(Date.parse(interval.start)) || !Number.isFinite(Date.parse(interval.end))
+          || Date.parse(interval.end) <= Date.parse(interval.start)) throw new Error('Invalid calendar response.');
+      busy.push({ start: interval.start, end: interval.end });
+    }
+  }
+  return busy;
 }

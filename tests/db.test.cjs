@@ -6,7 +6,7 @@ async function scalar(q,p=[]){return (await db.query(q,p)).rows[0]?.v;}
 async function rpc(name,args){const keys=Object.keys(args);return scalar(`select public.${name}(${keys.map((k,i)=>`${k} => $${i+1}`).join(',')}) as v`,keys.map(k=>typeof args[k]==='object'&&args[k]!==null?JSON.stringify(args[k]):args[k]));}
 async function reserve(who,trainer,start,key=crypto.randomUUID()){await root();const grant=await rpc('fxa_issue_slot_grant',{p_actor:who,p_trainer:trainer,p_start:start});await actor(who);return rpc('fxa_reserve_booking',{p_trainer_id:trainer,p_starts_at:start,p_request_id:key,p_grant_id:grant});}
 async function createClient(name='Synthetic Client',paid=500){await actor(u.admin);return rpc('fxa_create_client',{p_request_id:crypto.randomUUID(),p_client:{full_name:name,email:'synthetic@example.test'},p_package:{sessions:12,value:1000,paid,name:'Test package'}});}
-before(async()=>{db=new PGlite();await db.exec(fs.readFileSync('tests/base-schema.sql','utf8'));await db.exec(fs.readFileSync('supabase/migrations/20260907202306_core_booking_repair.sql','utf8'));for(const [k,id]of Object.entries(u))await db.query('insert into profiles(id,role,full_name)values($1,$2,$3)',[id,{pt:'trainer',pt2:'trainer',client2:'client',nc:'nutrition_coach',marketing:'marketing_manager'}[k]||k,k]);
+before(async()=>{db=new PGlite();await db.exec(fs.readFileSync('tests/base-schema.sql','utf8'));await db.exec(fs.readFileSync('supabase/migrations/20260907202306_core_booking_repair.sql','utf8'));await db.exec(fs.readFileSync('supabase/migrations/20261028190000_booking_half_hour.sql','utf8'));for(const [k,id]of Object.entries(u))await db.query('insert into profiles(id,role,full_name)values($1,$2,$3)',[id,{pt:'trainer',pt2:'trainer',client2:'client',nc:'nutrition_coach',marketing:'marketing_manager'}[k]||k,k]);
  c1=crypto.randomUUID();c2=crypto.randomUUID();p1=crypto.randomUUID();p2=crypto.randomUUID();await db.query("insert into clients(id,profile_id,full_name,qr_token,assigned_trainer_id)values($1,$2,'A','test-a',$3),($4,$5,'B','test-b',$3)",[c1,u.client,u.pt,c2,u.client2]);await db.query("insert into session_packages(id,client_id,total_sessions,remaining_sessions,status)values($1,$2,12,12,'active'),($3,$4,12,12,'active')",[p1,c1,p2,c2]);for(const id of [u.pt,u.pt2]){await actor(id);await rpc('fxa_save_availability',{p_windows:windows});}});after(async()=>{await db.close();});
 test('migration and weekly availability persisted',async()=>{await root();assert.equal(await scalar('select count(*)::int as v from trainer_availability'),14);});
 test('weekly overlapping windows rollback to previous schedule',async()=>{await actor(u.pt);await assert.rejects(rpc('fxa_save_availability',{p_windows:[{weekday:1,start_minute:420,end_minute:600},{weekday:1,start_minute:480,end_minute:660}]}),/overlap/);assert.equal(await scalar('select count(*)::int as v from trainer_availability'),7);});
@@ -48,3 +48,13 @@ test('staff cannot bypass session transaction with direct package update',async(
 test('staff cannot directly change client identity or assignment',async()=>{await actor(u.pt);await assert.rejects(db.query("update clients set full_name='FORGED' where id=$1",[c1]),/only update client notes/);});
 test('Marketing Manager can add an unconverted lead',async()=>{await actor(u.marketing);const r=await db.query("insert into leads(full_name,status)values('Synthetic lead','new')returning id");assert.ok(r.rows[0].id);});
 test('Marketing Manager cannot create a converted lead',async()=>{await actor(u.marketing);await assert.rejects(db.query("insert into leads(full_name,status)values('Forged conversion','converted')"),/row-level security/);});
+
+test('18:30 booking accepted with 60-minute duration; 19:00 overlapping booking rejected',async()=>{
+ const start=torontoInstant(tomorrow,1110);
+ const booked=await reserve(u.client2,u.pt,start);
+ assert.equal(Date.parse(booked.ends_at)-Date.parse(booked.starts_at),3600000);
+ await assert.rejects(reserve(u.client,u.pt,torontoInstant(tomorrow,1140)),/conflict/);
+});
+test('Off-grid 18:15 booking rejected by database',async()=>{
+ await assert.rejects(reserve(u.client2,u.pt2,torontoInstant(tomorrow,1095)),/unavailable/);
+});
