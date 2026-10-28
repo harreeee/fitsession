@@ -14,7 +14,7 @@ export function slotsForDay(day: string, windows: Window[], busy: Interval[], no
   const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
   const slots: Interval[] = [];
   for (const w of windows.filter(x => x.weekday === dow)) {
-    for (let m = w.start_minute; m + 60 <= w.end_minute; m += 60) {
+    for (let m = Math.ceil(w.start_minute / 30) * 30; m + 60 <= w.end_minute; m += 30) {
       const start = torontoInstant(day, m), end = torontoInstant(day, m + 60);
       if (!start || !end || Date.parse(start) <= now || Date.parse(end) - Date.parse(start) !== 3600000) continue;
       const slot = { starts_at: start, ends_at: end };

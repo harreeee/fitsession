@@ -18,3 +18,16 @@ test('History includes content even with a distinct note',()=>assert.equal(d.ses
 test('Legacy duplicate content is not repeated',()=>assert.equal(d.sessionText({session_content:'A',trainer_note:'A'}),'A'));
 test('Ledger pagination includes rows beyond 1000',async()=>{const rows=Array.from({length:1251},(_,i)=>i);const r=await d.allRows({range:async(a,z)=>({data:rows.slice(a,z+1),error:null})});assert.equal(r.data.length,1251);});
 test('Ledger error returns no misleading partial total',async()=>{const r=await d.allRows({range:async(a)=>a?({data:null,error:{message:'Offline'}}):({data:Array(500).fill(1),error:null})});assert.equal(r.data,null);assert.equal(r.error.message,'Offline');});
+
+test('Half-hour choices include 6:30 PM Toronto without shortening the session',()=>{
+ const day='2026-10-29',now=Date.parse('2026-10-28T12:00:00Z');
+ const all=b.slotsForDay(day,[{weekday:4,start_minute:1080,end_minute:1260}],[],now);
+ assert.ok(all.some(x=>x.starts_at==='2026-10-29T22:30:00.000Z'&&x.ends_at==='2026-10-29T23:30:00.000Z'));
+ assert.equal(all.length,5);
+});
+test('Google Busy overlap excludes :00 and :30 starts but keeps adjacent slots',()=>{
+ const day='2026-10-29',now=Date.parse('2026-10-28T12:00:00Z');
+ const busy=[{starts_at:'2026-10-29T22:45:00.000Z',ends_at:'2026-10-29T23:15:00.000Z'}];
+ const starts=b.slotsForDay(day,[{weekday:4,start_minute:1080,end_minute:1260}],busy,now).map(x=>x.starts_at);
+ assert.deepEqual(starts,['2026-10-29T23:30:00.000Z','2026-10-30T00:00:00.000Z']);
+});
