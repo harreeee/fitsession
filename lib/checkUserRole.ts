@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient";
 
 export type UserRole =
   | "admin"
+  | "accountant"
   | "manager"
   | "marketing_manager"
   | "trainer"
@@ -19,6 +20,7 @@ export type CurrentUserRoleResult = {
 function isUserRole(value: unknown): value is UserRole {
   return (
     value === "admin" ||
+    value === "accountant" ||
     value === "manager" ||
     value === "marketing_manager" ||
     value === "trainer" ||

@@ -67,6 +67,9 @@ type AuditRow = {
   new_value: number | string | null;
   reason: string;
   edited_at: string;
+  edited_by: string;
+  old_value_json: unknown;
+  new_value_json: unknown;
 };
 
 type EditTarget =
@@ -121,6 +124,7 @@ export default function AdminRevenueEditPage() {
   const [transfers, setTransfers] = useState<FinanceTransfer[]>([]);
   const [clientPurchases, setClientPurchases] = useState<ClientPurchase[]>([]);
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
+  const [editorNames,setEditorNames]=useState<Record<string,string>>({});
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [reason, setReason] = useState("");
   const [value1, setValue1] = useState("");
@@ -129,6 +133,8 @@ export default function AdminRevenueEditPage() {
   const [adjustmentAccountId, setAdjustmentAccountId] = useState("");
 
   const fetchData = useCallback(async () => {
+    const editors=await supabase.from("profiles").select("id,full_name");
+    if(!editors.error)setEditorNames(Object.fromEntries((editors.data||[]).map(p=>[p.id,p.full_name||"Admin"])));
     setLoading(true);
     setMessage("");
 
@@ -161,7 +167,7 @@ export default function AdminRevenueEditPage() {
           .limit(300),
         supabase
           .from("finance_edit_audit")
-          .select("id, table_name, record_id, field_name, old_value, new_value, reason, edited_at")
+          .select("id, table_name, record_id, field_name, old_value, new_value, old_value_json, new_value_json, reason, edited_at, edited_by")
           .order("edited_at", { ascending: false })
           .limit(100),
       ]);
@@ -200,7 +206,7 @@ export default function AdminRevenueEditPage() {
         router.push("/login");
         return;
       }
-      if (role !== "admin") {
+      if (role !== "accountant") {
         if (role === "manager") {
           router.push("/admin/revenue");
           return;
@@ -435,7 +441,7 @@ export default function AdminRevenueEditPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-yellow-400">
               Admin Only
             </p>
-            <h1 className="mt-2 text-3xl font-semibold md:text-4xl">Revenue Number Editor</h1>
+            <h1 className="mt-2 text-3xl font-semibold md:text-4xl">Accountant Correction Desk</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
               Correct source numbers here. Dashboard totals, cash flow and P&amp;L remain calculated values and update automatically.
             </p>
@@ -586,19 +592,19 @@ export default function AdminRevenueEditPage() {
 
           <section className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
             <h2 className="text-xl font-semibold">Finance Edit Audit</h2>
-            <p className="mt-1 text-sm text-zinc-500">Latest 100 numeric corrections.</p>
+            <p className="mt-1 text-sm text-zinc-500">100 thay đổi gần nhất (gồm nội dung, tài khoản, số tiền, ngày và lý do).</p>
             <div className="mt-4 overflow-x-auto">
               <table className="w-full min-w-[900px] text-left text-sm">
-                <thead><tr className="bg-yellow-400 text-black"><th className="px-3 py-3">Edited</th><th className="px-3 py-3">Source</th><th className="px-3 py-3">Field</th><th className="px-3 py-3 text-right">Old</th><th className="px-3 py-3 text-right">New</th><th className="px-3 py-3">Reason</th></tr></thead>
+                <thead><tr className="bg-yellow-400 text-black"><th className="px-3 py-3">Edited</th><th className="px-3 py-3">Source</th><th className="px-3 py-3">Field</th><th className="px-3 py-3 text-right">Old</th><th className="px-3 py-3 text-right">New</th><th className="px-3 py-3">Reason</th><th className="px-3 py-3">Người sửa</th></tr></thead>
                 <tbody>
                   {auditRows.map((row) => (
                     <tr key={row.id} className="border-b border-white/10">
                       <td className="px-3 py-3">{formatDate(row.edited_at)}</td>
                       <td className="px-3 py-3 text-zinc-400">{row.table_name}</td>
                       <td className="px-3 py-3">{row.field_name}</td>
-                      <td className="px-3 py-3 text-right text-zinc-400">{money(row.old_value)}</td>
-                      <td className="px-3 py-3 text-right text-yellow-300">{money(row.new_value)}</td>
-                      <td className="px-3 py-3">{row.reason}</td>
+                      <td className="px-3 py-3 text-right text-zinc-400">{row.old_value_json!==null&&row.old_value_json!==undefined?String(row.old_value_json):row.old_value!==null?money(row.old_value):"-"}</td>
+                      <td className="px-3 py-3 text-right text-yellow-300">{row.new_value_json!==null&&row.new_value_json!==undefined?String(row.new_value_json):row.new_value!==null?money(row.new_value):"-"}</td>
+                      <td className="px-3 py-3">{row.reason}</td><td className="px-3 py-3 text-yellow-300">{editorNames[row.edited_by]||row.edited_by}</td>
                     </tr>
                   ))}
                 </tbody>
