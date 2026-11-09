@@ -655,8 +655,8 @@ export default function ClientPortalPage() {
     if (cleanClient.qr_token) {
       const qrImage = await QRCode.toDataURL(cleanClient.qr_token, {
         errorCorrectionLevel: "H",
-        margin: 2,
-        width: 700,
+        margin: 4,
+        width: 768,
       });
 
       setQrCode(qrImage);
