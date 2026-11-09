@@ -1330,6 +1330,8 @@ export default function TrainerScanPage() {
     try {
       fileScanner = new Html5Qrcode("qr-file-reader");
       const decodedText = await fileScanner.scanFile(file, true);
+      await fileScanner.clear();
+      fileScanner = null;
       await markSession(extractQrToken(decodedText), "training", selectedSessionStatus);
     } catch (error) {
       setResult({
@@ -1967,7 +1969,7 @@ export default function TrainerScanPage() {
                       If the camera will not detect a code, use a photo or screenshot of the client QR.
                       Session credit is deducted only after Save &amp; Finish.
                     </p>
-                    <div id="qr-file-reader" aria-hidden="true" className="fixed left-[-10000px] top-0 h-[320px] w-[320px] overflow-hidden" />
+                    <div id="qr-file-reader" aria-label="QR image preview" className="mx-auto mt-3 max-w-[320px] overflow-hidden rounded-xl" />
                   </div>
                 </div>
               </div>
