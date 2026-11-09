@@ -9,7 +9,7 @@ test('Invalid dates rejected, leap day accepted',()=>{assert.throws(()=>t.addDay
 test('Exact 8-hour cancellation boundary',()=>{const n=Date.parse('2026-09-07T12:00:00Z');assert.equal(b.canClientCancel('2026-09-07T20:00:00Z',n),true);assert.equal(b.canClientCancel('2026-09-07T19:59:59.999Z',n),false);});
 test('Back-to-back appointments do not overlap',()=>{assert.equal(b.overlaps({starts_at:'2026-09-07T12:00:00Z',ends_at:'2026-09-07T13:00:00Z'},{starts_at:'2026-09-07T13:00:00Z',ends_at:'2026-09-07T14:00:00Z'}),false);});
 test('Weekly windows cannot overlap or contain fractional minutes',()=>{assert.equal(b.validWindows([{weekday:1,start_minute:420,end_minute:720},{weekday:1,start_minute:600,end_minute:840}]),false);assert.equal(b.validWindows([{weekday:1,start_minute:420.5,end_minute:720}]),false);});
-test('Slots exclude Google, FXA, blocked and client-overlap intervals',()=>{const now=Date.parse('2026-09-07T10:00:00Z');const result=b.slotsForDay('2026-09-08',[{weekday:2,start_minute:420,end_minute:720}],[{starts_at:'2026-09-08T12:00:00Z',ends_at:'2026-09-08T14:00:00Z'},{starts_at:'2026-09-08T14:30:00Z',ends_at:'2026-09-08T15:00:00Z'}],now);assert.deepEqual(result.map(s=>s.starts_at),['2026-09-08T11:00:00.000Z','2026-09-08T15:00:00.000Z']);});
+test('Slots exclude confirmed FXA, blocked and client-overlap intervals',()=>{const now=Date.parse('2026-09-07T10:00:00Z');const result=b.slotsForDay('2026-09-08',[{weekday:2,start_minute:420,end_minute:720}],[{starts_at:'2026-09-08T12:00:00Z',ends_at:'2026-09-08T14:00:00Z'},{starts_at:'2026-09-08T14:30:00Z',ends_at:'2026-09-08T15:00:00Z'}],now);assert.deepEqual(result.map(s=>s.starts_at),['2026-09-08T11:00:00.000Z','2026-09-08T15:00:00.000Z']);});
 test('No invented hours for an unpublished day',()=>assert.deepEqual(b.slotsForDay('2026-09-08',[],[],Date.parse('2026-09-07T10:00:00Z')),[]));
 test('Payment states match real DB enum, not unsupported unpaid',()=>{assert.equal(t.paymentStatus(100,100),'paid');assert.equal(t.paymentStatus(100,50),'partial');assert.equal(t.paymentStatus(100,0),'pending');assert.throws(()=>t.paymentStatus(100,101));});
 test('No-show and late-cancel remain chargeable',()=>{for(const s of ['success','completed','no_show','late_cancel'])assert.equal(t.isChargeableStatus(s),true);assert.equal(t.isChargeableStatus('cancelled'),false);});
@@ -25,7 +25,7 @@ test('Half-hour choices include 6:30 PM Toronto without shortening the session',
  assert.ok(all.some(x=>x.starts_at==='2026-10-29T22:30:00.000Z'&&x.ends_at==='2026-10-29T23:30:00.000Z'));
  assert.equal(all.length,5);
 });
-test('Google Busy overlap excludes :00 and :30 starts but keeps adjacent slots',()=>{
+test('Overlapping FXA time blocks exclude :00 and :30 starts but keep adjacent slots',()=>{
  const day='2026-10-29',now=Date.parse('2026-10-28T12:00:00Z');
  const busy=[{starts_at:'2026-10-29T22:45:00.000Z',ends_at:'2026-10-29T23:15:00.000Z'}];
  const starts=b.slotsForDay(day,[{weekday:4,start_minute:1080,end_minute:1260}],busy,now).map(x=>x.starts_at);
