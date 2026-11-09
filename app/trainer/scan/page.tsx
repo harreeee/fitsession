@@ -339,7 +339,6 @@ export default function TrainerScanPage() {
   const [result, setResult] = useState<ScanResult>({ type: "", message: "" });
   const [scannerStarted, setScannerStarted] = useState(false);
   const [cameraOpening, setCameraOpening] = useState(false);
-  const [scanningUploadedQr, setScanningUploadedQr] = useState(false);
   const [uploadingQr, setUploadingQr] = useState(false);
   const [activeMobileTab, setActiveMobileTab] = useState<MobileTab>("home");
 
@@ -1346,40 +1345,6 @@ export default function TrainerScanPage() {
     }
   }
 
-  // A file scan is a fallback for blurry/refractive displays. It uses exactly
-  // the same backend validation and Save & Finish workflow as a camera scan.
-  async function scanUploadedQr(file: File | undefined) {
-    if (!file || scanningLockRef.current || pendingScanRef.current || showNoteBox) return;
-    if (!file.type.startsWith("image/")) {
-      setResult({ type: "error", message: "Select an image of the client's QR code." });
-      return;
-    }
-
-    scanningLockRef.current = true;
-    setScanningUploadedQr(true);
-    setResult({ type: "", message: "" });
-    let reader: Html5Qrcode | null = null;
-    try {
-      reader = new Html5Qrcode("qr-file-reader");
-      const decodedText = await reader.scanFile(file, true);
-      await reader.clear();
-      reader = null;
-      await markSession(extractQrToken(decodedText), "training", selectedSessionStatus);
-    } catch (error) {
-      setResult({
-        type: "error",
-        message: "Could not read the QR image: " + getErrorMessage(error) +
-          ". Try a screenshot of the full QR code with its white border. No session was deducted.",
-      });
-    } finally {
-      if (reader) {
-        try { await reader.clear(); } catch { /* QR reader may already be removed. */ }
-      }
-      scanningLockRef.current = false;
-      setScanningUploadedQr(false);
-    }
-  }
-
   async function markSession(qrToken:string,sessionType:SessionType,sessionStatus:SessionStatus) {
     if(pendingScanRef.current)return;
     try {
@@ -1983,28 +1948,6 @@ export default function TrainerScanPage() {
                     <span className="text-xl">⌗</span>
                     Start Scan
                   </button>
-                  <div className="mt-4 rounded-2xl border border-white/15 bg-white/[0.04] p-4">
-                    <p className="text-sm font-bold text-white">Camera cannot read the QR?</p>
-                    <p className="mt-1 text-xs leading-5 text-zinc-400">
-                      Upload a screenshot or a photo of the QR code. It will be verified first;
-                      no session is deducted until you save the required session record.
-                    </p>
-                    <label className="mt-3 flex min-h-12 cursor-pointer items-center justify-center rounded-xl border border-yellow-400/50 px-4 py-3 text-sm font-semibold text-yellow-400">
-                      {scanningUploadedQr ? "Reading QR image..." : "Read QR From Image"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="sr-only"
-                        disabled={scanningUploadedQr}
-                        onChange={(event) => {
-                          const file = event.currentTarget.files?.[0];
-                          void scanUploadedQr(file);
-                          event.currentTarget.value = "";
-                        }}
-                      />
-                    </label>
-                    <div id="qr-file-reader" className="mx-auto mt-2 max-w-xs" />
-                  </div>
                   <div className="mt-3">
                     <label className={`flex min-h-12 cursor-pointer items-center justify-center rounded-xl border border-yellow-400/50 bg-yellow-400/[0.06] px-4 py-3 text-center text-sm font-bold text-yellow-400 ${uploadingQr ? "cursor-wait opacity-60" : "hover:bg-yellow-400/10"}`}>
                       {uploadingQr ? "Reading QR image..." : "Scan QR from photo or screenshot"}
