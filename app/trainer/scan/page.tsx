@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import FXABrandLogo from "@/components/FXABrandLogo";
 import { businessDate, torontoInstant } from "../../../lib/businessTime";
-import { Html5Qrcode } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 import { getCurrentUserRole } from "../../../lib/checkUserRole";
@@ -1257,7 +1257,7 @@ export default function TrainerScanPage() {
       setScannerStarted(true);
       await waitForDomElement("qr-reader");
 
-      const scanner = new Html5Qrcode("qr-reader");
+      const scanner = new Html5Qrcode("qr-reader", { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE] });
       scannerRef.current = scanner;
 
       try {
@@ -1328,7 +1328,7 @@ export default function TrainerScanPage() {
     // cannot reliably focus on; it never deducts a session automatically.
     let fileScanner: Html5Qrcode | null = null;
     try {
-      fileScanner = new Html5Qrcode("qr-file-reader");
+      fileScanner = new Html5Qrcode("qr-file-reader", { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE] });
       const decodedText = await fileScanner.scanFile(file, true);
       await fileScanner.clear();
       fileScanner = null;
