@@ -330,6 +330,7 @@ export default function TrainerScanPage() {
   const router = useRouter();
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const scanningLockRef = useRef(false);
+  const uploadingQrRef = useRef(false);
   const cameraStartRef = useRef(false);
   const cameraGenerationRef = useRef(0);
   const saveLockRef = useRef(false);
@@ -338,6 +339,7 @@ export default function TrainerScanPage() {
   const [result, setResult] = useState<ScanResult>({ type: "", message: "" });
   const [scannerStarted, setScannerStarted] = useState(false);
   const [cameraOpening, setCameraOpening] = useState(false);
+  const [uploadingQr, setUploadingQr] = useState(false);
   const [activeMobileTab, setActiveMobileTab] = useState<MobileTab>("home");
 
   const [trainerId, setTrainerId] = useState<string | null>(null);
@@ -1315,6 +1317,34 @@ export default function TrainerScanPage() {
     } finally { cameraStartRef.current=false; }
   }
 
+  async function scanQrImage(file: File) {
+    if (scannerStarted || showNoteBox || pendingScanRef.current || uploadingQrRef.current) return;
+    uploadingQrRef.current = true;
+    setUploadingQr(true);
+    setResult({ type: "", message: "" });
+
+    // QR uploads use the same preview + finalize validation as live camera scans.
+    // This fallback is useful for QR screenshots and printed codes that a camera
+    // cannot reliably focus on; it never deducts a session automatically.
+    let fileScanner: Html5Qrcode | null = null;
+    try {
+      fileScanner = new Html5Qrcode("qr-file-reader");
+      const decodedText = await fileScanner.scanFile(file, true);
+      await markSession(extractQrToken(decodedText), "training", selectedSessionStatus);
+    } catch (error) {
+      setResult({
+        type: "error",
+        message: `Unable to read the QR image: ${getErrorMessage(error)}. Choose a clear, uncropped QR screenshot and try again. No session was deducted.`,
+      });
+    } finally {
+      if (fileScanner) {
+        try { await fileScanner.clear(); } catch (error) { console.warn("QR image scanner cleanup:", error); }
+      }
+      uploadingQrRef.current = false;
+      setUploadingQr(false);
+    }
+  }
+
   async function markSession(qrToken:string,sessionType:SessionType,sessionStatus:SessionStatus) {
     if(pendingScanRef.current)return;
     try {
@@ -1918,6 +1948,27 @@ export default function TrainerScanPage() {
                     <span className="text-xl">⌗</span>
                     Start Scan
                   </button>
+                  <div className="mt-3">
+                    <label className={`flex min-h-12 cursor-pointer items-center justify-center rounded-xl border border-yellow-400/50 bg-yellow-400/[0.06] px-4 py-3 text-center text-sm font-bold text-yellow-400 ${uploadingQr ? "cursor-wait opacity-60" : "hover:bg-yellow-400/10"}`}>
+                      {uploadingQr ? "Reading QR image..." : "Scan QR from photo or screenshot"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="sr-only"
+                        disabled={uploadingQr}
+                        onChange={(event) => {
+                          const file = event.currentTarget.files?.[0];
+                          event.currentTarget.value = "";
+                          if (file) void scanQrImage(file);
+                        }}
+                      />
+                    </label>
+                    <p className="mt-2 text-center text-xs leading-5 text-zinc-500">
+                      If the camera will not detect a code, use a photo or screenshot of the client QR.
+                      Session credit is deducted only after Save &amp; Finish.
+                    </p>
+                    <div id="qr-file-reader" aria-hidden="true" className="fixed left-[-10000px] top-0 h-[320px] w-[320px] overflow-hidden" />
+                  </div>
                 </div>
               </div>
             ) : null}
