@@ -640,7 +640,11 @@ function AdminClientDetailPageContent() {
     setDebtDeadline(formatDateInput(firstDebtPurchase?.debt_deadline || null));
 
     if (cleanClient.qr_token) {
-      const qrImage = await QRCode.toDataURL(cleanClient.qr_token);
+      const qrImage = await QRCode.toDataURL(cleanClient.qr_token, {
+        errorCorrectionLevel: "H",
+        margin: 4,
+        width: 768,
+      });
       setQrCode(qrImage);
     } else {
       setQrCode("");
