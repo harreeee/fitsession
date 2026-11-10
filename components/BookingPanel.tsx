@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { bookingFetch } from '@/lib/booking/client';
 import { addDays, businessDate, BUSINESS_TIME_ZONE } from '@/lib/businessTime';
 import { canClientCancel, type Interval } from '@/lib/booking/time';
-type Staff={id:string;full_name:string;is_main:boolean};
+type Staff={id:string;full_name:string;is_main:boolean;is_bookable:boolean};
 type Booking={id:string;trainer_name:string;starts_at:string;ends_at:string;status:string;google_sync_status:string;can_cancel:boolean};
 const label=(value:string)=>new Date(value).toLocaleString('en-CA',{timeZone:BUSINESS_TIME_ZONE,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
 const time=(value:string)=>new Date(value).toLocaleTimeString('en-CA',{timeZone:BUSINESS_TIME_ZONE,hour:'numeric',minute:'2-digit'});
@@ -16,7 +16,7 @@ export default function BookingPanel({adminMode=false}:{adminMode?:boolean}){
  const loadBookings=useCallback(async()=>{if(adminMode&&!clientId){setBookings([]);return;}const r=await bookingFetch<{bookings:Booking[];serverTime:string}>(`/api/bookings/upcoming${adminMode?`?clientId=${clientId}`:''}`);setBookings(r.bookings);setOffset(Date.parse(r.serverTime)-Date.now());},[adminMode,clientId]);
  useEffect(()=>{let alive=true; if(adminMode)bookingFetch<{clients:{id:string;full_name:string}[]}>('/api/bookings/clients').then(r=>{if(alive){setClients(r.clients);setClientId(r.clients[0]?.id||'');}}).catch(e=>setMessage(e.message)); const t=setInterval(()=>setNow(Date.now()),30000);return()=>{alive=false;clearInterval(t);};},[adminMode]);
  useEffect(()=>{if(adminMode&&!clientId)return;let alive=true;
- bookingFetch<{staff:Staff[]}>(`/api/bookings/staff${adminMode?`?clientId=${clientId}`:''}`).then(r=>{if(alive){setStaff(r.staff);setTrainer(r.staff[0]?.id||'');}}).catch(e=>{if(alive){setMessage(e.message);setLoading(false);}});void Promise.resolve().then(loadBookings).catch(e=>{if(alive)setMessage(e.message);});return()=>{alive=false;};},[adminMode,clientId,loadBookings]);
+ bookingFetch<{staff:Staff[]}>(`/api/bookings/staff${adminMode?`?clientId=${clientId}`:''}`).then(r=>{if(alive){const eligible=r.staff.filter(s=>s.is_bookable);setStaff(eligible);setTrainer(eligible[0]?.id||'');if(!eligible.length)setMessage('No trainers have both Google Calendar and weekly availability configured. Please contact FXA Fitness.');}}).catch(e=>{if(alive){setMessage(e.message);setLoading(false);}});void Promise.resolve().then(loadBookings).catch(e=>{if(alive)setMessage(e.message);});return()=>{alive=false;};},[adminMode,clientId,loadBookings]);
  useEffect(()=>{if(!trainer||(adminMode&&!clientId))return;let alive=true;requestId.current='';
  Promise.resolve().then(()=>{if(alive){setLoading(true);setSlotError(false);setSlots([]);setSelected('');}});
  bookingFetch<{slots:Interval[]}>(`/api/bookings/availability?trainerId=${encodeURIComponent(trainer)}&date=${date}${adminMode?`&clientId=${clientId}`:''}`).then(r=>{if(alive)setSlots(r.slots);}).catch(e=>{if(alive){setSlotError(true);setMessage(e.message);}}).finally(()=>{if(alive)setLoading(false);});return()=>{alive=false;};},[trainer,date,refresh,adminMode,clientId]);
