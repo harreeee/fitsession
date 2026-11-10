@@ -8,6 +8,9 @@ export function getHomePathForRole(
     case "manager":
       return "/admin";
 
+    case "accountant":
+      return "/admin/revenue";
+
     case "marketing_manager":
       return "/admin/marketing";
 

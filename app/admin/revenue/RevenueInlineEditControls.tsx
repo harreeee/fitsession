@@ -14,6 +14,15 @@ type EditSection =
 type BusinessTransaction = {
   id: string;
   transaction_type: string;
+  source: string;
+  notes: string | null;
+  counterparty: string | null;
+  document_no: string | null;
+  accounting_month: string | null;
+  category_id: string | null;
+  trainer_id: string | null;
+  purchase_id: string | null;
+  report_group: string | null;
   title: string;
   amount: number | string;
   transaction_date: string;
@@ -129,6 +138,9 @@ export default function RevenueInlineEditControls() {
 
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [reason, setReason] = useState("");
+  const [financeCategories,setFinanceCategories]=useState<Array<{id:string;name:string;category_kind:string;is_active:boolean}>>([]);
+  const [editFields,setEditFields]=useState<Record<string,string>>({});
+  const [editorName,setEditorName]=useState("");
   const [value1, setValue1] = useState("");
   const [value2, setValue2] = useState("");
   const [value3, setValue3] = useState("");
@@ -138,12 +150,12 @@ export default function RevenueInlineEditControls() {
     setLoading(true);
     setMessage("");
 
-    const [transactionResult, payableResult, accountResult, transferResult, purchaseResult] =
+    const [transactionResult, payableResult, accountResult, transferResult, purchaseResult, categoryResult] =
       await Promise.all([
         supabase
           .from("business_transactions")
           .select(
-            "id, transaction_type, title, amount, transaction_date, payable_id, transfer_id, account_id",
+            "id, transaction_type, source, title, amount, notes, counterparty, document_no, accounting_month, category_id, trainer_id, purchase_id, report_group, transaction_date, payable_id, transfer_id, account_id",
           )
           .order("transaction_date", { ascending: false })
           .limit(1000),
@@ -169,6 +181,7 @@ export default function RevenueInlineEditControls() {
           )
           .order("created_at", { ascending: false })
           .limit(1000),
+        supabase.from("finance_categories").select("id,name,category_kind,is_active").order("name"),
       ]);
 
     const firstError = [
@@ -177,6 +190,7 @@ export default function RevenueInlineEditControls() {
       accountResult.error,
       transferResult.error,
       purchaseResult.error,
+      categoryResult.error,
     ].find(Boolean);
 
     if (firstError) {
@@ -185,6 +199,7 @@ export default function RevenueInlineEditControls() {
       return;
     }
 
+    setFinanceCategories(categoryResult.data||[]);
     setTransactions((transactionResult.data || []) as BusinessTransaction[]);
     setPayables((payableResult.data || []) as BusinessPayable[]);
     setAccounts((accountResult.data || []) as FinanceAccount[]);
@@ -282,6 +297,20 @@ export default function RevenueInlineEditControls() {
   function openEditor(target: EditTarget) {
     setEditTarget(target);
     setReason("");
+    if(target.kind==="transaction"){
+      const row=target.row;
+      setEditFields({
+        transaction_type:row.transaction_type,source:row.source,title:row.title,amount:String(row.amount),
+        notes:row.notes||"",counterparty:row.counterparty||"",document_no:row.document_no||"",
+        transaction_date:row.transaction_date,accounting_month:(row.accounting_month||row.transaction_date).slice(0,7),
+        account_id:row.account_id||"",category_id:row.category_id||"",trainer_id:row.trainer_id||"",
+      });
+    }
+    supabase.auth.getUser().then(async ({data})=>{
+      if(!data.user)return;
+      const {data:profile}=await supabase.from("profiles").select("full_name").eq("id",data.user.id).single();
+      setEditorName(profile?.full_name||data.user.email||"Admin");
+    });
     setAdjustmentAccountId("");
     setMessage("");
 
@@ -356,10 +385,25 @@ export default function RevenueInlineEditControls() {
         return;
       }
 
-      const result = await supabase.rpc("admin_edit_finance_transaction_amount", {
-        p_transaction_id: editTarget.row.id,
-        p_new_amount: first,
-        p_reason: cleanReason,
+      const purchaseLinked=Boolean(editTarget.row.purchase_id);
+      const original=editTarget.row;
+      const keys=["transaction_type","source","title","amount","notes","counterparty","document_no","transaction_date","accounting_month","account_id","category_id","trainer_id"] as const;
+      const changes:Record<string,string|number|null>={};
+      for(const key of keys){
+        const raw=editFields[key]||"";
+        changes[key]=key==="amount"?Number(raw):
+          key==="accounting_month"?(raw?`${raw}-01`:null):
+          key==="account_id"||key==="category_id"||key==="trainer_id"?(raw||null):
+          key==="notes"||key==="counterparty"||key==="document_no"?(raw||null):raw;
+      }
+      if(purchaseLinked && (changes.transaction_type!==original.transaction_type || changes.source!==original.source)){
+        setSaving(false);setMessage("Loại và nguồn giao dịch thanh toán khách hàng không được sửa.");return;
+      }
+      if(!Number.isFinite(Number(changes.amount))||Number(changes.amount)<=0 && changes.transaction_type!=="cash_adjustment"||!changes.account_id||!changes.title||!changes.transaction_date||!changes.accounting_month){
+        setSaving(false);setMessage("Kiểm tra số tiền, tiêu đề, ngày và nguồn tiền.");return;
+      }
+      const result = await supabase.rpc("admin_edit_finance_transaction_details", {
+        p_transaction_id:original.id,p_changes:changes,p_reason:cleanReason,
       });
       error = result.error;
     }
@@ -770,7 +814,7 @@ export default function RevenueInlineEditControls() {
 
       {editTarget ? (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-[2rem] border border-yellow-400/30 bg-[#0b0b0b] p-5 shadow-2xl md:p-6">
+          <div className="w-full max-w-3xl rounded-[2rem] border border-yellow-400/30 bg-[#0b0b0b] p-5 shadow-2xl md:p-6">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-yellow-400">
@@ -796,10 +840,26 @@ export default function RevenueInlineEditControls() {
 
             <div className="mt-5 space-y-4">
               {editTarget.kind === "transaction" ? (
-                <label className="grid gap-1">
-                  <span className="text-xs text-zinc-400">Amount</span>
-                  <input value={value1} onChange={(event) => setValue1(event.target.value)} type="number" step="0.01" className={inputClass()} />
-                </label>
+                <div className="grid max-h-[52vh] grid-cols-1 gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
+                  {([
+                    ["transaction_type","Loại","select_type"],["source","Nguồn nghiệp vụ","text"],
+                    ["title","Nội dung","text"],["amount","Số tiền CAD","number"],
+                    ["transaction_date","Ngày thu / chi","date"],["accounting_month","Tháng hạch toán","month"],
+                    ["account_id","Nguồn tiền","select_account"],["category_id","Danh mục","select_category"],
+                    ["counterparty","Khách hàng / đối tượng","text"],["document_no","Chứng từ","text"],
+                    ["trainer_id","PT / nhân sự (ID)","text"],["notes","Ghi chú","text"],
+                  ] as const).map(([key,label,kind])=>{
+                    const locked=Boolean(editTarget.row.purchase_id)&&(key==="transaction_type"||key==="source");
+                    return <label key={key} className="grid gap-1">
+                      <span className="text-xs text-zinc-400">{label}{locked?" (khóa liên kết)":""}</span>
+                      {kind==="select_type"?<select disabled={locked} value={editFields[key]||""} onChange={e=>setEditFields(p=>({...p,[key]:e.target.value}))} className={inputClass()}><option value="income">Thu</option><option value="expense">Chi</option><option value="cash_adjustment">Điều chỉnh quỹ</option></select>:
+                        kind==="select_account"?<select value={editFields[key]||""} onChange={e=>setEditFields(p=>({...p,[key]:e.target.value}))} className={inputClass()}><option value="">Chọn nguồn tiền</option>{accounts.filter(a=>a.is_active).map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select>:
+                        kind==="select_category"?<select value={editFields[key]||""} onChange={e=>setEditFields(p=>({...p,[key]:e.target.value}))} className={inputClass()}><option value="">Chọn danh mục</option>{financeCategories.filter(c=>c.is_active&&c.category_kind===(editFields.transaction_type||"income")).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>:
+                        <input disabled={locked} value={editFields[key]||""} onChange={e=>setEditFields(p=>({...p,[key]:e.target.value}))} type={kind} step={kind==="number"?"0.01":undefined} className={inputClass()}/>}
+                    </label>;
+                  })}
+                  <p className="col-span-full text-xs text-zinc-400">Giao dịch có liên kết Clients sẽ tự cập nhật công nợ khi sửa số tiền. Các trường liên kết hệ thống không được thay đổi.</p>
+                </div>
               ) : null}
 
               {editTarget.kind === "payable" ? (
@@ -866,7 +926,7 @@ export default function RevenueInlineEditControls() {
               ) : null}
 
               <label className="grid gap-1">
-                <span className="text-xs text-zinc-400">Lý do chỉnh sửa *</span>
+                <span className="text-xs text-zinc-400">Lý do chỉnh sửa * · Người sửa: {editorName||"Admin"}</span>
                 <textarea
                   value={reason}
                   onChange={(event) => setReason(event.target.value)}

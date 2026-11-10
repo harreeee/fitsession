@@ -1,5 +1,6 @@
 export type AppRole =
   | "admin"
+  | "accountant"
   | "manager"
   | "marketing_manager"
   | "trainer"
@@ -11,6 +12,7 @@ export type AppRoleValue = AppRole | null | undefined;
 export function normalizeRole(role: string | null | undefined): AppRole | null {
   if (
     role === "admin" ||
+    role === "accountant" ||
     role === "manager" ||
     role === "marketing_manager" ||
     role === "trainer" ||
@@ -27,6 +29,8 @@ export function getRoleDisplayName(role: AppRoleValue): string {
   switch (role) {
     case "admin":
       return "Admin";
+    case "accountant":
+      return "Accountant";
     case "manager":
       return "Manager";
     case "marketing_manager":
@@ -46,6 +50,8 @@ export function getDashboardPathForRole(role: AppRoleValue): string {
   switch (role) {
     case "admin":
       return "/admin";
+    case "accountant":
+      return "/admin/revenue";
     case "manager":
       return "/admin";
     case "marketing_manager":
@@ -155,7 +161,7 @@ export function canViewSessionHistory(role: AppRoleValue): boolean {
 }
 
 export function canViewReports(role: AppRoleValue): boolean {
-  return role === "admin" || role === "manager";
+  return role === "admin" || role === "manager" || role === "accountant";
 }
 
 export function canViewDebtPage(role: AppRoleValue): boolean {
@@ -167,7 +173,7 @@ export function canViewPurchases(role: AppRoleValue): boolean {
 }
 
 export function canViewFinancials(role: AppRoleValue): boolean {
-  return role === "admin" || role === "manager";
+  return role === "admin" || role === "manager" || role === "accountant";
 }
 
 /**
@@ -211,11 +217,11 @@ export function canDeleteLeads(role: AppRoleValue): boolean {
  */
 
 export function canAddClients(role: AppRoleValue): boolean {
-  return role === "admin" || role === "manager";
+  return role === "admin";
 }
 
 export function canEditClientBasicInfo(role: AppRoleValue): boolean {
-  return role === "admin" || role === "manager";
+  return role === "admin";
 }
 
 export function canChangeClientStatus(role: AppRoleValue): boolean {
@@ -305,7 +311,7 @@ export function canEditPurchases(role: AppRoleValue): boolean {
 }
 
 export function canEditDebt(role: AppRoleValue): boolean {
-  return role === "admin";
+  return false; // Monetary edits are exclusively in Accountant Revenue.
 }
 
 export function canCompleteDebt(role: AppRoleValue): boolean {

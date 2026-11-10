@@ -12,7 +12,7 @@ export default function RevenueLayout({ children }: { children: ReactNode }) {
 
     async function checkRole() {
       const { role } = await getCurrentUserRole();
-      if (active) setIsAdmin(role === "admin");
+      if (active) setIsAdmin(role === "accountant");
     }
 
     void checkRole();

@@ -127,7 +127,7 @@ export default function AdminPurchasesPage() {
       return;
     }
 
-    setMessage("Purchase confirmed. Sessions and revenue were updated.");
+    setMessage("Purchase confirmed. No income was recorded; Accountant records actual payment in Revenue.");
     await fetchPurchases();
     setConfirmingId(null);
   }
@@ -175,7 +175,7 @@ export default function AdminPurchasesPage() {
               </h1>
 
               <p className="mt-3 text-sm font-medium text-gray-400 md:text-base">
-                Confirm client package purchases and automatically update
+                Confirm client package purchases without automatically booking
                 sessions.
               </p>
             </div>
@@ -265,7 +265,7 @@ export default function AdminPurchasesPage() {
                         >
                           {confirmingId === purchase.id
                             ? "Confirming..."
-                            : "Mark As Paid"}
+                            : "Confirm Package (No Cash)"}
                         </button>
 
                         <button
