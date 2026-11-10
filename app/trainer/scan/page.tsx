@@ -1328,7 +1328,13 @@ export default function TrainerScanPage() {
       setLastScannedClientId(data.client_id);setLastScannedClientName(data.client_name);setLastScannedRemaining(data.remaining_after);setLastScannedAt(new Date().toISOString());
       setSessionTopic("");setSessionContent("");setTrainerNote("");setNoteMessage("");setShowNoteBox(true);
       setResult({type:"success",message:`QR VERIFIED - ${data.client_name}. No session has been deducted. Add Topic and Content, then tap Save & Finish.`});
-    }catch(error){setResult({type:"error",message:`${getErrorMessage(error)} No session was deducted.`});}
+    }catch(error){
+      const raw=getErrorMessage(error);
+      const balanceIssue=raw.toLowerCase().includes("package balance mismatch");
+      setResult({type:"error",message:balanceIssue
+        ? `${raw} Ask Admin to reconcile the client's package via Clients → Session Control. No session was deducted.`
+        : `${raw} No session was deducted.`});
+    }
   }
 
   useEffect(()=>{

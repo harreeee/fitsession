@@ -872,10 +872,22 @@ function AdminClientDetailPageContent() {
     }catch(e){alert(errorText(e));}finally{mutationLock.current=false;setSavingPackage(false);}
   }
 
-  async function adjustClientSessions(actionType:SessionAdjustAction){
-    if(!client||!allowPackageEdit||mutationLock.current)return;const value=Number(sessionAdjustValue);
+  async function adjustClientSessions(actionType:SessionAdjustAction, overrideValue?:number){
+    if(!client||!allowPackageEdit||mutationLock.current)return;
+    const value=overrideValue??Number(sessionAdjustValue);
     if(!Number.isInteger(value)||value<0){alert("Enter a non-negative whole number.");return;}
-    if(!window.confirm(`Apply ${actionType}: ${value} sessions?`))return;
+    const {totalSessions:oldTotal,usedSessions:oldUsed,remainingSessions:oldRemaining}=activePackageNumbers;
+    const mismatch=oldTotal!==oldUsed+oldRemaining;
+    if(mismatch && (actionType==="add"||actionType==="subtract")){
+      alert(`Package balance mismatch: Total ${oldTotal}, Used ${oldUsed}, Left ${oldRemaining}. Choose Keep Total or Keep Remaining below first. No sessions changed.`);return;
+    }
+    if(actionType==="fixTotal" && value<oldUsed){
+      alert(`Total must be at least Used (${oldUsed}). No sessions changed.`);return;
+    }
+    let confirmation=`Apply ${actionType}: ${value} sessions?`;
+    if(mismatch && actionType==="fixTotal") confirmation=`RECONCILE PACKAGE (no session deducted)\n\nKeep Total: ${value}\nUsed: ${oldUsed}\nChange Left: ${oldRemaining} → ${value-oldUsed}\n\nCheck purchase contract and history. Confirm?`;
+    if(mismatch && actionType==="fixRemaining") confirmation=`RECONCILE PACKAGE (no session deducted)\n\nKeep Left: ${value}\nUsed: ${oldUsed}\nChange Total: ${oldTotal} → ${oldUsed+value}\n\nCheck purchase contract and history. Confirm?`;
+    if(!window.confirm(confirmation))return;
     mutationLock.current=true;setSessionAdjustAction(actionType);
     try{const {error}=await supabase.rpc("fxa_adjust_sessions",{p_request_id:requestKey("adjust"),p_client_id:client.id,p_action:actionType,p_value:value});if(error)throw error;
       delete operationKeys.current.adjust;setSessionAdjustValue("");await fetchClientDetail();alert("Sessions updated.");
@@ -1772,9 +1784,8 @@ function AdminClientDetailPageContent() {
 
                 <p className="mt-2 text-sm font-normal leading-6 text-gray-300">
                   Use this only when the package session numbers need manual
-                  correction. Fix Remaining changes the current balance. Fix
-                  Total changes the full package size while keeping used
-                  sessions unchanged.
+                  correction. Fix Remaining keeps the selected remaining balance and recalculates Total. Fix
+                  Total keeps the selected package size and recalculates Remaining.
                 </p>
               </div>
 
@@ -1790,6 +1801,28 @@ function AdminClientDetailPageContent() {
               </div>
             </div>
 
+            {activePackageNumbers.totalSessions !== activePackageNumbers.usedSessions + activePackageNumbers.remainingSessions && (
+              <div role="alert" className="mt-5 rounded-2xl border border-amber-400/60 bg-amber-400/10 p-4">
+                <p className="font-semibold text-amber-200">Session balance mismatch — reconcile before subtracting or scanning</p>
+                <p className="mt-2 text-sm text-gray-200">
+                  Total {activePackageNumbers.totalSessions}, Used {activePackageNumbers.usedSessions}, Left {activePackageNumbers.remainingSessions}.
+                  If Total and Used are correct, expected Left is {activePackageNumbers.totalSessions-activePackageNumbers.usedSessions}.
+                </p>
+                {allowPackageEdit && (
+                  <div className="mt-3 flex flex-wrap gap-3">
+                    <button type="button" disabled={sessionAdjustAction!==null} onClick={()=>void adjustClientSessions("fixTotal",activePackageNumbers.totalSessions)}
+                      className="rounded-xl bg-yellow-400 px-4 py-3 text-sm font-semibold text-black disabled:opacity-60">
+                      Keep Total {activePackageNumbers.totalSessions} → Left {activePackageNumbers.totalSessions-activePackageNumbers.usedSessions}
+                    </button>
+                    <button type="button" disabled={sessionAdjustAction!==null} onClick={()=>void adjustClientSessions("fixRemaining",activePackageNumbers.remainingSessions)}
+                      className="rounded-xl border border-yellow-400/60 px-4 py-3 text-sm font-semibold text-yellow-200 disabled:opacity-60">
+                      Keep Left {activePackageNumbers.remainingSessions} → Total {activePackageNumbers.usedSessions+activePackageNumbers.remainingSessions}
+                    </button>
+                  </div>
+                )}
+                <p className="mt-2 text-xs text-amber-100/80">Confirm against the original purchase and session history. No existing session log will be deleted; the correction is logged.</p>
+              </div>
+            )}
             <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_2.5fr]">
               <label>
                 <span className="mb-2 block text-xs font-semibold uppercase tracking-widest text-cyan-300">
@@ -1882,7 +1915,7 @@ function AdminClientDetailPageContent() {
                   Fix Remaining
                 </p>
                 <p className="mt-2 text-sm text-gray-300">
-                  Sets exact remaining. Total stays the same.
+                  Sets exact remaining. Total becomes Used + Remaining.
                 </p>
               </div>
 
